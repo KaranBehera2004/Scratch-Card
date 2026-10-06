@@ -1,6 +1,11 @@
 node_modules
 dist
+client/dist
 .sites-runtime
 *.log
+.npm-cache/
+test-results/
+playwright-report/
+server/data/*.tmp
 .env
 server/data/*.json
