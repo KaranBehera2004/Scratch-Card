@@ -56,6 +56,38 @@ function LanguageSelect({ language, setLanguage, floating = false }) {
   </label>
 }
 
+const CELEBRATION_COLORS = ['#6c63ff', '#ff745f', '#ffc34d', '#53d990', '#52acef', '#cc58ef']
+const CONFETTI_PIECES = Array.from({ length: 46 }, (_, index) => ({
+  id: index,
+  color: CELEBRATION_COLORS[index % CELEBRATION_COLORS.length],
+  left: `${(index * 37 + 5) % 96}%`,
+  delay: `${(index % 10) * 0.07}s`,
+  duration: `${2.2 + (index % 6) * 0.18}s`,
+  drift: `${((index * 19) % 90) - 45}px`,
+  rotation: `${(index * 47) % 270}deg`,
+}))
+const CELEBRATION_TICKETS = [
+  { color: '#6669f6', left: '10%', delay: '.08s', rotation: '-14deg' },
+  { color: '#f8b93e', left: '28%', delay: '.22s', rotation: '9deg' },
+  { color: '#c454e7', left: '47%', delay: '.04s', rotation: '-8deg' },
+  { color: '#5aa7ec', left: '68%', delay: '.18s', rotation: '13deg' },
+  { color: '#fa7568', left: '84%', delay: '.12s', rotation: '-11deg' },
+]
+
+function Celebration() {
+  return <div className="arrival-celebration" aria-hidden="true">
+    {CONFETTI_PIECES.map(piece => <i className="confetti-piece" key={piece.id} style={{ '--piece-color': piece.color, '--piece-left': piece.left, '--piece-delay': piece.delay, '--piece-duration': piece.duration, '--piece-drift': piece.drift, '--piece-rotation': piece.rotation }} />)}
+    {CELEBRATION_TICKETS.map((ticket, index) => <i className="celebration-ticket" key={ticket.left} style={{ '--ticket-color': ticket.color, '--ticket-left': ticket.left, '--ticket-delay': ticket.delay, '--ticket-rotation': ticket.rotation }}><span /></i>)}
+  </div>
+}
+
+function RecipientTopbar({ brand, language, setLanguage }) {
+  return <header className="recipient-topbar">
+    <a className="recipient-brand" href="/"><span>✦</span> {brand}</a>
+    <LanguageSelect language={language} setLanguage={setLanguage} />
+  </header>
+}
+
 function generateDraftCoupon() {
   const bytes = new Uint8Array(4)
   window.crypto.getRandomValues(bytes)
@@ -252,9 +284,9 @@ function PublicCard({ slug, language, setLanguage, t }) {
   const [copied, setCopied] = useState(false)
   const [claimError, setClaimError] = useState('')
   useEffect(() => { requestJson(`/api/cards/${encodeURIComponent(slug)}`).then(data => { setCard(data); setState(data.used ? 'used' : 'ready') }).catch(() => setState('error')) }, [slug])
-  if (state === 'loading') return <main className="recipient status"><LanguageSelect language={language} setLanguage={setLanguage} floating /><div className="loader" /><p>{t('gettingReady')}</p></main>
-  if (state === 'error') return <main className="recipient status"><LanguageSelect language={language} setLanguage={setLanguage} floating /><div className="broken">?</div><h1>{t('notFound')}</h1><p>{t('checkLink')}</p><a href="/">{t('createCard')}</a></main>
-  if (state === 'used') return <main className="recipient status used-card" style={{ '--accent': card?.accentColor }}><LanguageSelect language={language} setLanguage={setLanguage} floating /><div className="used-icon">✓</div><h1>{t('alreadyUsed')}</h1><p>{t('oneReveal')}</p><a href="/">{t('createNew')}</a></main>
+  if (state === 'loading') return <main className="recipient status"><RecipientTopbar brand="Lucky Drop" language={language} setLanguage={setLanguage} /><div className="loader" /><p>{t('gettingReady')}</p></main>
+  if (state === 'error') return <main className="recipient status"><RecipientTopbar brand="Lucky Drop" language={language} setLanguage={setLanguage} /><div className="broken">?</div><h1>{t('notFound')}</h1><p>{t('checkLink')}</p><a href="/">{t('createCard')}</a></main>
+  if (state === 'used') return <main className="recipient status used-card" style={{ '--accent': card?.accentColor }}><RecipientTopbar brand={card?.senderName || 'Lucky Drop'} language={language} setLanguage={setLanguage} /><div className="used-icon">✓</div><h1>{t('alreadyUsed')}</h1><p>{t('oneReveal')}</p><a href="/">{t('createNew')}</a></main>
   const share = () => window.open(`https://wa.me/?text=${encodeURIComponent(`I found ${card.offerTitle}! Try this scratch card: ${location.href}`)}`, '_blank', 'noopener,noreferrer')
   const claimHost = card.claimUrl ? new URL(card.claimUrl).hostname.replace(/^www\./, '') : ''
   const openClaimLink = () => window.location.assign(card.claimUrl)
@@ -281,7 +313,7 @@ function PublicCard({ slug, language, setLanguage, t }) {
     setCopied(true)
     window.setTimeout(() => setCopied(false), 2500)
   }
-  return <main className="recipient" style={{ '--accent': card.accentColor || DEFAULT_CARD.accentColor, '--page-color': card.pageColor || DEFAULT_CARD.pageColor, '--text-color': card.textColor || DEFAULT_CARD.textColor }}><LanguageSelect language={language} setLanguage={setLanguage} floating /><div className="glow one" /><div className="glow two" /><section className="experience"><a className="recipient-brand" href="/"><span>✦</span> {card.senderName}</a><div className="eyebrow"><GiftIcon /> {t('sentToYou')}</div><h1>{card.headline}</h1><p className="intro">{t('scratchInstruction')}</p><ScratchCard card={card} onReveal={claimCoupon} t={t} />{state === 'claiming' && <p className="claim-status">{t('securing')}</p>}{claimError && <p className="claim-error" role="alert">{claimError} {t('scratchAgain')}</p>}<div className="recipient-actions">{revealed && card.claimUrl && <button className="claim" onClick={openClaimLink}>{t('claimOn')} {claimHost}</button>}<button className="share" onClick={share} disabled={!revealed}><WhatsAppIcon /> {revealed ? t('shareWhatsApp') : t('revealToShare')}</button>{revealed && <div className="public-share-link"><span title={location.href}>{location.href}</span><button onClick={copyShareLink}>{copied ? t('copied') : t('copyLink')}</button></div>}</div><p className="privacy">{t('privacy')}</p></section></main>
+  return <main className="recipient" style={{ '--accent': card.accentColor || DEFAULT_CARD.accentColor, '--page-color': card.pageColor || DEFAULT_CARD.pageColor, '--text-color': card.textColor || DEFAULT_CARD.textColor }}><RecipientTopbar brand={card.senderName} language={language} setLanguage={setLanguage} /><div className="glow one" /><div className="glow two" /><section className="experience"><div className="eyebrow"><GiftIcon /> {t('sentToYou')}</div><h1>{card.headline}</h1><p className="intro">{t('scratchInstruction')}</p><ScratchCard card={card} onReveal={claimCoupon} t={t} />{state === 'claiming' && <p className="claim-status">{t('securing')}</p>}{claimError && <p className="claim-error" role="alert">{claimError} {t('scratchAgain')}</p>}<div className="recipient-actions">{revealed && card.claimUrl && <button className="claim" onClick={openClaimLink}>{t('claimOn')} {claimHost}</button>}<button className="share" onClick={share} disabled={!revealed}><WhatsAppIcon /> {revealed ? t('shareWhatsApp') : t('revealToShare')}</button>{revealed && <div className="public-share-link"><span title={location.href}>{location.href}</span><button onClick={copyShareLink}>{copied ? t('copied') : t('copyLink')}</button></div>}</div><p className="privacy">{t('privacy')}</p></section></main>
 }
 
 function App() {
@@ -296,7 +328,7 @@ function App() {
     document.documentElement.lang = language === 'hi' ? 'hi' : language === 'te' ? 'te' : 'en'
   }, [language])
   return slug
-    ? <PublicCard slug={slug} language={language} setLanguage={setLanguage} t={t} />
+    ? <><Celebration /><PublicCard slug={slug} language={language} setLanguage={setLanguage} t={t} /></>
     : <Creator language={language} setLanguage={setLanguage} t={t} />
 }
 createRoot(document.getElementById('root')).render(<React.StrictMode><App /></React.StrictMode>)
