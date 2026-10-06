@@ -25,7 +25,7 @@ async function requestJson(url, options) {
     try { data = JSON.parse(body) }
     catch {
       throw new Error(import.meta.env.PROD
-        ? 'The deployed API is not configured correctly. Check the Netlify function and MongoDB Atlas settings, then redeploy.'
+        ? 'The deployed API is not configured correctly. Check the backend function and MongoDB Atlas settings, then redeploy.'
         : 'The page is connected to the wrong local server. Restart this project with npm run dev.')
     }
   }
@@ -36,9 +36,9 @@ async function requestJson(url, options) {
       || (typeof data?.error === 'string' ? data.error : data?.error?.message)
     let fallbackMessage = `The scratch-card API returned error ${response.status}.`
     if (import.meta.env.PROD && response.status === 404) {
-      fallbackMessage = 'The Netlify backend function was not deployed. Redeploy the complete project instead of uploading only the dist folder.'
+      fallbackMessage = 'The backend function was not deployed. Redeploy the complete project instead of uploading only the dist folder.'
     } else if (import.meta.env.PROD && response.status >= 500) {
-      fallbackMessage = `The Netlify backend function failed (${response.status}). Check that MONGODB_URI is set in Netlify, then redeploy.`
+      fallbackMessage = `The deployed backend function failed (${response.status}). Check that MONGODB_URI is configured in your hosting environment, then redeploy.`
     }
     const error = new Error(apiMessage || fallbackMessage)
     error.status = response.status
