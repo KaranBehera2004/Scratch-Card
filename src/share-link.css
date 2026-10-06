@@ -8,6 +8,55 @@
   background: #11101f;
 }
 
+.header-tools {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.language-select {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  color: #777288;
+  font-size: .72rem;
+  font-weight: 700;
+}
+
+.language-select select {
+  height: 38px;
+  padding: 0 34px 0 12px;
+  border: 1px solid #d8d4e1;
+  border-radius: 10px;
+  background: #fff;
+  color: #292536;
+  font: inherit;
+  font-size: .78rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.language-select select:focus-visible {
+  outline: 3px solid #8f7afa;
+  outline-offset: 3px;
+}
+
+.language-select.is-floating {
+  position: fixed;
+  z-index: 10;
+  top: 20px;
+  right: 20px;
+  color: #d8d4e8;
+}
+
+.language-select.is-floating select {
+  border-color: #ffffff26;
+  background: #171525e8;
+  color: #fff;
+  backdrop-filter: blur(10px);
+}
+
 .phone,
 .recipient {
   background:
@@ -148,6 +197,27 @@
   font-size: .78rem;
   font-weight: 800;
   cursor: pointer;
+}
+
+.coupon-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.used-coupons-heading .export-coupons {
+  border-color: #7256f5;
+  background: #7256f5;
+  color: #fff;
+}
+
+.used-coupons-heading .export-coupons:hover {
+  background: #5e43df;
+}
+
+.used-coupons-heading button:disabled {
+  opacity: .6;
+  cursor: wait;
 }
 
 .used-coupons-content {
@@ -371,7 +441,12 @@
 }
 
 @media (max-width: 600px) {
+  .header-tools > small { display: none; }
+  .language-select > span { display: none; }
+  .language-select select { max-width: 118px; }
+  .language-select.is-floating { top: 12px; right: 12px; }
   .used-coupons-heading { align-items: center; }
+  .coupon-heading-actions { align-items: stretch; flex-direction: column-reverse; }
   .coupon-row { align-items: flex-start; flex-direction: column; gap: 7px; }
   .coupon-row-status { align-items: flex-start; text-align: left; }
   .status-pill { align-self: flex-start; }
