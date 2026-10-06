@@ -3,6 +3,91 @@ import { createRoot } from 'react-dom/client'
 import './styles.css'
 import './share-link.css'
 
+const TRANSLATIONS = {
+  en: {
+    language: 'Language', creatorTagline: 'Scratch-card link creator', createKicker: 'CREATE A CARD',
+    heroTitle: 'Turn any offer into a little moment of delight.', heroLead: 'Choose what appears under the scratch layer. We’ll create one link you can send anywhere.',
+    from: 'From', messageAbove: 'Message above card', mainOffer: 'Main offer', offerDetails: 'Offer details', couponCode: 'Coupon code', uniqueAuto: 'unique code generated automatically', newCode: 'New', claimLink: 'Claim link', optional: 'optional',
+    cardTheme: 'Card theme', pageBackground: 'Page background', messageText: 'Message text', scratchCard: 'Scratch card', creating: 'Creating your link…', createLink: 'Create scratch-card link',
+    couponActivity: 'COUPON ACTIVITY', allCouponCodes: 'All coupon codes', refresh: 'Refresh list', viewCoupons: 'View coupons', exportExcel: 'Export Excel', exporting: 'Exporting…',
+    loadingCoupons: 'Loading coupons…', couponLoadError: 'Could not load the coupon history.', created: 'Created', used: 'Used', waiting: 'Waiting', all: 'All', searchCoupons: 'Search coupon, offer or sender', noMatches: 'No matching coupons found.', useCoupon: 'Use this coupon',
+    livePreview: 'LIVE PREVIEW', recipientView: 'Recipient view', yourBrand: 'Your brand', surprise: 'SURPRISE', previewHeadline: 'A little surprise for you', scratchLayer: 'Silver scratch layer appears on the shared card',
+    readyShare: 'READY TO SHARE', cardLive: 'Your scratch card is live.', anyoneCanOpen: 'Anyone with this link can open and scratch the card.', uniqueCoupon: 'Unique coupon', copy: 'Copy', linkCopied: 'Link copied to your clipboard.', shareWhatsApp: 'Share on WhatsApp', openCard: 'Open card', createAnother: 'Create another card',
+    reward: 'YOUR REWARD', useCode: 'USE CODE', scratchHere: 'SCRATCH HERE', swipeFinger: 'Swipe with your finger', unlocked: 'Offer unlocked!', revealed: 'revealed', scratchLabel: 'Scratch to reveal your offer',
+    gettingReady: 'Getting your surprise ready…', notFound: 'This card could not be found.', checkLink: 'Check that the shared link is complete.', createCard: 'Create a scratch card', alreadyUsed: 'This coupon has already been used.', oneReveal: 'Each scratch-card link can reveal its reward only once.', createNew: 'Create a new scratch card',
+    sentToYou: 'A surprise was sent to you', scratchInstruction: 'Scratch the silver surface with your finger or mouse to reveal it.', securing: 'Securing your one-time coupon…', scratchAgain: 'Please scratch again.', claimOn: 'Claim offer on', revealToShare: 'Reveal to share', copied: 'Copied!', copyLink: 'Copy link', privacy: 'Created with Lucky Drop · One-time reward', exportError: 'Could not create the Excel file.', noCouponsExport: 'There are no coupon codes to export.', excelSheet: 'Coupons', excelHeaders: ['Coupon code', 'Offer', 'Sender', 'Status', 'Created at', 'Redeemed at', 'Card link'],
+  },
+  hi: {
+    language: 'भाषा', creatorTagline: 'स्क्रैच-कार्ड लिंक निर्माता', createKicker: 'कार्ड बनाएँ',
+    heroTitle: 'किसी भी ऑफर को एक खास खुशी में बदलें।', heroLead: 'स्क्रैच परत के नीचे क्या दिखेगा चुनें। हम साझा करने के लिए एक लिंक बनाएँगे।',
+    from: 'भेजने वाला', messageAbove: 'कार्ड के ऊपर संदेश', mainOffer: 'मुख्य ऑफर', offerDetails: 'ऑफर विवरण', couponCode: 'कूपन कोड', uniqueAuto: 'अलग कोड अपने आप बनेगा', newCode: 'नया', claimLink: 'क्लेम लिंक', optional: 'वैकल्पिक',
+    cardTheme: 'कार्ड थीम', pageBackground: 'पेज का रंग', messageText: 'संदेश का रंग', scratchCard: 'स्क्रैच कार्ड', creating: 'लिंक बन रहा है…', createLink: 'स्क्रैच-कार्ड लिंक बनाएँ',
+    couponActivity: 'कूपन गतिविधि', allCouponCodes: 'सभी कूपन कोड', refresh: 'सूची रीफ़्रेश करें', viewCoupons: 'कूपन देखें', exportExcel: 'Excel डाउनलोड करें', exporting: 'डाउनलोड बन रहा है…',
+    loadingCoupons: 'कूपन लोड हो रहे हैं…', couponLoadError: 'कूपन इतिहास लोड नहीं हुआ।', created: 'बनाए गए', used: 'उपयोग किए गए', waiting: 'उपलब्ध', all: 'सभी', searchCoupons: 'कूपन, ऑफर या भेजने वाला खोजें', noMatches: 'कोई मेल खाता कूपन नहीं मिला।', useCoupon: 'यह कूपन उपयोग करें',
+    livePreview: 'लाइव पूर्वावलोकन', recipientView: 'प्राप्तकर्ता दृश्य', yourBrand: 'आपका ब्रांड', surprise: 'सरप्राइज़', previewHeadline: 'आपके लिए एक छोटा सा सरप्राइज़', scratchLayer: 'साझा कार्ड पर सिल्वर स्क्रैच परत दिखाई देगी',
+    readyShare: 'साझा करने के लिए तैयार', cardLive: 'आपका स्क्रैच कार्ड तैयार है।', anyoneCanOpen: 'इस लिंक वाला कोई भी व्यक्ति कार्ड खोलकर स्क्रैच कर सकता है।', uniqueCoupon: 'विशिष्ट कूपन', copy: 'कॉपी करें', linkCopied: 'लिंक क्लिपबोर्ड पर कॉपी हो गया।', shareWhatsApp: 'WhatsApp पर साझा करें', openCard: 'कार्ड खोलें', createAnother: 'दूसरा कार्ड बनाएँ',
+    reward: 'आपका इनाम', useCode: 'कोड इस्तेमाल करें', scratchHere: 'यहाँ स्क्रैच करें', swipeFinger: 'अपनी उंगली से स्वाइप करें', unlocked: 'ऑफर खुल गया!', revealed: 'खुला', scratchLabel: 'ऑफर देखने के लिए स्क्रैच करें',
+    gettingReady: 'आपका सरप्राइज़ तैयार हो रहा है…', notFound: 'यह कार्ड नहीं मिला।', checkLink: 'जाँचें कि साझा लिंक पूरा है।', createCard: 'स्क्रैच कार्ड बनाएँ', alreadyUsed: 'यह कूपन पहले ही उपयोग किया जा चुका है।', oneReveal: 'हर स्क्रैच-कार्ड लिंक केवल एक बार इनाम दिखाता है।', createNew: 'नया स्क्रैच कार्ड बनाएँ',
+    sentToYou: 'आपके लिए एक सरप्राइज़ भेजा गया है', scratchInstruction: 'इनाम देखने के लिए उंगली या माउस से सिल्वर सतह स्क्रैच करें।', securing: 'आपका एक-बार उपयोग वाला कूपन सुरक्षित किया जा रहा है…', scratchAgain: 'कृपया फिर से स्क्रैच करें।', claimOn: 'ऑफर क्लेम करें', revealToShare: 'साझा करने के लिए खोलें', copied: 'कॉपी हो गया!', copyLink: 'लिंक कॉपी करें', privacy: 'Lucky Drop से बनाया गया · एक बार का इनाम', exportError: 'Excel फ़ाइल नहीं बन सकी।', noCouponsExport: 'निर्यात के लिए कोई कूपन नहीं है।', excelSheet: 'कूपन', excelHeaders: ['कूपन कोड', 'ऑफर', 'भेजने वाला', 'स्थिति', 'बनाने की तारीख', 'उपयोग की तारीख', 'कार्ड लिंक'],
+  },
+  te: {
+    language: 'భాష', creatorTagline: 'స్క్రాచ్-కార్డ్ లింక్ క్రియేటర్', createKicker: 'కార్డ్ సృష్టించండి',
+    heroTitle: 'ఇ\u00A0ఆఫర్ ఒక చిన్న ఆనంద క్షణంగా మార్చండి.', heroLead: 'స్క్రాచ్ పొర కింద ఏమి కనిపించాలో ఎంచుకోండి. ఎక్కడైనా పంపగల లింక్‌ను మేము సృష్టిస్తాము.',
+    from: 'పంపినవారు', messageAbove: 'కార్డ్ పైన సందేశం', mainOffer: 'ప్రధాన ఆఫర్', offerDetails: 'ఆఫర్ వివరాలు', couponCode: 'కూపన్ కోడ్', uniqueAuto: 'ప్రత్యేక కోడ్ స్వయంచాలకంగా సృష్టించబడుతుంది', newCode: 'కొత్తది', claimLink: 'క్లెయిమ్ లింక్', optional: 'ఐచ్ఛికం',
+    cardTheme: 'కార్డ్ థీమ్', pageBackground: 'పేజీ రంగు', messageText: 'సందేశం రంగు', scratchCard: 'స్క్రాచ్ కార్డ్', creating: 'లింక్ సృష్టిస్తోంది…', createLink: 'స్క్రాచ్-కార్డ్ లింక్ సృష్టించండి',
+    couponActivity: 'కూపన్ కార్యకలాపం', allCouponCodes: 'అన్ని కూపన్ కోడ్‌లు', refresh: 'జాబితాను రిఫ్రెష్ చేయండి', viewCoupons: 'కూపన్‌లు చూడండి', exportExcel: 'Excel డౌన్‌లోడ్', exporting: 'ఎక్స్‌పోర్ట్ అవుతోంది…',
+    loadingCoupons: 'కూపన్‌లు లోడ్ అవుతున్నాయి…', couponLoadError: 'కూపన్ చరిత్ర లోడ్ కాలేదు.', created: 'సృష్టించినవి', used: 'వాడినవి', waiting: 'అందుబాటులో', all: 'అన్నీ', searchCoupons: 'కూపన్, ఆఫర్ లేదా పంపినవారిని వెతకండి', noMatches: 'సరిపోలే కూపన్‌లు లేవు.', useCoupon: 'ఈ కూపన్ ఉపయోగించండి',
+    livePreview: 'లైవ్ ప్రివ్యూ', recipientView: 'గ్రహీత వీక్షణ', yourBrand: 'మీ బ్రాండ్', surprise: 'సర్‌ప్రైజ్', previewHeadline: 'మీ కోసం ఒక చిన్న సర్‌ప్రైజ్', scratchLayer: 'షేర్ చేసిన కార్డ్‌పై సిల్వర్ స్క్రాచ్ పొర కనిపిస్తుంది',
+    readyShare: 'షేర్ చేయడానికి సిద్ధం', cardLive: 'మీ స్క్రాచ్ కార్డ్ సిద్ధంగా ఉంది.', anyoneCanOpen: 'ఈ లింక్ ఉన్న ఎవరైనా కార్డ్‌ను తెరిచి స్క్రాచ్ చేయవచ్చు.', uniqueCoupon: 'ప్రత్యేక కూపన్', copy: 'కాపీ', linkCopied: 'లింక్ క్లిప్‌బోర్డ్‌కు కాపీ అయింది.', shareWhatsApp: 'WhatsAppలో షేర్ చేయండి', openCard: 'కార్డ్ తెరవండి', createAnother: 'మరొక కార్డ్ సృష్టించండి',
+    reward: 'మీ బహుమతి', useCode: 'కోడ్ ఉపయోగించండి', scratchHere: 'ఇక్కడ స్క్రాచ్ చేయండి', swipeFinger: 'వేలితో స్వైప్ చేయండి', unlocked: 'ఆఫర్ తెరుచుకుంది!', revealed: 'తెరచింది', scratchLabel: 'ఆఫర్ చూడటానికి స్క్రాచ్ చేయండి',
+    gettingReady: 'మీ సర్‌ప్రైజ్ సిద్ధమవుతోంది…', notFound: 'ఈ కార్డ్ కనబడలేదు.', checkLink: 'షేర్ చేసిన లింక్ పూర్తిగా ఉందో చూడండి.', createCard: 'స్క్రాచ్ కార్డ్ సృష్టించండి', alreadyUsed: 'ఈ కూపన్ ఇప్పటికే ఉపయోగించబడింది.', oneReveal: 'ప్రతి స్క్రాచ్-కార్డ్ లింక్ బహుమతిని ఒక్కసారి మాత్రమే చూపిస్తుంది.', createNew: 'కొత్త స్క్రాచ్ కార్డ్ సృష్టించండి',
+    sentToYou: 'మీకు ఒక సర్‌ప్రైజ్ పంపబడింది', scratchInstruction: 'బహుమతిని చూడటానికి వెండి ఉపరితలాన్ని వేలితో లేదా మౌస్‌తో స్క్రాచ్ చేయండి.', securing: 'మీ ఒక్కసారి ఉపయోగించే కూపన్‌ను భద్రపరుస్తోంది…', scratchAgain: 'దయచేసి మళ్లీ స్క్రాచ్ చేయండి.', claimOn: 'ఆఫర్‌ను క్లెయిమ్ చేయండి', revealToShare: 'షేర్ చేయడానికి తెరవండి', copied: 'కాపీ అయింది!', copyLink: 'లింక్ కాపీ', privacy: 'Lucky Dropతో రూపొందించబడింది · ఒక్కసారి బహుమతి', exportError: 'Excel ఫైల్ సృష్టించలేకపోయాం.', noCouponsExport: 'ఎక్స్‌పోర్ట్ చేయడానికి కూపన్‌లు లేవు.', excelSheet: 'కూపన్లు', excelHeaders: ['కూపన్ కోడ్', 'ఆఫర్', 'పంపినవారు', 'స్థితి', 'సృష్టించిన తేదీ', 'ఉపయోగించిన తేదీ', 'కార్డ్ లింక్'],
+  },
+}
+
+function LanguageSelect({ language, setLanguage, floating = false }) {
+  return <label className={`language-select ${floating ? 'is-floating' : ''}`}>
+    <span>{TRANSLATIONS[language].language}</span>
+    <select value={language} onChange={event => setLanguage(event.target.value)} aria-label={TRANSLATIONS[language].language}>
+      <option value="en">English</option>
+      <option value="hi">हिन्दी</option>
+      <option value="te">తెలుగు</option>
+    </select>
+  </label>
+}
+
+const CELEBRATION_COLORS = ['#6c63ff', '#ff745f', '#ffc34d', '#53d990', '#52acef', '#cc58ef']
+const CONFETTI_PIECES = Array.from({ length: 46 }, (_, index) => ({
+  id: index,
+  color: CELEBRATION_COLORS[index % CELEBRATION_COLORS.length],
+  left: `${(index * 37 + 5) % 96}%`,
+  delay: `${(index % 10) * 0.07}s`,
+  duration: `${2.2 + (index % 6) * 0.18}s`,
+  drift: `${((index * 19) % 90) - 45}px`,
+  rotation: `${(index * 47) % 270}deg`,
+}))
+const CELEBRATION_TICKETS = [
+  { color: '#6669f6', left: '10%', delay: '.08s', rotation: '-14deg' },
+  { color: '#f8b93e', left: '28%', delay: '.22s', rotation: '9deg' },
+  { color: '#c454e7', left: '47%', delay: '.04s', rotation: '-8deg' },
+  { color: '#5aa7ec', left: '68%', delay: '.18s', rotation: '13deg' },
+  { color: '#fa7568', left: '84%', delay: '.12s', rotation: '-11deg' },
+]
+
+function Celebration() {
+  return <div className="arrival-celebration" aria-hidden="true">
+    {CONFETTI_PIECES.map(piece => <i className="confetti-piece" key={piece.id} style={{ '--piece-color': piece.color, '--piece-left': piece.left, '--piece-delay': piece.delay, '--piece-duration': piece.duration, '--piece-drift': piece.drift, '--piece-rotation': piece.rotation }} />)}
+    {CELEBRATION_TICKETS.map((ticket, index) => <i className="celebration-ticket" key={ticket.left} style={{ '--ticket-color': ticket.color, '--ticket-left': ticket.left, '--ticket-delay': ticket.delay, '--ticket-rotation': ticket.rotation }}><span /></i>)}
+  </div>
+}
+
+function RecipientTopbar({ brand, language, setLanguage }) {
+  return <header className="recipient-topbar">
+    <a className="recipient-brand" href="/"><span>✦</span> {brand}</a>
+    <LanguageSelect language={language} setLanguage={setLanguage} />
+  </header>
+}
+
 function generateDraftCoupon() {
   const bytes = new Uint8Array(4)
   window.crypto.getRandomValues(bytes)
@@ -155,9 +240,9 @@ function PublicCard({ slug }) {
   const [copied, setCopied] = useState(false)
   const [claimError, setClaimError] = useState('')
   useEffect(() => { requestJson(`/api/cards/${encodeURIComponent(slug)}`).then(data => { setCard(data); setState(data.used ? 'used' : 'ready') }).catch(() => setState('error')) }, [slug])
-  if (state === 'loading') return <main className="recipient status"><div className="loader" /><p>Getting your surprise ready…</p></main>
-  if (state === 'error') return <main className="recipient status"><div className="broken">?</div><h1>This card could not be found.</h1><p>Check that the shared link is complete.</p><a href="/">Create a scratch card</a></main>
-  if (state === 'used') return <main className="recipient status used-card" style={{ '--accent': card?.accentColor }}><div className="used-icon">✓</div><h1>This coupon has already been used.</h1><p>Each scratch-card link can reveal its reward only once.</p><a href="/">Create a new scratch card</a></main>
+  if (state === 'loading') return <main className="recipient status"><RecipientTopbar brand="Lucky Drop" language={language} setLanguage={setLanguage} /><div className="loader" /><p>{t('gettingReady')}</p></main>
+  if (state === 'error') return <main className="recipient status"><RecipientTopbar brand="Lucky Drop" language={language} setLanguage={setLanguage} /><div className="broken">?</div><h1>{t('notFound')}</h1><p>{t('checkLink')}</p><a href="/">{t('createCard')}</a></main>
+  if (state === 'used') return <main className="recipient status used-card" style={{ '--accent': card?.accentColor }}><RecipientTopbar brand={card?.senderName || 'Lucky Drop'} language={language} setLanguage={setLanguage} /><div className="used-icon">✓</div><h1>{t('alreadyUsed')}</h1><p>{t('oneReveal')}</p><a href="/">{t('createNew')}</a></main>
   const share = () => window.open(`https://wa.me/?text=${encodeURIComponent(`I found ${card.offerTitle}! Try this scratch card: ${location.href}`)}`, '_blank', 'noopener,noreferrer')
   const claimHost = card.claimUrl ? new URL(card.claimUrl).hostname.replace(/^www\./, '') : ''
   const openClaimLink = () => window.location.assign(card.claimUrl)
@@ -184,8 +269,22 @@ function PublicCard({ slug }) {
     setCopied(true)
     window.setTimeout(() => setCopied(false), 2500)
   }
-  return <main className="recipient" style={{ '--accent': card.accentColor || DEFAULT_CARD.accentColor, '--page-color': card.pageColor || DEFAULT_CARD.pageColor, '--text-color': card.textColor || DEFAULT_CARD.textColor }}><div className="glow one" /><div className="glow two" /><section className="experience"><a className="recipient-brand" href="/"><span>✦</span> {card.senderName}</a><div className="eyebrow"><GiftIcon /> A surprise was sent to you</div><h1>{card.headline}</h1><p className="intro">Scratch the silver surface with your finger or mouse to reveal it.</p><ScratchCard card={card} onReveal={claimCoupon} />{state === 'claiming' && <p className="claim-status">Securing your one-time coupon…</p>}{claimError && <p className="claim-error" role="alert">{claimError} Please scratch again.</p>}<div className="recipient-actions">{revealed && card.claimUrl && <button className="claim" onClick={openClaimLink}>Claim offer on {claimHost}</button>}<button className="share" onClick={share} disabled={!revealed}><WhatsAppIcon /> {revealed ? 'Share on WhatsApp' : 'Reveal to share'}</button>{revealed && <div className="public-share-link"><span title={location.href}>{location.href}</span><button onClick={copyShareLink}>{copied ? 'Copied!' : 'Copy link'}</button></div>}</div><p className="privacy">Created with Lucky Drop · One-time reward</p></section></main>
+  return <main className="recipient" style={{ '--accent': card.accentColor || DEFAULT_CARD.accentColor, '--page-color': card.pageColor || DEFAULT_CARD.pageColor, '--text-color': card.textColor || DEFAULT_CARD.textColor }}><RecipientTopbar brand={card.senderName} language={language} setLanguage={setLanguage} /><div className="glow one" /><div className="glow two" /><section className="experience"><div className="eyebrow"><GiftIcon /> {t('sentToYou')}</div><h1>{card.headline}</h1><p className="intro">{t('scratchInstruction')}</p><ScratchCard card={card} onReveal={claimCoupon} t={t} />{state === 'claiming' && <p className="claim-status">{t('securing')}</p>}{claimError && <p className="claim-error" role="alert">{claimError} {t('scratchAgain')}</p>}<div className="recipient-actions">{revealed && card.claimUrl && <button className="claim" onClick={openClaimLink}>{t('claimOn')} {claimHost}</button>}<button className="share" onClick={share} disabled={!revealed}><WhatsAppIcon /> {revealed ? t('shareWhatsApp') : t('revealToShare')}</button>{revealed && <div className="public-share-link"><span title={location.href}>{location.href}</span><button onClick={copyShareLink}>{copied ? t('copied') : t('copyLink')}</button></div>}</div><p className="privacy">{t('privacy')}</p></section></main>
 }
 
-function App() { const slug = useMemo(() => location.pathname.match(/^\/card\/([\w-]+)\/?$/)?.[1], []); return slug ? <PublicCard slug={slug} /> : <Creator /> }
+function App() {
+  const slug = useMemo(() => location.pathname.match(/^\/card\/([\w-]+)\/?$/)?.[1], [])
+  const [language, setLanguage] = useState(() => {
+    const saved = localStorage.getItem('lucky-drop-language')
+    return TRANSLATIONS[saved] ? saved : 'en'
+  })
+  const t = useCallback(key => TRANSLATIONS[language][key] || TRANSLATIONS.en[key] || key, [language])
+  useEffect(() => {
+    localStorage.setItem('lucky-drop-language', language)
+    document.documentElement.lang = language === 'hi' ? 'hi' : language === 'te' ? 'te' : 'en'
+  }, [language])
+  return slug
+    ? <><Celebration /><PublicCard slug={slug} language={language} setLanguage={setLanguage} t={t} /></>
+    : <Creator language={language} setLanguage={setLanguage} t={t} />
+}
 createRoot(document.getElementById('root')).render(<React.StrictMode><App /></React.StrictMode>)
