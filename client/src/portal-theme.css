@@ -1,0 +1,66 @@
+.p-theme-toggle { width: 38px; height: 38px; }
+.p-metrics-platform { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+@media (max-width: 1150px) {
+  .p-metrics-platform { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) {
+  .p-metrics-platform { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+.p-shell[data-theme="dark"] {
+  --ink: #edf0f7;
+  --muted: #a6afc1;
+  --border: #343d50;
+  --purple: #9582ff;
+  color-scheme: dark;
+  background: #111622;
+}
+.p-shell[data-theme="dark"] :is(.p-sidebar, .p-card, .p-metrics article, .p-dialog, .p-builder .builder, .p-search) {
+  background: #1b2332;
+  border-color: var(--border);
+}
+.p-shell[data-theme="dark"] .p-topbar { background: #1b2332f2; }
+.p-shell[data-theme="dark"] :is(input, select) { background: #131b29; color: var(--ink); border-color: #46516a; }
+.p-shell[data-theme="dark"] input::placeholder { color: #a0aabe; }
+.p-shell[data-theme="dark"] input:disabled { background: #263043; color: var(--muted); }
+.p-shell[data-theme="dark"] :is(label, .p-breadcrumb b, .p-workspace-chip b, .p-business-name b, .p-table-scroll td > b, .p-quick b, .p-table-scroll td, .p-quick span) { color: var(--ink); }
+.p-shell[data-theme="dark"] :is(.p-sidebar nav button, .p-breadcrumb, .p-metrics article span, .p-card-title > span, .p-card-title p, .p-table-scroll th, .p-empty span, .p-builder .p-builder-note, .p-preview-title, .preview-title, .p-builder .theme-controls b, .p-builder .fields em) { color: var(--muted); }
+.p-shell[data-theme="dark"] :is(.p-table-scroll th, .p-workspace-chip, .p-theme-toggle, .p-welcome) { background: #252f42; }
+.p-shell[data-theme="dark"] :is(.p-table-scroll th, .p-table-scroll td, .p-sidebar-account, .p-dialog-head, .p-dialog footer, .p-quick > div) { border-color: var(--border); }
+.p-shell[data-theme="dark"] :is(.p-button, .p-icon-button) { background: #242e41; color: var(--ink); border-color: #46516a; }
+.p-shell[data-theme="dark"] .p-button:hover { background: #303b51; }
+.p-shell[data-theme="dark"] .p-button.primary { background: #7661e8; color: #fff; border-color: #9582ff; }
+.p-shell[data-theme="dark"] .p-button.primary:hover { background: #8974f5; }
+.p-shell[data-theme="dark"] .p-button.danger { background: #422632; color: #ffacb6; border-color: #704251; }
+.p-shell[data-theme="dark"] :is(.p-sidebar nav button.active, .p-sidebar nav button:hover, .p-avatar, .p-business-name > span, .p-row-actions button, .p-row-actions a, .p-quick button) { background: #332e50; color: #c6baff; border-color: #52456e; }
+.p-shell[data-theme="dark"] .p-row-actions :is(button, a):hover { background: #453b65; }
+.p-shell[data-theme="dark"] :is(.p-eyebrow, .p-bars b, .p-metrics article > div, .p-security-grid dt) { color: #baaaff; }
+.p-shell[data-theme="dark"] .p-workspace-banner { background: #2c2844; color: #cec3ff; }
+.p-shell[data-theme="dark"] .p-workspace-banner button { color: #cec3ff; }
+.p-shell[data-theme="dark"] .p-builder .theme-panel { background: #252f42; border-color: var(--border); }
+.p-shell[data-theme="dark"] .p-builder .coupon-input button { background: #332e50; color: #c6baff; border-color: #52456e; }
+.p-shell[data-theme="dark"] .p-alert.error { background: #422632; color: #ffbbc4; border-color: #704251; }
+.p-shell[data-theme="dark"] .p-alert.p-alert-success { background: #193b30; color: #9be1be; border-color: #356752; }
+.p-shell[data-theme="dark"] .p-badge { background: #30394b; color: #c2cbdb; }
+.p-shell[data-theme="dark"] .p-badge:is(.active, .redeemed) { background: #193b30; color: #9be1be; }
+.p-shell[data-theme="dark"] .p-badge.available { background: #443a21; color: #f4cf82; }
+.p-shell[data-theme="dark"] .p-badge:is(.paused, .disabled) { background: #422632; color: #ffbbc4; }
+.p-shell[data-theme="dark"] .p-badge.expired { background: #393247; color: #d5c6e6; }
+.p-shell[data-theme="dark"] .p-loading { color: var(--muted); }
+.p-row-actions button.danger { background: #fff0f1; color: #ac3046; border-color: #efc9d1; }
+.p-row-actions button.danger:hover { background: #ffe3e7; }
+.p-shell[data-theme="dark"] .p-row-actions button.danger { background: #422632; color: #ffbbc4; border-color: #704251; }
+.p-shell[data-theme="dark"] .p-row-actions button.danger:hover { background: #583040; }
+
+.p-shell[data-theme="dark"] .modal { background: #1b2332; color: var(--ink); border: 1px solid var(--border); }
+.p-shell[data-theme="dark"] .modal > p,
+.p-shell[data-theme="dark"] .modal .again { color: #b9c2d3; }
+.p-shell[data-theme="dark"] .modal .kicker { color: #baaaff; }
+.p-shell[data-theme="dark"] .modal .success { background: #193b30; color: #9be1be; }
+.p-shell[data-theme="dark"] .modal .created-code,
+.p-shell[data-theme="dark"] .modal .link-box { background: #252f42; border-color: #52617c; }
+.p-shell[data-theme="dark"] .modal .created-code span { color: #b9c2d3; }
+.p-shell[data-theme="dark"] .modal .created-code strong { color: #edf0f7; }
+.p-shell[data-theme="dark"] .modal .link-box button { background: #7661e8; color: #fff; }
+.p-shell[data-theme="dark"] .modal .modal-actions a { background: #332e50; color: #e0d8ff; }
+.p-shell[data-theme="dark"] .modal .copied { color: #9be1be !important; }
