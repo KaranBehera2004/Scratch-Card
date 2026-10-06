@@ -37,6 +37,31 @@ const createdCredentials = async (page) => {
   return credentials;
 };
 
+test("compact typography stays readable and sidebar navigation remains accessible", async ({ page }, info) => {
+  await page.goto("/");
+  await expect(page.locator(".p-login")).toHaveCSS("font-size", "14px");
+  await expect(page.getByLabel("Login ID", { exact: true })).toHaveCSS("font-size", "14px");
+  await expect(page.locator(".p-login-form h2")).toHaveCSS("font-size", "31px");
+  await login(page, "platform@example.test", "Platform-Test-Password");
+  await expect(page.locator(".p-shell")).toHaveCSS("font-size", "14px");
+  await expect(page.locator(".p-sidebar nav button").first()).toHaveCSS("font-size", "13px");
+  await expect(page.locator(".p-sidebar nav")).toHaveCSS("scrollbar-width", "thin");
+  await nav(page, "Businesses");
+  await expect(page.locator(".p-page-heading h1")).toHaveCSS("font-size", "28px");
+  await page.getByRole("switch", { name: "Dark mode" }).click();
+  await page.screenshot({ path: info.outputPath("compact-dark-businesses.png"), fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 600 });
+  const lastNavItem = page.locator(".p-sidebar nav button").last();
+  await lastNavItem.scrollIntoViewIfNeeded();
+  await expect(lastNavItem).toBeInViewport();
+  await expect(page.locator(".p-sidebar-account")).toBeInViewport();
+  await page.locator(".p-topbar").getByRole("button", { name: "Sign out" }).click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByLabel("Login ID", { exact: true })).toHaveCSS("font-size", "16px");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: info.outputPath("compact-mobile-login.png"), fullPage: true });
+});
+
 test("super admin can manage workspaces, create rewards, and export English workbooks", async ({
   page,
 }, info) => {
@@ -110,7 +135,7 @@ test("super admin can manage workspaces, create rewards, and export English work
   await expect(businessRow).toContainText("3 business accounts");
   const notice = page.getByRole("status");
   await expect(notice).toContainText("Changes saved successfully.");
-  await expect(notice).toHaveCSS("font-size", "16px");
+  await expect(notice).toHaveCSS("font-size", "14px");
   expect(await notice.evaluate((element) => element.clientWidth > 300 && element.scrollHeight <= element.clientHeight)).toBe(true);
   await page.screenshot({ path: info.outputPath("success-notification.png"), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });

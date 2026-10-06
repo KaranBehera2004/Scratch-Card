@@ -499,14 +499,14 @@ function ScratchCard({ card, onReveal = () => {}, preview = false, t }) {
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillStyle = "#42485b";
-    ctx.font = "700 18px DM Sans, system-ui";
+    ctx.font = "700 16px DM Sans, system-ui";
     ctx.fillText(
       `✦  ${t("scratchHere")}  ✦`,
       rect.width / 2,
       rect.height / 2 - 7,
     );
     ctx.fillStyle = "#62697d";
-    ctx.font = "500 14px DM Sans, system-ui";
+    ctx.font = "500 12px DM Sans, system-ui";
     ctx.fillText(t("swipeFinger"), rect.width / 2, rect.height / 2 + 18);
     revealed.current = false;
     setProgress(0);
