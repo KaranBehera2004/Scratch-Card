@@ -49,8 +49,8 @@ export function connectDatabase() {
 }
 
 async function initializeDatabase() {
-  if (!process.env.MONGODB_URI && (process.env.NETLIFY || process.env.AWS_LAMBDA_FUNCTION_NAME)) {
-    throw new Error('MongoDB Atlas is not configured. Add MONGODB_URI in Netlify environment variables and redeploy.')
+  if (!process.env.MONGODB_URI && (process.env.NETLIFY || process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME)) {
+    throw new Error('MongoDB Atlas is not configured. Add MONGODB_URI in your hosting environment variables and redeploy.')
   }
   if (!process.env.MONGODB_URI) {
     await fs.mkdir(dataDir, { recursive: true })
@@ -222,6 +222,7 @@ app.post('/api/cards/:slug/claim', async (req, res, next) => {
 })
 
 const isLocalServer = !process.env.NETLIFY
+  && !process.env.VERCEL
   && !process.env.AWS_LAMBDA_FUNCTION_NAME
   && process.argv[1]
   && path.resolve(process.argv[1]) === path.join(rootDir, 'server', 'index.js')
