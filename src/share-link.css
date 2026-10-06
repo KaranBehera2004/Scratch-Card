@@ -325,6 +325,27 @@
   cursor: pointer;
 }
 
+.coupon-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.used-coupons-heading .export-coupons {
+  border-color: #7256f5;
+  background: #7256f5;
+  color: #fff;
+}
+
+.used-coupons-heading .export-coupons:hover {
+  background: #5e43df;
+}
+
+.used-coupons-heading button:disabled {
+  opacity: .6;
+  cursor: wait;
+}
+
 .used-coupons-content {
   margin-top: 20px;
   padding: 18px;
@@ -568,6 +589,7 @@
   .language-select select { max-width: 118px; }
   .language-select.is-floating { top: 12px; right: 12px; }
   .used-coupons-heading { align-items: center; }
+  .coupon-heading-actions { align-items: stretch; flex-direction: column-reverse; }
   .coupon-row { align-items: flex-start; flex-direction: column; gap: 7px; }
   .coupon-row-status { align-items: flex-start; text-align: left; }
   .status-pill { align-self: flex-start; }

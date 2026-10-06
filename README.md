@@ -34,6 +34,18 @@ The included `netlify.toml` builds the React site and deploys the Express API as
 
 The generated share link will automatically use your Netlify domain, such as `https://your-site.netlify.app/card/abc123`. Cards created only in the local JSON file are not copied to Atlas; cards created on the deployed site are stored in Atlas.
 
+## Deploy to Vercel
+
+The included `vercel.json` builds the Vite frontend, keeps client-side routes working, and sends `/api/*` requests to the Express Vercel Function.
+
+1. Import the complete `Scratch-card` project into Vercel.
+2. Add `MONGODB_URI` under **Project Settings → Environment Variables** for Production, Preview, and Development as needed.
+3. Optionally add `MONGODB_DB` (the default is `scratch_cards`).
+4. Ensure MongoDB Atlas Network Access permits connections from Vercel Functions.
+5. Redeploy the project.
+
+Do not deploy only the `dist` directory because it does not contain the API function.
+
 ## Run the production build locally
 
 ```powershell

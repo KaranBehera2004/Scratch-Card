@@ -21,6 +21,7 @@
     "react": "latest",
     "react-dom": "latest",
     "serverless-http": "^4.0.0",
-    "vite": "latest"
+    "vite": "latest",
+    "write-excel-file": "^4.1.1"
   }
 }

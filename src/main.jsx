@@ -110,7 +110,7 @@ async function requestJson(url, options) {
     try { data = JSON.parse(body) }
     catch {
       throw new Error(import.meta.env.PROD
-        ? 'The deployed API is not configured correctly. Check the Netlify function and MongoDB Atlas settings, then redeploy.'
+        ? 'The deployed API is not configured correctly. Check the backend function and MongoDB Atlas settings, then redeploy.'
         : 'The page is connected to the wrong local server. Restart this project with npm run dev.')
     }
   }
@@ -121,9 +121,9 @@ async function requestJson(url, options) {
       || (typeof data?.error === 'string' ? data.error : data?.error?.message)
     let fallbackMessage = `The scratch-card API returned error ${response.status}.`
     if (import.meta.env.PROD && response.status === 404) {
-      fallbackMessage = 'The Netlify backend function was not deployed. Redeploy the complete project instead of uploading only the dist folder.'
+      fallbackMessage = 'The backend function was not deployed. Redeploy the complete project instead of uploading only the dist folder.'
     } else if (import.meta.env.PROD && response.status >= 500) {
-      fallbackMessage = `The Netlify backend function failed (${response.status}). Check that MONGODB_URI is set in Netlify, then redeploy.`
+      fallbackMessage = `The deployed backend function failed (${response.status}). Check that MONGODB_URI is configured in your hosting environment, then redeploy.`
     }
     const error = new Error(apiMessage || fallbackMessage)
     error.status = response.status
@@ -137,7 +137,7 @@ async function requestJson(url, options) {
 const GiftIcon = () => <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12v8H4v-8M2 7h20v5H2zM12 7v13M12 7H7.5a2.5 2.5 0 1 1 2.2-3.7L12 7Zm0 0h4.5a2.5 2.5 0 1 0-2.2-3.7L12 7Z" /></svg>
 const WhatsAppIcon = () => <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 3.5A11.8 11.8 0 0 0 12.1 0C5.6 0 .3 5.3.3 11.8c0 2.1.5 4.1 1.6 5.9L.2 24l6.5-1.7a11.8 11.8 0 0 0 5.4 1.4c6.5 0 11.8-5.3 11.8-11.8 0-3.2-1.2-6.1-3.4-8.4Zm-8.4 18.2c-1.8 0-3.6-.5-5.1-1.4l-.4-.2-3.8 1 1-3.7-.2-.4a9.8 9.8 0 1 1 8.5 4.7Zm5.4-7.4c-.3-.1-1.7-.8-1.9-.9-.3-.1-.5-.1-.7.2-.2.3-.7.9-.9 1.1-.2.2-.3.2-.6.1-1.7-.8-2.8-1.5-3.9-3.4-.3-.5.3-.5.8-1.5.1-.2 0-.4 0-.6l-.9-2.1c-.2-.5-.5-.5-.7-.5h-.6c-.2 0-.6.1-.9.4-.3.3-1.2 1.2-1.2 2.9s1.2 3.3 1.4 3.5c.1.2 2.5 3.8 6 5.3 2.2.9 3.1 1 4.2.8.7-.1 1.7-.7 1.9-1.3.2-.6.2-1.2.2-1.3-.1-.1-.3-.2-.6-.3Z" /></svg>
 
-function ScratchCard({ card, onReveal = () => {}, preview = false }) {
+function ScratchCard({ card, onReveal = () => {}, preview = false, t }) {
   const canvasRef = useRef(null), cardRef = useRef(null), drawing = useRef(false), revealed = useRef(false)
   const [progress, setProgress] = useState(preview ? 100 : 0)
   const prepare = useCallback(() => {
@@ -149,10 +149,10 @@ function ScratchCard({ card, onReveal = () => {}, preview = false }) {
     gradient.addColorStop(0, '#eef0f5'); gradient.addColorStop(.48, '#a7adbd'); gradient.addColorStop(1, '#f7f8fa')
     ctx.fillStyle = gradient; ctx.fillRect(0, 0, rect.width, rect.height); ctx.fillStyle = 'rgba(255,255,255,.24)'
     for (let x = -rect.height; x < rect.width + rect.height; x += 28) { ctx.save(); ctx.translate(x, 0); ctx.rotate(Math.PI / 4); ctx.fillRect(0, -rect.height, 8, rect.height * 3); ctx.restore() }
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#42485b'; ctx.font = '700 15px DM Sans, system-ui'; ctx.fillText('✦  SCRATCH HERE  ✦', rect.width / 2, rect.height / 2 - 7)
-    ctx.fillStyle = '#62697d'; ctx.font = '500 12px DM Sans, system-ui'; ctx.fillText('Swipe with your finger', rect.width / 2, rect.height / 2 + 18)
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#42485b'; ctx.font = '700 15px DM Sans, system-ui'; ctx.fillText(`✦  ${t('scratchHere')}  ✦`, rect.width / 2, rect.height / 2 - 7)
+    ctx.fillStyle = '#62697d'; ctx.font = '500 12px DM Sans, system-ui'; ctx.fillText(t('swipeFinger'), rect.width / 2, rect.height / 2 + 18)
     revealed.current = false; setProgress(0)
-  }, [preview])
+  }, [preview, t])
   useEffect(() => { prepare(); if (preview) return; const observer = new ResizeObserver(prepare); observer.observe(cardRef.current); return () => observer.disconnect() }, [prepare, preview])
   const scratch = (event) => {
     if (!drawing.current || revealed.current || preview) return
@@ -179,23 +179,24 @@ function ScratchCard({ card, onReveal = () => {}, preview = false }) {
   }
   return <div className={`scratch-shell ${preview ? 'is-preview' : ''}`} style={{ '--accent': card.accentColor || DEFAULT_CARD.accentColor }}>
     <i className="ticket-edge left" /><i className="ticket-edge right" />
-    <div className="scratch-card" ref={cardRef}><div className="offer-content"><span>YOUR REWARD</span><strong>{card.offerTitle}</strong><p>{card.description}</p>{card.couponCode && <b>USE CODE · {card.couponCode}</b>}</div>
-      {!preview && <canvas ref={canvasRef} onPointerDown={(e) => { drawing.current = true; e.currentTarget.setPointerCapture(e.pointerId); scratch(e) }} onPointerMove={scratch} onPointerUp={() => drawing.current = false} onPointerCancel={() => drawing.current = false} aria-label="Scratch to reveal your offer" />}
+    <div className="scratch-card" ref={cardRef}><div className="offer-content"><span>{t('reward')}</span><strong>{card.offerTitle}</strong><p>{card.description}</p>{card.couponCode && <b>{t('useCode')} · {card.couponCode}</b>}</div>
+      {!preview && <canvas ref={canvasRef} onPointerDown={(e) => { drawing.current = true; e.currentTarget.setPointerCapture(e.pointerId); scratch(e) }} onPointerMove={scratch} onPointerUp={() => drawing.current = false} onPointerCancel={() => drawing.current = false} aria-label={t('scratchLabel')} />}
     </div>
-    {!preview && <><div className="progress"><span style={{ width: `${progress}%` }} /></div><small>{progress === 100 ? 'Offer unlocked!' : `${progress}% revealed`}</small></>}
+    {!preview && <><div className="progress"><span style={{ width: `${progress}%` }} /></div><small>{progress === 100 ? t('unlocked') : `${progress}% ${t('revealed')}`}</small></>}
   </div>
 }
 
-function Creator() {
+function Creator({ language, setLanguage, t }) {
   const [form, setForm] = useState(DEFAULT_CARD), [result, setResult] = useState(null), [status, setStatus] = useState('idle'), [message, setMessage] = useState('')
   const [usedOpen, setUsedOpen] = useState(false)
   const [coupons, setCoupons] = useState([])
   const [usedStatus, setUsedStatus] = useState('idle')
   const [usedSearch, setUsedSearch] = useState('')
   const [couponFilter, setCouponFilter] = useState('all')
+  const [exporting, setExporting] = useState(false)
   const update = (e) => setForm(v => ({ ...v, [e.target.name]: e.target.value })), shareUrl = result ? `${location.origin}/card/${result.slug}` : ''
   const createCard = async (e) => { e.preventDefault(); setStatus('saving'); setMessage(''); try { const data = await requestJson('/api/cards', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) }); setResult(data); setForm(current => ({ ...current, couponCode: generateDraftCoupon() })); setStatus('done') } catch (error) { setMessage(error.message || 'Could not create the card.'); setStatus('error') } }
-  const copy = async () => { await navigator.clipboard.writeText(shareUrl); setMessage('Link copied to your clipboard.') }
+  const copy = async () => { await navigator.clipboard.writeText(shareUrl); setMessage(t('linkCopied')) }
   const whatsapp = () => window.open(`https://wa.me/?text=${encodeURIComponent(`A surprise is waiting for you! Scratch your card here: ${shareUrl}`)}`, '_blank', 'noopener,noreferrer')
   const loadUsedCoupons = async () => {
     setUsedOpen(true)
@@ -209,31 +210,74 @@ function Creator() {
       setUsedStatus('error')
     }
   }
+  const exportCoupons = async () => {
+    if (!coupons.length) { setMessage(t('noCouponsExport')); return }
+    setExporting(true)
+    setMessage('')
+    try {
+      const { default: writeExcelFile } = await import('write-excel-file/universal')
+      const headerStyle = { fontWeight: 'bold', textColor: '#FFFFFF', backgroundColor: '#17142D', height: 26, alignVertical: 'center' }
+      const headers = t('excelHeaders').map(value => ({ value, ...headerStyle }))
+      const rows = coupons.map((item, index) => {
+        const cardLink = `${location.origin}/card/${item.slug}`
+        const rowStyle = { backgroundColor: index % 2 ? '#F7F6FA' : '#FFFFFF', height: 23, alignVertical: 'center' }
+        return [
+          { value: item.couponCode, format: '@', ...rowStyle },
+          { value: item.offerTitle, ...rowStyle },
+          { value: item.senderName, ...rowStyle },
+          { value: item.used ? t('used') : t('waiting'), fontWeight: 'bold', textColor: item.used ? '#167542' : '#8A5C00', ...rowStyle },
+          item.createdAt ? { value: new Date(item.createdAt), type: Date, format: 'dd-mm-yyyy hh:mm', ...rowStyle } : { value: '', ...rowStyle },
+          item.redeemedAt ? { value: new Date(item.redeemedAt), type: Date, format: 'dd-mm-yyyy hh:mm', ...rowStyle } : { value: '', ...rowStyle },
+          { value: cardLink, textColor: '#5E43DF', textDecoration: { underline: true }, ...rowStyle },
+        ]
+      })
+      const workbookBlob = await writeExcelFile([headers, ...rows], {
+        sheet: t('excelSheet'),
+        columns: [{ width: 24 }, { width: 24 }, { width: 22 }, { width: 14 }, { width: 22 }, { width: 22 }, { width: 52 }],
+        stickyRowsCount: 1,
+        showGridLines: false,
+      }, { fontFamily: 'Arial', fontSize: 10 }).toBlob()
+      const blobUrl = URL.createObjectURL(workbookBlob)
+      const download = document.createElement('a')
+      download.href = blobUrl
+      download.download = `lucky-drop-coupons-${language}-${new Date().toISOString().slice(0, 10)}.xlsx`
+      download.style.display = 'none'
+      document.body.appendChild(download)
+      download.click()
+      download.remove()
+      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1000)
+    } catch (error) {
+      console.error(error)
+      setMessage(t('exportError'))
+    } finally {
+      setExporting(false)
+    }
+  }
   const filteredCoupons = coupons.filter(item => {
     const matchesStatus = couponFilter === 'all' || (couponFilter === 'used' ? item.used : !item.used)
     return matchesStatus && `${item.couponCode} ${item.offerTitle} ${item.senderName}`.toLowerCase().includes(usedSearch.toLowerCase())
   })
   const usedCount = coupons.filter(item => item.used).length
-  return <main className="creator-page"><header><a className="logo" href="/"><span>✦</span> Lucky Drop</a><small>Scratch-card link creator</small></header>
-    <div className="creator-layout"><section className="builder"><div className="kicker">CREATE A CARD</div><h1>Turn any offer into a little moment of delight.</h1><p className="lead">Choose what appears under the scratch layer. We’ll create one link you can send anywhere.</p>
+  return <main className="creator-page"><header><a className="logo" href="/"><span>✦</span> Lucky Drop</a><div className="header-tools"><small>{t('creatorTagline')}</small><LanguageSelect language={language} setLanguage={setLanguage} /></div></header>
+    <div className="creator-layout"><section className="builder"><div className="kicker">{t('createKicker')}</div><h1>{t('heroTitle')}</h1><p className="lead">{t('heroLead')}</p>
       <form onSubmit={createCard}><div className="fields">
-        <label><span>From</span><input name="senderName" value={form.senderName} onChange={update} maxLength="50" required /></label>
-        <label><span>Message above card</span><input name="headline" value={form.headline} onChange={update} maxLength="80" required /></label>
-        <label><span>Main offer</span><input name="offerTitle" value={form.offerTitle} onChange={update} maxLength="30" required /></label>
-        <label><span>Offer details</span><input name="description" value={form.description} onChange={update} maxLength="80" required /></label>
-        <label><span>Coupon code <em>unique code generated automatically</em></span><div className="coupon-input"><input name="couponCode" value={form.couponCode} onChange={update} maxLength="24" /><button type="button" onClick={() => setForm(current => ({ ...current, couponCode: generateDraftCoupon() }))}>New</button></div></label>
-        <label><span>Claim link <em>optional</em></span><input name="claimUrl" value={form.claimUrl} onChange={update} type="url" placeholder="https://yourwebsite.com" /></label>
-      </div><fieldset className="theme-panel"><legend>Card theme</legend><div className="theme-controls"><label><span>Page background</span><div><input name="pageColor" value={form.pageColor} onChange={update} type="color" /><b>{form.pageColor}</b></div></label><label><span>Message text</span><div><input name="textColor" value={form.textColor} onChange={update} type="color" /><b>{form.textColor}</b></div></label><label><span>Scratch card</span><div><input name="accentColor" value={form.accentColor} onChange={update} type="color" /><b>{form.accentColor}</b></div></label></div></fieldset>
-      <button className="primary" disabled={status === 'saving'}>{status === 'saving' ? 'Creating your link…' : 'Create scratch-card link'}</button>{status === 'error' && <p className="error">{message}</p>}</form>
-      <section className="used-coupons-panel"><div className="used-coupons-heading"><div><span>COUPON ACTIVITY</span><h2>All coupon codes</h2></div><button type="button" onClick={loadUsedCoupons}>{usedOpen ? 'Refresh list' : 'View coupons'}</button></div>
-        {usedOpen && <div className="used-coupons-content">{usedStatus === 'loading' && <p className="used-empty">Loading coupons…</p>}{usedStatus === 'error' && <p className="used-empty">Could not load the coupon history.</p>}{usedStatus === 'ready' && <><div className="coupon-stats"><div><strong>{coupons.length}</strong><span>Created</span></div><div><strong>{usedCount}</strong><span>Used</span></div><div><strong>{coupons.length - usedCount}</strong><span>Waiting</span></div></div><div className="coupon-filters"><button className={couponFilter === 'all' ? 'active' : ''} onClick={() => setCouponFilter('all')}>All</button><button className={couponFilter === 'used' ? 'active' : ''} onClick={() => setCouponFilter('used')}>Used</button><button className={couponFilter === 'waiting' ? 'active' : ''} onClick={() => setCouponFilter('waiting')}>Waiting</button></div>{coupons.length > 0 && <input className="coupon-search" value={usedSearch} onChange={event => setUsedSearch(event.target.value)} placeholder="Search coupon, offer or sender" aria-label="Search coupon activity" />}{filteredCoupons.length === 0 ? <p className="used-empty">No matching coupons found.</p> : <div className="coupon-list">{filteredCoupons.map(item => <article className="coupon-row" key={item.slug}><div><strong>{item.couponCode}</strong><span>{item.offerTitle} · {item.senderName}</span></div><div className="coupon-row-status"><span className={`status-pill ${item.used ? 'is-used' : 'is-waiting'}`}>{item.used ? 'Used' : 'Waiting'}</span>{!item.used && <a className="use-coupon-link" href={`/card/${item.slug}`} target="_blank" rel="noreferrer">Use this coupon</a>}<time dateTime={item.redeemedAt || item.createdAt}>{new Date(item.redeemedAt || item.createdAt).toLocaleString()}</time></div></article>)}</div>}</>}</div>}
+        <label><span>{t('from')}</span><input name="senderName" value={form.senderName} onChange={update} maxLength="50" required /></label>
+        <label><span>{t('messageAbove')}</span><input name="headline" value={form.headline} onChange={update} maxLength="80" required /></label>
+        <label><span>{t('mainOffer')}</span><input name="offerTitle" value={form.offerTitle} onChange={update} maxLength="30" required /></label>
+        <label><span>{t('offerDetails')}</span><input name="description" value={form.description} onChange={update} maxLength="80" required /></label>
+        <label><span>{t('couponCode')} <em>{t('uniqueAuto')}</em></span><div className="coupon-input"><input name="couponCode" value={form.couponCode} onChange={update} maxLength="24" /><button type="button" onClick={() => setForm(current => ({ ...current, couponCode: generateDraftCoupon() }))}>{t('newCode')}</button></div></label>
+        <label><span>{t('claimLink')} <em>{t('optional')}</em></span><input name="claimUrl" value={form.claimUrl} onChange={update} type="url" placeholder="https://yourwebsite.com" /></label>
+      </div><fieldset className="theme-panel"><legend>{t('cardTheme')}</legend><div className="theme-controls"><label><span>{t('pageBackground')}</span><div><input name="pageColor" value={form.pageColor} onChange={update} type="color" /><b>{form.pageColor}</b></div></label><label><span>{t('messageText')}</span><div><input name="textColor" value={form.textColor} onChange={update} type="color" /><b>{form.textColor}</b></div></label><label><span>{t('scratchCard')}</span><div><input name="accentColor" value={form.accentColor} onChange={update} type="color" /><b>{form.accentColor}</b></div></label></div></fieldset>
+      <button className="primary" disabled={status === 'saving'}>{status === 'saving' ? t('creating') : t('createLink')}</button>{status === 'error' && <p className="error">{message}</p>}</form>
+      <section className="used-coupons-panel"><div className="used-coupons-heading"><div><span>{t('couponActivity')}</span><h2>{t('allCouponCodes')}</h2></div><div className="coupon-heading-actions">{usedStatus === 'ready' && coupons.length > 0 && <button className="export-coupons" type="button" onClick={exportCoupons} disabled={exporting}>{exporting ? t('exporting') : t('exportExcel')}</button>}<button type="button" onClick={loadUsedCoupons}>{usedOpen ? t('refresh') : t('viewCoupons')}</button></div></div>
+        {usedOpen && <div className="used-coupons-content">{usedStatus === 'loading' && <p className="used-empty">{t('loadingCoupons')}</p>}{usedStatus === 'error' && <p className="used-empty">{t('couponLoadError')}</p>}{usedStatus === 'ready' && <><div className="coupon-stats"><div><strong>{coupons.length}</strong><span>{t('created')}</span></div><div><strong>{usedCount}</strong><span>{t('used')}</span></div><div><strong>{coupons.length - usedCount}</strong><span>{t('waiting')}</span></div></div><div className="coupon-filters"><button className={couponFilter === 'all' ? 'active' : ''} onClick={() => setCouponFilter('all')}>{t('all')}</button><button className={couponFilter === 'used' ? 'active' : ''} onClick={() => setCouponFilter('used')}>{t('used')}</button><button className={couponFilter === 'waiting' ? 'active' : ''} onClick={() => setCouponFilter('waiting')}>{t('waiting')}</button></div>{coupons.length > 0 && <input className="coupon-search" value={usedSearch} onChange={event => setUsedSearch(event.target.value)} placeholder={t('searchCoupons')} aria-label={t('searchCoupons')} />}{filteredCoupons.length === 0 ? <p className="used-empty">{t('noMatches')}</p> : <div className="coupon-list">{filteredCoupons.map(item => <article className="coupon-row" key={item.slug}><div><strong>{item.couponCode}</strong><span>{item.offerTitle} · {item.senderName}</span></div><div className="coupon-row-status"><span className={`status-pill ${item.used ? 'is-used' : 'is-waiting'}`}>{item.used ? t('used') : t('waiting')}</span>{!item.used && <a className="use-coupon-link" href={`/card/${item.slug}`} target="_blank" rel="noreferrer">{t('useCoupon')}</a>}<time dateTime={item.redeemedAt || item.createdAt}>{new Date(item.redeemedAt || item.createdAt).toLocaleString(language === 'hi' ? 'hi-IN' : language === 'te' ? 'te-IN' : undefined)}</time></div></article>)}</div>}</>}</div>}
       </section>
-    </section><aside className="preview"><div className="preview-title"><span>LIVE PREVIEW</span><span>Recipient view</span></div><div className="phone" style={{ '--page-color': form.pageColor, '--text-color': form.textColor, '--accent': form.accentColor }}><div className="phone-brand">✦ {form.senderName || 'Your brand'}</div><div className="mini"><GiftIcon /> SURPRISE</div><h2>{form.headline || 'A little surprise for you'}</h2><ScratchCard card={form} preview /><small>Silver scratch layer appears on the shared card</small></div></aside></div>
-    {result && <div className="backdrop" role="dialog" aria-modal="true"><div className="modal"><div className="success">✓</div><div className="kicker">READY TO SHARE</div><h2>Your scratch card is live.</h2><p>Anyone with this link can open and scratch the card.</p><div className="created-code"><span>Unique coupon</span><strong>{result.couponCode}</strong></div><div className="link-box"><span>{shareUrl}</span><button onClick={copy}>Copy</button></div>{message && <p className="copied">{message}</p>}<div className="modal-actions"><button className="wa" onClick={whatsapp}><WhatsAppIcon /> Share on WhatsApp</button><a href={`/card/${result.slug}`} target="_blank" rel="noreferrer">Open card</a></div><button className="again" onClick={() => { setResult(null); setMessage('') }}>Create another card</button></div></div>}
+    </section><aside className="preview"><div className="preview-title"><span>{t('livePreview')}</span><span>{t('recipientView')}</span></div><div className="phone" style={{ '--page-color': form.pageColor, '--text-color': form.textColor, '--accent': form.accentColor }}><div className="phone-brand">✦ {form.senderName || t('yourBrand')}</div><div className="mini"><GiftIcon /> {t('surprise')}</div><h2>{form.headline || t('previewHeadline')}</h2><ScratchCard card={form} preview t={t} /><small>{t('scratchLayer')}</small></div></aside></div>
+    {result && <div className="backdrop" role="dialog" aria-modal="true"><div className="modal"><div className="success">✓</div><div className="kicker">{t('readyShare')}</div><h2>{t('cardLive')}</h2><p>{t('anyoneCanOpen')}</p><div className="created-code"><span>{t('uniqueCoupon')}</span><strong>{result.couponCode}</strong></div><div className="link-box"><span>{shareUrl}</span><button onClick={copy}>{t('copy')}</button></div>{message && <p className="copied">{message}</p>}<div className="modal-actions"><button className="wa" onClick={whatsapp}><WhatsAppIcon /> {t('shareWhatsApp')}</button><a href={`/card/${result.slug}`} target="_blank" rel="noreferrer">{t('openCard')}</a></div><button className="again" onClick={() => { setResult(null); setMessage('') }}>{t('createAnother')}</button></div></div>}
   </main>
 }
 
-function PublicCard({ slug }) {
+function PublicCard({ slug, language, setLanguage, t }) {
   const [card, setCard] = useState(null)
   const [state, setState] = useState('loading')
   const [revealed, setRevealed] = useState(false)
