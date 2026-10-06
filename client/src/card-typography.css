@@ -14,7 +14,7 @@
 }
 
 .offer-content .offer-branch {
-  font-size: 16px;
+  font-size: 14px;
   line-height: 1.5;
 }
 
@@ -27,13 +27,13 @@
 .scratch-card .offer-content strong,
 .p-builder .offer-content strong,
 .p-reward-preview .offer-content strong {
-  font-size: clamp(36px, 4vw, 48px);
+  font-size: clamp(32px, 3.5vw, 42px);
   line-height: 1.2;
   letter-spacing: -.03em;
 }
 
 .scratch-card .offer-content p {
-  font-size: 17px;
+  font-size: 15px;
   line-height: 1.5;
   max-width: 100%;
   overflow-wrap: anywhere;
@@ -41,7 +41,7 @@
 
 .scratch-card .offer-content b {
   max-width: 100%;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.6;
   letter-spacing: .03em;
   overflow-wrap: anywhere;
@@ -49,29 +49,29 @@
 
 .p-builder .phone-brand,
 .p-preview-brand {
-  font-size: 14px;
+  font-size: 12px;
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
 
 .p-builder .phone .mini,
 .p-reward-preview > span {
-  font-size: 14px;
+  font-size: 12px;
   line-height: 1.5;
 }
 
 .p-builder .phone h2,
 .p-card-preview .p-reward-preview > h2 {
-  font-size: clamp(28px, 3vw, 32px);
+  font-size: clamp(25px, 2.625vw, 28px);
   line-height: 1.3;
   overflow-wrap: anywhere;
 }
 
 .p-builder .phone > small {
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.6;
 }
 
 .recipient .offer-content strong {
-  font-size: clamp(40px, 9vw, 64px);
+  font-size: clamp(35px, 7.875vw, 56px);
 }
