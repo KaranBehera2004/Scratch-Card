@@ -6,6 +6,18 @@ import { summarizeCampaigns } from "./campaigns.js";
 import { scratchCardUrl } from "../../shared/urls.js";
 import { EMPTY_COUPON_FILTERS, couponBranchKey, couponCampaignKey, couponDateBounds, filterCouponCards } from "./coupon-filters.js";
 
+function JustConnectLogo({ theme = "light", className = "" }) {
+  return (
+    <img
+      className={`p-brand-logo ${className}`.trim()}
+      src={`/justconnect-logo-${theme === "dark" ? "dark" : "light"}.png`}
+      alt="JustConnect"
+      width={1323}
+      height={216}
+    />
+  );
+}
+
 export async function portalApi(url, token, method = "GET", body) {
   const response = await fetch(url, {
     method,
@@ -100,7 +112,6 @@ const businessLimitFields = [
 const businessPayload = (values) => ({
   name: values.name,
   website: values.website,
-  password: values.password,
   status: values.status,
   limits: {
     card: Number(values.cardLimit),
@@ -141,9 +152,8 @@ export function PortalLogin({ onLogin }) {
   return (
     <main className="p-login">
       <section className="p-login-story">
-        <a className="p-brand" href="/">
-          <span className="p-brand-mark">✦</span>
-          {platform.platformName}
+        <a className="p-brand" href="/" aria-label="JustConnect home">
+          <JustConnectLogo theme="dark" />
         </a>
         <div className="p-login-copy">
           <div className="p-eyebrow">YOUR REWARDS. ONE WORKSPACE.</div>
@@ -178,9 +188,7 @@ export function PortalLogin({ onLogin }) {
       </section>
       <section className="p-login-panel">
         <form className="p-login-form" onSubmit={submit}>
-          <span className="p-welcome">
-            <Icon name="security" size={24} />
-          </span>
+          <JustConnectLogo className="p-login-logo" />
           <h2>Welcome back</h2>
           <p>{platform.loginMessage || "Sign in to manage your scratch-card workspace."}</p>
           <label>
@@ -585,6 +593,7 @@ export default function Portal({
     [notice, setNotice] = useState(""),
     [search, setSearch] = useState(""),
     [status, setStatus] = useState("all"),
+    [businessFilter, setBusinessFilter] = useState(""),
     [couponFilters, setCouponFilters] = useState(() => ({ ...EMPTY_COUPON_FILTERS })),
     [editor, setEditor] = useState(null),
     [credentials, setCredentials] = useState(null),
@@ -635,6 +644,7 @@ export default function Portal({
   const business = businesses.find((item) => item.businessId === workspaceId);
   useEffect(() => {
     setCouponFilters({ ...EMPTY_COUPON_FILTERS });
+    setBusinessFilter("");
   }, [tab, workspaceId]);
   const admin = ["super-admin", "business", "admin"].includes(
     session.user.role,
@@ -710,6 +720,32 @@ export default function Portal({
     refresh();
   }, [refresh]);
   useEffect(() => {
+    if (!["Overview", "Coupons", "Scratch cards", "Campaigns", "Analytics"].includes(tab)) return;
+    let stopped = false, pending = false;
+    const updateActivity = async () => {
+      if (stopped || pending || document.visibilityState === "hidden") return;
+      pending = true;
+      try {
+        const result = await api(scoped("/api/portal/cards"));
+        if (!stopped) setCards(result.cards);
+      } catch (err) {
+        if (!stopped) setError(err.message);
+      } finally {
+        pending = false;
+      }
+    };
+    updateActivity();
+    const interval = window.setInterval(updateActivity, 10000);
+    window.addEventListener("focus", updateActivity);
+    document.addEventListener("visibilitychange", updateActivity);
+    return () => {
+      stopped = true;
+      window.clearInterval(interval);
+      window.removeEventListener("focus", updateActivity);
+      document.removeEventListener("visibilitychange", updateActivity);
+    };
+  }, [api, scoped, tab]);
+  useEffect(() => {
     const listener = () => {
       const params = new URLSearchParams(location.search);
       const id = params.get("business") || "";
@@ -734,14 +770,21 @@ export default function Portal({
     setError("");
     setNotice("");
   };
-  const openWorkspace = (id) => {
+  const openWorkspace = (id, destination = "Overview") => {
     const url = new URL(location.href);
     url.pathname = "/";
     url.search = "";
     if (id) url.searchParams.set("business", id);
+    if (destination !== "Overview") url.searchParams.set("tab", destination);
     history.pushState({}, "", url);
     setWorkspaceId(id);
-    navigate("Overview");
+    setTab(destination);
+    setSearch("");
+    setStatus("all");
+    setBusinessFilter("");
+    setMenu(false);
+    setError("");
+    setNotice("");
   };
   const mutate = async (action) => {
     setBusy(true);
@@ -769,7 +812,9 @@ export default function Portal({
     `${JSON.stringify(value)} ${ui(value.status || "")} ${value.defaultName || ("campaignName" in value && !value.campaignName) ? ui("General rewards") : ""}`
       .toLowerCase().includes(search.toLowerCase());
   const couponSection = ["Coupons", "Scratch cards"].includes(tab);
-  const visibleCards = filterCouponCards(cards.filter(
+  const inSelectedBusiness = (item) => !global || !businessFilter || item.businessId === businessFilter;
+  const managedCards = cards.filter(inSelectedBusiness);
+  const visibleCards = filterCouponCards(managedCards.filter(
     (item) => match(item) && (status === "all" || item.status === status),
   ), couponSection ? couponFilters : EMPTY_COUPON_FILTERS);
   const couponDateError = couponDateBounds(couponFilters).error;
@@ -792,20 +837,20 @@ export default function Portal({
     value: item.businessId,
     label: item.name,
   }));
-  const visibleBranches = branches.filter(match);
-  const couponBranchOptions = new Map(branches.map((branch) => [couponBranchKey(branch), {
+  const visibleBranches = branches.filter((branch) => inSelectedBusiness(branch) && match(branch));
+  const couponBranchOptions = new Map(branches.filter(inSelectedBusiness).map((branch) => [couponBranchKey(branch), {
     key: couponBranchKey(branch),
     name: global ? `${branch.businessName} · ${branch.name}` : branch.name,
   }]));
   // Retain options for older cards whose assigned branch no longer appears in management.
-  for (const card of cards) {
+  for (const card of managedCards) {
     if (!card.branchId || couponBranchOptions.has(couponBranchKey(card))) continue;
     const name = card.branchName || card.branchId;
     couponBranchOptions.set(couponBranchKey(card), {
       key: couponBranchKey(card), name: global ? `${card.senderName} · ${name}` : name,
     });
   }
-  const couponCampaignOptions = [...new Map(cards.map((card) => [couponCampaignKey(card.campaignName), {
+  const couponCampaignOptions = [...new Map(managedCards.map((card) => [couponCampaignKey(card.campaignName), {
     key: couponCampaignKey(card.campaignName), name: card.campaignName || ui("General rewards"),
   }])).values()].sort((a, b) => a.name.localeCompare(b.name));
   const businessSelect = {
@@ -861,16 +906,10 @@ export default function Portal({
             label: value,
           })),
         },
-        {
-          key: "password",
-          label: "Reset owner password (leave empty to keep)",
-          type: "password",
-        },
       ],
       values: {
         ...item,
         loginId: item.loginId || item.loginEmail,
-        password: "",
         cardLimit: item.limits.card,
         branchLimit: item.limits.branch,
         accountLimit: item.limits.account,
@@ -1033,21 +1072,29 @@ export default function Portal({
   };
   const used = cards.filter((item) => item.used).length,
     available = cards.filter((item) => item.status === "available").length;
-  const campaigns = summarizeCampaigns(cards, businesses);
+  const campaigns = summarizeCampaigns(managedCards, businesses);
   const campaignRows = campaigns.flatMap((campaign) => campaign.branches.map((branch) => ({
     ...campaign,
     ...branch,
     branches: undefined,
   }))).filter(match);
+  const branchActivity = (branch) => {
+    const branchCards = cards.filter((card) =>
+      card.businessId === branch.businessId && card.branchId === branch.branchId);
+    return {
+      total: branchCards.length,
+      redeemed: branchCards.filter((card) => card.used).length,
+    };
+  };
   const exportCampaigns = async () => {
     setBusy(true);
     setError("");
     try {
       const { default: write } = await import("write-excel-file/universal");
-      const labels = ["Campaign", "Business", "Branch", "Scratch cards", "Redeemed", "Conversion"].map((label) => ui(label));
+      const labels = ["Campaign", ...(global ? ["Business"] : []), "Branch", "Scratch cards", "Redeemed", "Conversion"].map((label) => ui(label));
       const rows = campaignRows.map((item) => [
         { value: item.defaultName ? ui("General rewards") : item.name },
-        { value: item.businessName || "—" },
+        ...(global ? [{ value: item.businessName || "—" }] : []),
         { value: item.branchId ? item.branchName : ui("All branches") },
         { value: item.total, type: Number },
         { value: item.used, type: Number },
@@ -1081,16 +1128,25 @@ export default function Portal({
     setError("");
     try {
       const { default: write } = await import("write-excel-file/universal");
-      const labels = ["Branch", "Business", "Address", "Access"].map((label) => ui(label));
-      const rows = visibleBranches.map((branch) => [
-        branch.name, branch.businessName, branch.address || "—", ui(branch.status || "active"),
-      ].map((value) => ({ value: String(value ?? "") })));
+      const labels = ["Branch", ...(global ? ["Business"] : []), "Scratch cards", "Redeemed", "Conversion", "Address", "Access"].map((label) => ui(label));
+      const rows = visibleBranches.map((branch) => {
+        const activity = branchActivity(branch);
+        return [
+          { value: branch.name },
+          ...(global ? [{ value: branch.businessName }] : []),
+          { value: activity.total, type: Number },
+          { value: activity.redeemed, type: Number },
+          { value: activity.total ? activity.redeemed / activity.total : 0, type: Number, format: "0%" },
+          { value: branch.address || "—" },
+          { value: ui(branch.status || "active") },
+        ];
+      });
       const blob = await write([
         labels.map((value) => ({ value, fontWeight: "bold", backgroundColor: "#17142D", textColor: "#FFFFFF" })),
         ...rows,
       ], {
         sheet: ui("Branches"),
-        columns: [{ width: 30 }, { width: 30 }, { width: 45 }, { width: 18 }],
+        columns: labels.map((_, index) => ({ width: index < (global ? 2 : 1) ? 30 : 20 })),
         stickyRowsCount: 1,
       }).toBlob();
       const url = URL.createObjectURL(blob);
@@ -1147,7 +1203,7 @@ export default function Portal({
       columns={[
         "Reward & coupon",
         ...(showPhone ? ["WhatsApp number"] : []),
-        ...(global ? ["Business"] : ["Branch"]),
+        ...(global ? ["Business", "Branch"] : ["Branch"]),
         "Campaign",
         "Status",
         "Created",
@@ -1170,6 +1226,9 @@ export default function Portal({
               : branches.find((value) => value.branchId === item.branchId)
                   ?.name || ui("All branches")}
           </td>
+          {global && <td>{branches.find((value) =>
+            value.businessId === item.businessId && value.branchId === item.branchId)
+              ?.name || item.branchName || ui("All branches")}</td>}
           <td>{item.campaignName || ui("General rewards")}</td>
           <td>
             <Badge status={item.status} />
@@ -1208,18 +1267,10 @@ export default function Portal({
                   {ui(item.disabled ? "Enable" : "Disable")}
                 </button>
               )}
-              {canCreate && item.status === "scratched" && (
-                <button disabled={busy} onClick={() => {
-                  const businessBranches = businesses.find((value) => value.businessId === item.businessId)?.branches || branches.filter((value) => value.businessId === item.businessId);
-                  const choices = businessBranches.filter((value) => value.status === "active" && (!item.branchId || value.branchId === item.branchId));
-                  if (!choices.length) { setError("No active redemption branch is available."); return; }
-                  setEditor({ title: "Redeem coupon", description: `Confirm redemption of ${item.couponCode} at its assigned branch.`,
-                    fields: [{ key: "branchId", label: "Redemption branch", type: "select", required: true,
-                      options: choices.map((branch) => ({ value: branch.branchId, label: branch.name })) }],
-                    values: { branchId: choices[0].branchId },
-                    save: (values) => api(scoped(`/api/portal/cards/${item.slug}/redeem`), "POST", { ...values, businessId: item.businessId }),
-                  });
-                }}>{ui("Redeem")}</button>
+              {global && (
+                <button onClick={() => openWorkspace(item.businessId, "Coupons")}>
+                  Manage business
+                </button>
               )}
             </div>
           </td>
@@ -1373,6 +1424,9 @@ export default function Portal({
       const rows = businesses.filter(match);
       return (
         <article className="p-card">
+          <div className="p-info">
+            Every owner login ID is listed below. Passwords are protected with one-way hashing and cannot be viewed by anyone, including super admins. Use Reset password to assign a new password and revoke the owner's existing sessions.
+          </div>
           <Table
             columns={[
               "Business",
@@ -1410,6 +1464,28 @@ export default function Portal({
                 <td>
                   <div className="p-row-actions">
                     <button onClick={() => editBusiness(item)}>Manage</button>
+                    <button disabled={busy} onClick={() => navigator.clipboard
+                      .writeText(item.loginId || item.loginEmail)
+                      .then(() => setNotice("Owner login ID copied."))
+                      .catch(() => setError("Unable to copy the owner login ID."))}>
+                      Copy login ID
+                    </button>
+                    <button disabled={busy} onClick={() => setEditor({
+                      title: "Reset business password",
+                      submitLabel: "Reset password",
+                      description: `Set a new owner password for ${item.name}. The current password is not required. Existing owner sessions will be signed out. Share the new password securely with the business owner.`,
+                      successMessage: "Business password reset. The owner can sign in with the same login ID and the new password.",
+                      fields: [
+                        { key: "loginId", label: "Owner login ID", readOnly: true },
+                        { key: "password", label: "New password", type: "password", required: true },
+                        { key: "confirmPassword", label: "Confirm new password", type: "password", required: true },
+                      ],
+                      values: { loginId: item.loginId || item.loginEmail },
+                      save: (values) => {
+                        if (values.password !== values.confirmPassword) throw new Error("Passwords do not match.");
+                        return api(`/api/portal/businesses/${item.businessId}`, "PATCH", { password: values.password });
+                      },
+                    })}>Reset password</button>
                     <button onClick={() => openWorkspace(item.businessId)}>
                       Open workspace <Icon name="arrow" size={14} />
                     </button>
@@ -1456,16 +1532,30 @@ export default function Portal({
       const rows = visibleBranches;
       return (
         <article className="p-card">
+          {global && <div className="p-info">
+            Platform control shows branches across every business. Filter by business, review coupon performance, change access, or open the business workspace directly.
+          </div>}
           <Table
-            columns={["Branch", "Business", "Address", "Access", "Actions"]}
+            columns={[
+              "Branch",
+              ...(global ? ["Business"] : []),
+              "Scratch cards",
+              "Redeemed",
+              "Address",
+              "Access",
+              "Actions",
+            ]}
             empty={!rows.length}
           >
-            {rows.map((item) => (
-              <tr key={item.branchId}>
+            {rows.map((item) => {
+              const activity = branchActivity(item);
+              return <tr key={`${item.businessId}:${item.branchId}`}>
                 <td>
                   <b>{item.name}</b>
                 </td>
-                <td>{item.businessName}</td>
+                {global && <td>{item.businessName}</td>}
+                <td>{activity.total}</td>
+                <td>{activity.redeemed}</td>
                 <td>{item.address || "—"}</td>
                 <td>
                   <Badge status={item.status} />
@@ -1509,11 +1599,14 @@ export default function Portal({
                       >
                         {ui(item.status === "active" ? "Pause" : "Activate")}
                       </button>
+                      {global && <button onClick={() => openWorkspace(item.businessId, "Branches")}>
+                        Manage business
+                      </button>}
                     </div>
                   )}
                 </td>
-              </tr>
-            ))}
+              </tr>;
+            })}
           </Table>
         </article>
       );
@@ -1586,22 +1679,25 @@ export default function Portal({
         <div className="p-metrics">
           <article>
             <span>{ui("Total scratch cards")}</span>
-            <strong>{cards.length}</strong>
+            <strong>{managedCards.length}</strong>
             <small>{ui("Across all campaigns and branches")}</small>
           </article>
         </div>
         <article className="p-card">
           <div className="p-info">
-            {ui("Campaign results are grouped by business and branch. All branches counts cards without a specific branch.")}
+            {global
+              ? "Platform control compares campaign performance across businesses and branches. Filter by business or open its workspace for card creation and detailed management."
+              : ui("Campaign results are grouped by business and branch. All branches counts cards without a specific branch.")}
           </div>
           <Table
             columns={[
               "Campaign",
-              "Business",
+              ...(global ? ["Business"] : []),
               "Branch",
               "Scratch cards",
               "Redeemed",
               "Conversion",
+              ...(global ? ["Actions"] : []),
             ]}
             empty={!rows.length}
           >
@@ -1610,11 +1706,15 @@ export default function Portal({
                 <td>
                   <b>{item.defaultName ? ui("General rewards") : item.name}</b>
                 </td>
-                <td>{item.businessName}</td>
+                {global && <td>{item.businessName}</td>}
                 <td>{item.branchId ? item.branchName : ui("All branches")}</td>
                 <td>{item.total}</td>
                 <td>{item.used}</td>
                 <td>{Math.round((item.used / item.total) * 100)}%</td>
+                {global && <td><button className="p-button small"
+                  onClick={() => openWorkspace(item.businessId, "Campaigns")}>
+                  Manage business
+                </button></td>}
               </tr>
             ))}
           </Table>
@@ -1958,13 +2058,10 @@ export default function Portal({
             navigate("Overview");
           }}
         >
-          <span className="p-brand-mark">✦</span>
-          <span>
-            {config?.platformName || "Lucky Drop"}
-            <small>
-              {ui(global ? "Super administrator" : "Business workspace")}
-            </small>
-          </span>
+          <JustConnectLogo theme={theme} />
+          <small>
+            {ui(global ? "Super administrator" : "Business workspace")}
+          </small>
         </a>
         <div className="p-workspace-chip">
           <Icon name={global ? "security" : "business"} />
@@ -2128,6 +2225,18 @@ export default function Portal({
                 />
               </div>
               <div>
+                {global && ["Campaigns", "Scratch cards", "Branches"].includes(tab) && (
+                  <select aria-label="Filter by business" value={businessFilter}
+                    onChange={(event) => {
+                      setBusinessFilter(event.target.value);
+                      setCouponFilters((current) => ({ ...current, branch: "", campaign: "" }));
+                    }}>
+                    <option value="">All businesses</option>
+                    {businesses.map((item) => (
+                      <option key={item.businessId} value={item.businessId}>{item.name}</option>
+                    ))}
+                  </select>
+                )}
                 {tab === "Campaigns" && (
                   <button className="p-button" disabled={busy || loading || !campaignRows.length} onClick={exportCampaigns}>
                     <Icon name="download" />{busy ? ui("Working…") : ui("Export campaigns")}
@@ -2148,7 +2257,6 @@ export default function Portal({
                       {[
                         "all",
                         "available",
-                        "scratched",
                         "redeemed",
                         "disabled",
                         "expired",
@@ -2241,7 +2349,7 @@ export default function Portal({
               {couponDateError && <p className="error" role="alert">{ui(couponDateError)}</p>}
               <div className="p-coupon-filter-summary">
                 <span>{ui("Date filters use the card creation date.")}</span>
-                <span aria-live="polite">{ui("Showing {count} of {total} coupons", { count: visibleCards.length, total: cards.length })}</span>
+                <span aria-live="polite">{ui("Showing {count} of {total} coupons", { count: visibleCards.length, total: managedCards.length })}</span>
               </div>
             </section>
           )}

@@ -6,6 +6,7 @@ import React, {
   useState,
 } from "react";
 import { createRoot } from "react-dom/client";
+import "./favicon.js";
 import Portal, { PortalLogin, portalApi } from "./Portal.jsx";
 import { workspaceTranslator } from "./workspace-i18n.js";
 import { normalizeWhatsAppNumber, whatsAppCardUrl } from "../../shared/whatsapp.js";
@@ -1077,7 +1078,8 @@ function PublicCard({ slug, language: dashboardLanguage }) {
         `/api/cards/${encodeURIComponent(slug)}/claim`,
         { method: "POST" },
       );
-      setCard((current) => ({ ...current, couponCode: result.couponCode, scratchedAt: result.scratchedAt }));
+      setCard((current) => ({ ...current, couponCode: result.couponCode,
+        scratchedAt: result.scratchedAt, redeemedAt: result.redeemedAt }));
       setRevealed(true);
       setState("ready");
       return true;

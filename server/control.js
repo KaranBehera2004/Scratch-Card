@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import mongoose from "mongoose";
+import { couponStatus } from "./bulk.js";
 
 const text = (value, max = 120) =>
   String(value ?? "")
@@ -10,7 +11,7 @@ const text = (value, max = 120) =>
 const fail = (message, status = 400) =>
   Object.assign(new Error(message), { status });
 const safe = (value) => {
-  const { passwordHash, ...result } = value;
+  const { passwordHash, passwordVersion, ...result } = value;
   return result;
 };
 const equal = (a, b) => {
@@ -310,6 +311,8 @@ export function installControls(app, context) {
     } else if (user.role !== "super-admin") {
       const business = (await listBusinesses()).find((item) => item.businessId === user.businessId);
       if (!business) throw fail("This business is no longer available. Please sign in again.", 401);
+      if (user.role === "business" && (user.passwordVersion || "") !== (business.passwordVersion || ""))
+        throw fail("Your password changed. Please sign in again.", 401);
       if (business.status !== "active" || !(await settings()).memberAccess)
         throw fail("Business access is paused.", 403);
       if (user.role !== "business") {
@@ -346,14 +349,8 @@ export function installControls(app, context) {
       .map((item) => ({
         ...item,
         businessId: item.businessId || "impact-vibes",
-        used: Boolean(item.redeemedAt),
-        status: item.redeemedAt
-          ? "redeemed"
-          : item.disabled
-            ? "disabled"
-            : item.expiresAt && new Date(item.expiresAt) < new Date()
-              ? "expired"
-              : item.scratchedAt ? "scratched" : "available",
+        used: Boolean(item.redeemedAt || item.scratchedAt),
+        status: couponStatus(item),
       }))
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   }
@@ -445,6 +442,7 @@ export function installControls(app, context) {
             businessId: business.businessId,
             name: business.name,
             email,
+            passwordVersion: business.passwordVersion || "",
             ...(business.loginId ? { loginId: business.loginId } : {}),
           };
         else {
@@ -620,6 +618,8 @@ export function installControls(app, context) {
       owner(req);
       const business = await getBusiness(id),
         patch = {};
+      if (req.body.password !== undefined && req.user.role !== "super-admin")
+        throw fail("Only the super administrator can reset a business password.", 403);
       if (req.body.limits !== undefined && req.user.role !== "super-admin")
         throw fail(
           "Only the super administrator can change business limits.",
@@ -662,10 +662,13 @@ export function installControls(app, context) {
         }
         if (req.body.limits !== undefined)
           patch.limits = validateLimits(req.body.limits);
-        if (req.body.password) {
-          if (req.body.password.length < 10 || req.body.password.length > 200)
+        if (req.body.password !== undefined) {
+          if (typeof req.body.password !== "string" || req.body.password.length < 10 || req.body.password.length > 200)
             throw fail("Use a password of 10–200 characters.");
           patch.passwordHash = hashPassword(req.body.password);
+          // Save the credential version with the hash so even an in-flight login
+          // verified against the old password cannot create a usable session.
+          patch.passwordVersion = crypto.randomUUID();
           await changeMeta("versions", (values) => ({
             ...values,
             [id]: (values?.[id] || 0) + 1,
@@ -683,10 +686,10 @@ export function installControls(app, context) {
       await updateBusiness(business.businessId, patch);
       await audit(
         req,
-        "Business settings updated",
+        patch.passwordHash ? "Business password reset" : "Business settings updated",
         id,
         Object.keys(patch)
-          .filter((key) => key !== "passwordHash")
+          .filter((key) => !["passwordHash", "passwordVersion"].includes(key))
           .join(", "),
       );
       res.json({ ok: true });
@@ -1016,6 +1019,7 @@ export function installControls(app, context) {
           throw fail("Current password is incorrect.");
         await updateBusiness(business.businessId, {
           passwordHash: hashPassword(password),
+          passwordVersion: crypto.randomUUID(),
         });
       } else {
         const account = (await users()).find((item) => item.id === req.user.id);

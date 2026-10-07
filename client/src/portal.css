@@ -153,15 +153,11 @@
   font-weight: 800;
   letter-spacing: -0.5px;
 }
-.p-brand-mark {
-  display: grid;
-  place-items: center;
-  width: 36px;
-  height: 36px;
-  background: #6654d9;
-  color: #fff;
-  border-radius: 11px;
-  font-size: 22px;
+.p-brand-logo {
+  display: block;
+  width: 210px;
+  max-width: 100%;
+  height: auto;
 }
 .p-brand small {
   display: block;
@@ -190,6 +186,9 @@
 }
 .p-sidebar > .p-brand {
   padding: 0 10px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
 }
 .p-workspace-chip {
   display: flex;
@@ -1049,9 +1048,8 @@
   color: #fff;
   font-size: 22px;
 }
-.p-login-story .p-brand-mark {
-  background: #ffffff13;
-  color: #cbb8ff;
+.p-login-story .p-brand-logo {
+  width: 240px;
 }
 .p-login-copy {
   margin: auto 0;
@@ -1135,6 +1133,10 @@
 .p-login-form {
   width: 100%;
   max-width: 350px;
+}
+.p-login-logo {
+  width: 220px;
+  margin-bottom: 26px;
 }
 .p-login-form h2 {
   font-size: 31px;
