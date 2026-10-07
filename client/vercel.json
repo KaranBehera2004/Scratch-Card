@@ -1,0 +1,23 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://scratch-card-hbnz.onrender.com/api/:path*"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/api/:path*",
+      "headers": [
+        { "key": "Cache-Control", "value": "private, no-store" },
+        { "key": "x-vercel-enable-rewrite-caching", "value": "0" }
+      ]
+    }
+  ]
+}
