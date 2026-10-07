@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { appOrigin, scratchCardUrl } from "./urls.js";
+import { appOrigin, scratchCardUrl, scratchShareUrl } from "./urls.js";
 import { bulkExcelRows, shareExcelRows } from "../client/src/bulk-coupons.js";
 
 test("production shares use the app domain from custom, preview and legacy Vercel URLs", () => {
@@ -12,6 +12,7 @@ test("production shares use the app domain from custom, preview and legacy Verce
     "https://scratch-card-preview-123.vercel.app",
   ]) {
     assert.equal(scratchCardUrl("Abc123_-", origin), "https://scratch.justconnect.biz/card/Abc123_-");
+    assert.equal(scratchShareUrl("Abc123_-", origin), "https://scratch.justconnect.biz/share/Abc123_-");
   }
 });
 
@@ -19,6 +20,7 @@ test("local, LAN and separately hosted card links keep their own origin and port
   for (const origin of ["http://localhost:5174", "http://localhost:5175", "http://127.0.0.1:5099", "http://192.168.1.10:5174", "http://[::1]:5174", "https://example.test"]) {
     assert.equal(appOrigin(`${origin}/`), origin);
     assert.equal(scratchCardUrl("Abc123_-", origin), `${origin}/card/Abc123_-`);
+    assert.equal(scratchShareUrl("Abc123_-", origin), `${origin}/card/Abc123_-`);
   }
   assert.equal(scratchCardUrl("a/b?c", "http://localhost:5174"), "http://localhost:5174/card/a%2Fb%3Fc");
 });

@@ -17,3 +17,12 @@ export function appOrigin(currentOrigin = globalThis.location?.origin) {
 export function scratchCardUrl(slug, currentOrigin) {
   return `${appOrigin(currentOrigin)}/card/${encodeURIComponent(slug)}`;
 }
+
+export function scratchShareUrl(slug, currentOrigin = globalThis.location?.origin) {
+  const origin = appOrigin(currentOrigin);
+  // Production shares pass through a server-rendered Open Graph page so
+  // WhatsApp can fetch the coupon's uploaded preview image. Local and custom
+  // self-hosted development origins keep the directly usable card route.
+  const route = origin === PRODUCTION_APP_URL ? "share" : "card";
+  return `${origin}/${route}/${encodeURIComponent(slug)}`;
+}

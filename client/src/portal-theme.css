@@ -63,4 +63,8 @@
 .p-shell[data-theme="dark"] .modal .created-code strong { color: #edf0f7; }
 .p-shell[data-theme="dark"] .modal .link-box button { background: #7661e8; color: #fff; }
 .p-shell[data-theme="dark"] .modal .modal-actions a { background: #332e50; color: #e0d8ff; }
+.p-shell[data-theme="dark"] .share-image-field { color: #e5e8f0; }
+.p-shell[data-theme="dark"] .share-image-field input[type="file"] { background: #151b28; color: #bac0d0; border-color: #3a465b; }
+.p-shell[data-theme="dark"] .share-image-field input[type="file"]::file-selector-button { background: #293349; color: #ded7ff; border-color: #46536a; }
+.p-shell[data-theme="dark"] .share-image-preview { background: #151b28; border-color: #3a465b; }
 .p-shell[data-theme="dark"] .modal .copied { color: #9be1be !important; }

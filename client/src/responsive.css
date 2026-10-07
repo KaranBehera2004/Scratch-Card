@@ -4,6 +4,19 @@
 .creator-actions .direct-send { display: flex; justify-content: center; align-items: center; gap: 8px; min-height: 48px; padding: 12px 20px; border: 0; border-radius: 9px; font-weight: 700; cursor: pointer; }
 .creator-actions .direct-send:disabled { opacity: .65; cursor: wait; }
 .creator-actions + .p-builder-note { margin-top: 12px; line-height: 1.6; }
+.share-image-field { grid-column: 1 / -1; display: flex; min-width: 0; flex-direction: column; gap: 8px; color: #454252; font-size: 12px; font-weight: 700; }
+.share-image-field > label { flex-direction: row; align-items: baseline; }
+.share-image-field > label em { color: #9996a6; font-style: normal; font-weight: 500; }
+.share-image-field input[type="file"] { height: auto; min-height: 48px; padding: 7px; color: #625e70; }
+.share-image-field input[type="file"]::file-selector-button { min-height: 32px; margin-right: 10px; padding: 6px 12px; border: 1px solid #d8d2e7; border-radius: 8px; background: #f4f1fb; color: #5542a4; font-weight: 700; cursor: pointer; }
+.share-image-field > small { color: #8b849d; font-weight: 500; line-height: 1.55; }
+.share-image-preview { display: flex; min-width: 0; align-items: center; gap: 12px; padding: 10px; border: 1px solid #ded9e9; border-radius: 12px; background: #faf9fc; }
+.share-image-preview img { width: 92px; height: 68px; flex: 0 0 auto; border-radius: 8px; object-fit: cover; }
+.share-image-preview > div { display: flex; min-width: 0; flex: 1; flex-direction: column; align-items: flex-start; gap: 4px; }
+.share-image-preview b { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.share-image-preview small { color: #8b849d; font-weight: 500; }
+.share-image-preview .p-button { margin-top: 4px; }
+.modal-actions { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
 .p-coupon-filters .p-card-title { margin-bottom: 18px; }
 .p-coupon-filter-fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
 .p-coupon-custom-dates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; max-width: 660px; }

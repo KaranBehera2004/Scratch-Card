@@ -10,7 +10,7 @@ import "./favicon.js";
 import Portal, { PortalLogin, portalApi } from "./Portal.jsx";
 import { workspaceTranslator } from "./workspace-i18n.js";
 import { normalizeWhatsAppNumber, whatsAppCardUrl } from "../../shared/whatsapp.js";
-import { scratchCardUrl } from "../../shared/urls.js";
+import { scratchCardUrl, scratchShareUrl } from "../../shared/urls.js";
 import { pendingBulk, completedBulk, savedBulkDraft, useBulkGeneration, BranchQuantities, BulkResults } from "./BulkGenerate.jsx";
 import "./bulk.css";
 import "./styles.css";
@@ -70,7 +70,7 @@ const TRANSLATIONS = {
     uniqueCoupon: "Unique coupon",
     copy: "Copy",
     linkCopied: "Link copied to your clipboard.",
-    shareWhatsApp: "Share on WhatsApp",
+    shareWhatsApp: "Open WhatsApp Web",
     openCard: "Open card",
     createAnother: "Create another card",
     reward: "YOUR REWARD",
@@ -162,7 +162,7 @@ const TRANSLATIONS = {
     uniqueCoupon: "विशिष्ट कूपन",
     copy: "कॉपी करें",
     linkCopied: "लिंक क्लिपबोर्ड पर कॉपी हो गया।",
-    shareWhatsApp: "WhatsApp पर साझा करें",
+    shareWhatsApp: "WhatsApp Web खोलें",
     openCard: "कार्ड खोलें",
     createAnother: "दूसरा कार्ड बनाएँ",
     reward: "आपका इनाम",
@@ -253,7 +253,7 @@ const TRANSLATIONS = {
     uniqueCoupon: "ప్రత్యేక కూపన్",
     copy: "కాపీ",
     linkCopied: "లింక్ క్లిప్‌బోర్డ్‌కు కాపీ అయింది.",
-    shareWhatsApp: "WhatsAppలో షేర్ చేయండి",
+    shareWhatsApp: "WhatsApp Web తెరవండి",
     openCard: "కార్డ్ తెరవండి",
     createAnother: "మరొక కార్డ్ సృష్టించండి",
     reward: "మీ బహుమతి",
@@ -408,6 +408,18 @@ const DEFAULT_CARD = {
   pageColor: "#0b0c1c",
   textColor: "#ffffff",
 };
+
+const SHARE_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const MAX_SHARE_IMAGE_BYTES = 5 * 1024 * 1024;
+
+function imageDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("The selected image could not be read. Choose it again."));
+    reader.readAsDataURL(file);
+  });
+}
 
 async function requestJson(url, options) {
   let response;
@@ -656,7 +668,13 @@ function Creator({
   const cardT = useMemo(() => cardTranslator(form.language), [form.language]);
   const [result, setResult] = useState(null),
     [status, setStatus] = useState("idle"),
-    [message, setMessage] = useState("");
+    [message, setMessage] = useState(""),
+    [shareImage, setShareImage] = useState(null),
+    [shareImagePreview, setShareImagePreview] = useState("");
+  const shareImageInputRef = useRef(null);
+  useEffect(() => () => {
+    if (shareImagePreview) URL.revokeObjectURL(shareImagePreview);
+  }, [shareImagePreview]);
   const saving = isBulk ? bulk.status === "saving" : status === "saving";
   const branchName = (business?.branches || []).find(
     (branch) => branch.branchId === (isBulk ? bulk.previewId : form.branchId),
@@ -668,7 +686,40 @@ function Creator({
         [event.target.name]: event.target.value,
       }));
   };
-  const shareUrl = result ? scratchCardUrl(result.slug) : "";
+  const chooseShareImage = (event) => {
+    const file = event.target.files?.[0];
+    setMessage("");
+    if (!file) {
+      setShareImage(null);
+      setShareImagePreview("");
+      return;
+    }
+    if (!SHARE_IMAGE_TYPES.has(file.type)) {
+      event.target.value = "";
+      setShareImage(null);
+      setShareImagePreview("");
+      setStatus("error");
+      setMessage("Choose a JPG, PNG or WebP image.");
+      return;
+    }
+    if (file.size > MAX_SHARE_IMAGE_BYTES) {
+      event.target.value = "";
+      setShareImage(null);
+      setShareImagePreview("");
+      setStatus("error");
+      setMessage("Choose an image smaller than 5 MB.");
+      return;
+    }
+    setShareImage(file);
+    setShareImagePreview(URL.createObjectURL(file));
+    setStatus("idle");
+  };
+  const clearShareImage = () => {
+    setShareImage(null);
+    setShareImagePreview("");
+    if (shareImageInputRef.current) shareImageInputRef.current.value = "";
+  };
+  const shareUrl = result ? result.shareUrl || scratchCardUrl(result.slug) : "";
   const creatingRef = useRef(false);
   const createCard = async (event) => {
     event.preventDefault();
@@ -693,28 +744,40 @@ function Creator({
     setStatus("saving");
     setMessage("");
     try {
+      const encodedShareImage = shareImage ? await imageDataUrl(shareImage) : "";
       const data = await portalApi("/api/cards", token, "POST", {
         ...form,
         customerPhone,
+        shareImage: encodedShareImage,
         expiresAt: form.expiresAt
           ? new Date(form.expiresAt).toISOString()
           : null,
         businessId: user.businessId,
       });
-      const whatsappUrl = whatsAppCardUrl(customerPhone, scratchCardUrl(data.slug));
-      setResult({ ...data, whatsappUrl });
+      const cardUrl = scratchShareUrl(data.slug);
+      const whatsappUrl = whatsAppCardUrl(customerPhone, cardUrl);
+      const hasShareImage = Boolean(shareImage);
+      setResult({ ...data, whatsappUrl, shareUrl: cardUrl, hasShareImage });
       if (directSend) {
         if (whatsappWindow && !whatsappWindow.closed) {
-          try { whatsappWindow.location.replace(whatsappUrl); }
+          try {
+            whatsappWindow.location.replace(whatsappUrl);
+            if (hasShareImage) setMessage("WhatsApp Web opened with the scratch-card message and preview-enabled link. Review the image preview, then click Send.");
+          }
           catch {
             whatsappWindow.close();
-            setMessage("WhatsApp could not open. Use Share on WhatsApp below to open the customer's chat.");
+            setMessage("WhatsApp Web could not open. Use Open WhatsApp Web below to retry.");
           }
         } else {
-          setMessage("WhatsApp could not open. Use Share on WhatsApp below to open the customer's chat.");
+          setMessage(hasShareImage
+            ? "WhatsApp Web could not open. Use Open WhatsApp Web below; the shared link contains the image preview."
+            : "WhatsApp Web could not open. Use Open WhatsApp Web below to retry.");
         }
       }
       setForm((current) => ({ ...current, couponCode: generateDraftCoupon(), customerPhone: "" }));
+      setShareImage(null);
+      setShareImagePreview("");
+      if (shareImageInputRef.current) shareImageInputRef.current.value = "";
       setStatus("done");
       onCreated?.();
     } catch (error) {
@@ -733,12 +796,11 @@ function Creator({
       setMessage("Select the share link and copy it manually.");
     }
   };
-  const whatsapp = () =>
-    window.open(
-      result.whatsappUrl,
-      "_blank",
-      "noopener,noreferrer",
-    );
+  const whatsapp = () => {
+    window.open(result.whatsappUrl, "_blank", "noopener,noreferrer");
+    if (result.hasShareImage)
+      setMessage("WhatsApp Web opened with the preview-enabled scratch-card link. Review the image preview, then click Send.");
+  };
   return (
     <main className="creator-page">
       <div className="bulk-mode-switch" role="group" aria-label="Card creation mode">
@@ -884,6 +946,21 @@ function Creator({
                 />
                 <small id="customer-phone-note">{ui("Enter a 10-digit Indian mobile number or include the country code (e.g. +91). Never shown on the shared card.")}</small>
               </label>
+              {!isBulk && <div className="share-image-field">
+                <label htmlFor="share-image">WhatsApp image <em>{t("optional")}</em></label>
+                <input ref={shareImageInputRef} id="share-image" name="shareImage" type="file"
+                  accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                  onChange={chooseShareImage} />
+                {shareImagePreview && <div className="share-image-preview">
+                  <img src={shareImagePreview} alt="WhatsApp share preview" />
+                  <div>
+                    <b>{shareImage.name}</b>
+                    <small>{(shareImage.size / 1024 / 1024).toFixed(2)} MB</small>
+                    <button type="button" className="p-button small" onClick={clearShareImage}>Remove image</button>
+                  </div>
+                </div>}
+                <small>JPG, PNG or WebP, up to 5 MB. The image is stored with this coupon and publicly available to anyone with its unguessable link so WhatsApp can show it as a preview. It is never shown on the scratch card itself.</small>
+              </div>}
               <span className="p-builder-note">
                 {ui("Each link can reveal its reward once. Campaigns and branches help you track your results.")}
               </span>
@@ -922,7 +999,9 @@ function Creator({
                 <WhatsAppIcon /> {ui("Direct send")}
               </button>}
             </div>
-            {!isBulk && <p className="p-builder-note">{ui("Direct send creates the card and opens the customer's WhatsApp chat. Review the message and tap Send in WhatsApp.")}</p>}
+            {!isBulk && <p className="p-builder-note">{shareImage
+              ? "Direct send uploads the image, then opens the entered customer's chat in WhatsApp Web with the message and preview-enabled scratch-card link. Review the preview, then click Send."
+              : "Direct send creates the card and opens the entered customer's chat in WhatsApp Web. Review the message and click Send."}</p>}
             {isBulk && bulk.message && <p className={bulk.status === "error" ? "error" : "p-alert"} role={bulk.status === "error" ? "alert" : "status"}>{bulk.message}</p>}
             {!isBulk && status === "error" && (
               <p className="error" role="alert">
@@ -1062,7 +1141,7 @@ function PublicCard({ slug, language: dashboardLanguage }) {
     );
   const share = () =>
     window.open(
-      `https://wa.me/?text=${encodeURIComponent(`I found ${card.offerTitle}! Try this scratch card: ${location.href}`)}`,
+      `https://web.whatsapp.com/send?text=${encodeURIComponent(`I found ${card.offerTitle}! Try this scratch card: ${location.href}`)}`,
       "_blank",
       "noopener,noreferrer",
     );

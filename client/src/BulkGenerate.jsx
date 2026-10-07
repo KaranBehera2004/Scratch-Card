@@ -235,7 +235,7 @@ export function BulkResults({ result, onReset, locked, token, businessId }) {
       <option value="">{ui("All branches")}</option>{branches.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
     </select></label>
     <p className="p-builder-note">{ui("Download Excel includes every coupon generated in this draft, across all branches and generations, regardless of this filter or page.")}</p>
-    <p className="p-builder-note">{ui("Send via WhatsApp downloads all coupons from this draft as Excel and opens one chat. Attach the downloaded file manually in WhatsApp.")}</p>
+    <p className="p-builder-note">{ui("Send via WhatsApp downloads all coupons from this draft as Excel and opens one chat in WhatsApp Web. Attach the downloaded file manually.")}</p>
     {notice && <p role="status">{notice}</p>}
     <Table columns={["Branch", "Coupon code", "WhatsApp number", "Offer", "Scratch link", "Expiry", "Status", "Actions"]} empty={!filtered.length}>
       {filtered.slice(page * 25, (page + 1) * 25).map((card) => <tr key={card.slug}>

@@ -77,6 +77,7 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
     customerPhone: "+919876543210",
     expiresAt: new Date(Date.now() + 86400000).toISOString(),
   };
+  const previewImageBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
   let otherId, branchId, cardSlug, viewer, editor, viewerId;
 
   await t.test("platform customization persists without altering existing businesses", async () => {
@@ -194,6 +195,7 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
         language: "hi",
         couponCode: "TEST-UNIQUE",
         customerPhone: "+91 (98765) 43210",
+        shareImage: `data:image/png;base64,${previewImageBase64}`,
       });
       assert.equal(created.status, 201, created.message);
       cardSlug = created.slug;
@@ -204,12 +206,30 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
       assert.equal(cards[0].branchName, "Hyderabad");
       assert.equal(cards[0].language, "hi");
       assert.equal(cards[0].customerPhone, "+919876543210");
+      assert.equal(cards[0].hasShareImage, true);
+      assert.equal(cards[0].shareImageBase64, undefined);
       assert.equal((await request("/api/admin/coupons", owner)).coupons[0].customerPhone, "+919876543210");
       const publicResult = await request(`/api/cards/${cardSlug}`);
       assert.equal(publicResult.customerPhone, undefined);
       assert.ok(!JSON.stringify(publicResult).includes("9876543210"));
+      assert.equal(publicResult.hasShareImage, true);
+      assert.equal(publicResult.shareImageBase64, undefined);
       const savedCards = JSON.parse(await fs.readFile(path.join(temporary, "server/data/cards.json"), "utf8"));
       assert.equal(savedCards.find((card) => card.slug === cardSlug).customerPhone, "+919876543210");
+      assert.equal(savedCards.find((card) => card.slug === cardSlug).shareImageBase64, previewImageBase64);
+      const imageResponse = await fetch(`${base}/api/cards/${cardSlug}/share-image`);
+      assert.equal(imageResponse.status, 200);
+      assert.equal(imageResponse.headers.get("content-type"), "image/png");
+      assert.deepEqual(Buffer.from(await imageResponse.arrayBuffer()), Buffer.from(previewImageBase64, "base64"));
+      const previewResponse = await fetch(`${base}/share/${cardSlug}`);
+      const previewHtml = await previewResponse.text();
+      assert.equal(previewResponse.status, 200);
+      assert.match(previewHtml, /property="og:image"/);
+      assert.match(previewHtml, new RegExp(`api-scratch\\.justconnect\\.biz/api/cards/${cardSlug}/share-image`));
+      assert.match(previewHtml, new RegExp(`scratch\\.justconnect\\.biz/card/${cardSlug}`));
+      assert.equal((await request("/api/cards", owner, "POST", {
+        ...draft, shareImage: "data:text/html;base64,PGgxPkJhZDwvaDE+",
+      })).status, 400);
       assert.equal((await request(`/api/cards/${cardSlug}`)).language, "hi");
       assert.equal((await request("/api/cards", owner, "POST", { ...draft, language: "invalid" })).status, 400);
       assert.equal(

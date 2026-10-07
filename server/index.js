@@ -8,7 +8,7 @@ import mongoose from "mongoose";
 import { installControls } from "./control.js";
 import { ensureUniqueIndex } from "./indexes.js";
 import { normalizeWhatsAppNumber } from "../shared/whatsapp.js";
-import { PRODUCTION_APP_URL } from "../shared/urls.js";
+import { PRODUCTION_API_URL, PRODUCTION_APP_URL } from "../shared/urls.js";
 import { installBulkRoutes, bad, couponStatus, checkCapacity } from "./bulk.js";
 
 const rootDir = process.env.SCRATCH_DATA_ROOT || process.cwd();
@@ -21,7 +21,9 @@ const port = Number(process.env.PORT) || 5051;
 app.disable("x-powered-by");
 app.use(cors({ origin: process.env.CLIENT_ORIGIN ||
   (process.env.NODE_ENV === "production" ? PRODUCTION_APP_URL : true) }));
-// A bounded 1,000-row recipient import can exceed the original single-card cap.
+// Single-card requests may contain one bounded image used by WhatsApp's link
+// preview. Other API requests retain the smaller default parsing limit.
+app.use("/api/cards", express.json({ limit: "8mb" }));
 app.use(express.json({ limit: "256kb" }));
 
 const schema = new mongoose.Schema(
@@ -49,6 +51,8 @@ const schema = new mongoose.Schema(
     redeemedBranchId: { type: String, default: "" },
     batchKey: { type: String, index: true },
     batchFingerprint: String,
+    shareImageMime: { type: String, enum: ["image/jpeg", "image/png", "image/webp"] },
+    shareImageBase64: String,
   },
   { timestamps: true, versionKey: false, autoIndex: false },
 );
@@ -389,6 +393,7 @@ function publicCard(card) {
     ...Object.fromEntries(fields.map((key) => [key, card[key]])),
     used: Boolean(card.redeemedAt || card.scratchedAt),
     scratchedAt: card.scratchedAt || null,
+    hasShareImage: Boolean(card.shareImageBase64),
   };
 }
 const clean = (value, max) =>
@@ -403,6 +408,28 @@ const safeUrl = (value) => {
     throw new Error("Claim link must use http or https.");
   return parsed.toString();
 };
+const MAX_SHARE_IMAGE_BYTES = 5 * 1024 * 1024;
+function safeShareImage(value) {
+  if (value == null || value === "") return {};
+  if (typeof value !== "string" || value.length > Math.ceil(MAX_SHARE_IMAGE_BYTES * 4 / 3) + 128)
+    throw bad("Choose a JPG, PNG or WebP image smaller than 5 MB.");
+  const match = value.match(/^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/]+={0,2})$/);
+  if (!match) throw bad("Choose a valid JPG, PNG or WebP image.");
+  const buffer = Buffer.from(match[2], "base64");
+  if (!buffer.length || buffer.length > MAX_SHARE_IMAGE_BYTES || buffer.toString("base64") !== match[2])
+    throw bad("Choose a valid JPG, PNG or WebP image smaller than 5 MB.");
+  const validSignature = match[1] === "image/png"
+    ? buffer.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex"))
+    : match[1] === "image/jpeg"
+      ? buffer.subarray(0, 3).equals(Buffer.from("ffd8ff", "hex"))
+      : buffer.subarray(0, 4).toString("ascii") === "RIFF"
+        && buffer.subarray(8, 12).toString("ascii") === "WEBP";
+  if (!validSignature) throw bad("The uploaded file does not contain a valid JPG, PNG or WebP image.");
+  return { shareImageMime: match[1], shareImageBase64: match[2] };
+}
+const html = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+})[character]);
 const { authenticate, audit, validateCreate, getBusiness, businessLimits, cardRows, scope } = installControls(
   app,
   {
@@ -436,6 +463,7 @@ function buildCard(body, business, bulk = false, allowExpired = false) {
       ? "" : normalizeWhatsAppNumber(body.customerPhone),
     claimUrl: safeUrl(body.claimUrl), campaignName: clean(body.campaignName, 80), expiresAt,
     disabled: false, redeemedAt: null, scratchedAt: null,
+    ...safeShareImage(body.shareImage),
     ...Object.fromEntries([["accentColor", "#ffb33f"], ["pageColor", "#0b0c1c"], ["textColor", "#ffffff"]]
       .map(([key, fallback]) => [key, /^#[0-9a-f]{6}$/i.test(body[key]) ? body[key] : fallback])),
   };
@@ -635,6 +663,73 @@ app.get("/api/cards/:slug", async (req, res, next) => {
         .status(410)
         .json({ message: "This card is disabled or expired." });
     res.json(publicCard(card));
+  } catch (error) {
+    next(error);
+  }
+});
+app.get("/api/cards/:slug/share-image", async (req, res, next) => {
+  try {
+    if (!/^[A-Za-z0-9_-]{6,32}$/.test(req.params.slug))
+      return res.status(404).end();
+    const card = await findCard(req.params.slug);
+    if (!card?.shareImageBase64 || !card.shareImageMime || card.disabled
+      || (card.expiresAt && new Date(card.expiresAt) < new Date()))
+      return res.status(404).end();
+    await getBusiness(card.businessId || "impact-vibes");
+    const image = Buffer.from(card.shareImageBase64, "base64");
+    res.set({
+      "Cache-Control": "public, max-age=3600",
+      "Content-Type": card.shareImageMime,
+      "Content-Length": String(image.length),
+      "X-Content-Type-Options": "nosniff",
+    }).send(image);
+  } catch (error) {
+    next(error);
+  }
+});
+app.get("/share/:slug", async (req, res, next) => {
+  try {
+    if (!/^[A-Za-z0-9_-]{6,32}$/.test(req.params.slug))
+      return res.status(404).type("text").send("Card not found.");
+    const card = await findCard(req.params.slug);
+    if (!card || card.disabled || (card.expiresAt && new Date(card.expiresAt) < new Date()))
+      return res.status(404).type("text").send("Card not found.");
+    await getBusiness(card.businessId || "impact-vibes");
+    const slug = encodeURIComponent(card.slug);
+    const cardUrl = `${PRODUCTION_APP_URL}/card/${slug}`;
+    const shareUrl = `${PRODUCTION_APP_URL}/share/${slug}`;
+    const imageUrl = card.shareImageBase64
+      ? `${PRODUCTION_API_URL}/api/cards/${slug}/share-image`
+      : "";
+    const title = `${card.offerTitle} · ${card.senderName}`;
+    const description = `${card.headline} — ${card.description}`;
+    const imageMeta = imageUrl ? `
+    <meta property="og:image" content="${html(imageUrl)}">
+    <meta property="og:image:secure_url" content="${html(imageUrl)}">
+    <meta property="og:image:type" content="${html(card.shareImageMime)}">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="${html(imageUrl)}">` : "";
+    res.status(200).set({
+      "Cache-Control": "public, max-age=60, s-maxage=60",
+      "Content-Type": "text/html; charset=utf-8",
+      "X-Content-Type-Options": "nosniff",
+    }).send(`<!doctype html>
+<html lang="en"><head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>${html(title)}</title>
+    <meta name="description" content="${html(description)}">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="JustConnect Scratch Card">
+    <meta property="og:title" content="${html(title)}">
+    <meta property="og:description" content="${html(description)}">
+    <meta property="og:url" content="${html(shareUrl)}">${imageMeta}
+    <link rel="canonical" href="${html(cardUrl)}">
+    <meta http-equiv="refresh" content="0;url=${html(cardUrl)}">
+  </head><body>
+    <p>Opening your scratch card… <a href="${html(cardUrl)}">Continue</a></p>
+    <script>window.location.replace(${JSON.stringify(cardUrl)});</script>
+  </body></html>`);
   } catch (error) {
     next(error);
   }

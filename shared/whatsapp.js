@@ -14,8 +14,11 @@ export function normalizeWhatsAppNumber(value) {
   return `+${digits}`;
 }
 
+export function whatsAppCardMessage(shareUrl) {
+  return `A surprise is waiting for you! Scratch your card here: ${shareUrl}`;
+}
+
 export function whatsAppCardUrl(number, shareUrl) {
   const digits = normalizeWhatsAppNumber(number).slice(1);
-  const message = `A surprise is waiting for you! Scratch your card here: ${shareUrl}`;
-  return `https://wa.me/${digits}?text=${encodeURIComponent(message)}`;
+  return `https://web.whatsapp.com/send?phone=${digits}&text=${encodeURIComponent(whatsAppCardMessage(shareUrl))}`;
 }

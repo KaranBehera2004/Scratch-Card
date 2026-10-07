@@ -346,12 +346,19 @@ export function installControls(app, context) {
     return cards
       .filter((item) => visibleBusinesses.has(item.businessId || "impact-vibes"))
       .filter((item) => !id || (item.businessId || "impact-vibes") === id)
-      .map((item) => ({
-        ...item,
-        businessId: item.businessId || "impact-vibes",
-        used: Boolean(item.redeemedAt || item.scratchedAt),
-        status: couponStatus(item),
-      }))
+      .map((item) => {
+        // The potentially large preview payload is only served through the
+        // public image endpoint and must not inflate authenticated tables.
+        const { shareImageBase64: _image, shareImageMime, ...row } = item;
+        return {
+          ...row,
+          hasShareImage: Boolean(_image),
+          shareImageMime: shareImageMime || null,
+          businessId: item.businessId || "impact-vibes",
+          used: Boolean(item.redeemedAt || item.scratchedAt),
+          status: couponStatus(item),
+        };
+      })
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   }
   async function limit(business, resource, count) {
