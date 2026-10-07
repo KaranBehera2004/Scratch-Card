@@ -54,7 +54,7 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
-    return { status: response.status, ...(await response.json()) };
+    return { ...(await response.json()), status: response.status };
   };
   const login = async (email, password) => {
     const result = await request("/api/auth/login", null, "POST", {
@@ -73,6 +73,7 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
     offerTitle: "25% OFF",
     description: "Your next order",
     campaignName: "Diwali",
+    customerPhone: "+919876543210",
     expiresAt: new Date(Date.now() + 86400000).toISOString(),
   };
   let otherId, branchId, cardSlug, viewer, editor, viewerId;
@@ -191,6 +192,7 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
         branchName: "Forged branch",
         language: "hi",
         couponCode: "TEST-UNIQUE",
+        customerPhone: "+91 (98765) 43210",
       });
       assert.equal(created.status, 201, created.message);
       cardSlug = created.slug;
@@ -200,6 +202,13 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
       assert.equal(cards[0].branchId, branchId);
       assert.equal(cards[0].branchName, "Hyderabad");
       assert.equal(cards[0].language, "hi");
+      assert.equal(cards[0].customerPhone, "+919876543210");
+      assert.equal((await request("/api/admin/coupons", owner)).coupons[0].customerPhone, "+919876543210");
+      const publicResult = await request(`/api/cards/${cardSlug}`);
+      assert.equal(publicResult.customerPhone, undefined);
+      assert.ok(!JSON.stringify(publicResult).includes("9876543210"));
+      const savedCards = JSON.parse(await fs.readFile(path.join(temporary, "server/data/cards.json"), "utf8"));
+      assert.equal(savedCards.find((card) => card.slug === cardSlug).customerPhone, "+919876543210");
       assert.equal((await request(`/api/cards/${cardSlug}`)).language, "hi");
       assert.equal((await request("/api/cards", owner, "POST", { ...draft, language: "invalid" })).status, 400);
       assert.equal(
@@ -225,6 +234,7 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
         (await request("/api/portal/cards", second)).cards.length,
         0,
       );
+      assert.equal((await request("/api/admin/coupons", second)).coupons.length, 0);
       assert.equal(
         (
           await request(`/api/portal/cards/${cardSlug}`, second, "PATCH", {
@@ -235,6 +245,20 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
       );
     },
   );
+  await t.test("WhatsApp numbers are mandatory and invalid values never save cards", async () => {
+    const before = (await request("/api/portal/cards", owner)).cards.length;
+    for (const customerPhone of [undefined, null, "", "   "]) {
+      const result = await request("/api/cards", owner, "POST", { ...draft, customerPhone });
+      assert.equal(result.status, 400);
+      assert.equal(result.message, "Enter the customer's WhatsApp number.");
+    }
+    for (const customerPhone of ["abc", "123", "1234567890123456", "++919876543210", "9876543210 ext 1", {}, 9876543210]) {
+      const result = await request("/api/cards", owner, "POST", { ...draft, customerPhone });
+      assert.equal(result.status, 400);
+      assert.equal(result.message, "Enter a valid WhatsApp number with country code, or a 10-digit Indian mobile number.");
+    }
+    assert.equal((await request("/api/portal/cards", owner)).cards.length, before);
+  });
   await t.test(
     "staff roles enforce permissions and account changes revoke sessions",
     async () => {
@@ -282,7 +306,7 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
     },
   );
   await t.test(
-    "disabled cards cannot be claimed and simultaneous scratch attempts redeem once",
+    "scratching is retry-safe and authenticated redemption happens once",
     async () => {
       assert.equal(
         (
@@ -310,8 +334,20 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
           request(`/api/cards/${cardSlug}/claim`, null, "POST", {}),
         ),
       );
-      assert.equal(results.filter((item) => item.status === 200).length, 1);
-      assert.equal(results.filter((item) => item.status === 409).length, 5);
+      assert.equal(results.filter((item) => item.status === 200).length, 6);
+      assert.equal(new Set(results.map((item) => item.scratchedAt)).size, 1);
+      for (const result of results) {
+        assert.equal(result.customerPhone, undefined);
+        assert.ok(!JSON.stringify(result).includes("9876543210"));
+      }
+      assert.equal((await request(`/api/cards/${cardSlug}`)).customerPhone, undefined);
+      assert.equal((await request(`/api/cards/${cardSlug}`)).used, false);
+      assert.equal((await request(`/api/cards/${cardSlug}`)).couponCode, "TEST-UNIQUE");
+      assert.equal((await request("/api/portal/cards", owner)).cards.find((item) => item.slug === cardSlug).status, "scratched");
+      assert.equal((await request(`/api/portal/cards/${cardSlug}/redeem`, null, "POST", { branchId })).status, 401);
+      const redemptions = await Promise.all(Array.from({ length: 6 }, () => request(`/api/portal/cards/${cardSlug}/redeem`, owner, "POST", { branchId })));
+      assert.equal(redemptions.filter((item) => item.status === 200).length, 1);
+      assert.equal(redemptions.filter((item) => item.status === 409).length, 5);
       assert.equal((await request(`/api/cards/${cardSlug}`)).used, true);
       assert.equal(
         (await request("/api/portal/cards", owner)).cards.find(

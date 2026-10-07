@@ -353,7 +353,7 @@ export function installControls(app, context) {
             ? "disabled"
             : item.expiresAt && new Date(item.expiresAt) < new Date()
               ? "expired"
-              : "available",
+              : item.scratchedAt ? "scratched" : "available",
       }))
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   }
@@ -1072,7 +1072,7 @@ export function installControls(app, context) {
       res.json({ ok: true });
     }),
   );
-  async function validateCreate(req) {
+  async function validateCreate(req, checkLimit = true) {
     if (req.user.role === "viewer")
       throw fail("Viewer accounts cannot create scratch cards.", 403);
     if (!(await settings()).cardCreation)
@@ -1081,7 +1081,7 @@ export function installControls(app, context) {
       business = await getBusiness(id);
     if (business.status !== "active")
       throw fail("This business is paused.", 403);
-    await limit(business, "card", (await cardRows(req)).length);
+    if (checkLimit) await limit(business, "card", (await cardRows(req)).length);
     if (
       req.body.branchId &&
       !(business.branches || []).some(
@@ -1099,5 +1099,7 @@ export function installControls(app, context) {
     audit,
     validateCreate,
     getBusiness,
+    businessLimits,
+    cardRows,
   };
 }

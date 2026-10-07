@@ -7,7 +7,7 @@
     "client"
   ],
   "scripts": {
-    "test": "node --test server/control.test.js server/indexes.test.js",
+    "test": "node --test server/control.test.js server/indexes.test.js server/bulk.test.js client/src/bulk-coupons.test.js client/src/campaigns.test.js client/src/coupon-filters.test.js shared/whatsapp.test.js",
     "test:ui": "npm run build && playwright test",
     "dev": "concurrently -k -n API,WEB -c magenta,cyan \"npm:dev:server\" \"npm:dev:client\"",
     "dev:client": "npm --workspace client run dev",

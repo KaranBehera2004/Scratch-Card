@@ -8,6 +8,9 @@ import React, {
 import { createRoot } from "react-dom/client";
 import Portal, { PortalLogin, portalApi } from "./Portal.jsx";
 import { workspaceTranslator } from "./workspace-i18n.js";
+import { normalizeWhatsAppNumber, whatsAppCardUrl } from "../../shared/whatsapp.js";
+import { pendingBulk, completedBulk, savedBulkDraft, useBulkGeneration, BranchQuantities, BulkResults } from "./BulkGenerate.jsx";
+import "./bulk.css";
 import "./styles.css";
 import "./share-link.css";
 import "./card-typography.css";
@@ -464,15 +467,16 @@ const WhatsAppIcon = () => (
 );
 
 function ScratchCard({ card, onReveal = () => {}, preview = false, t }) {
+  const alreadyScratched = Boolean(card.scratchedAt);
   const canvasRef = useRef(null),
     cardRef = useRef(null),
     drawing = useRef(false),
     revealed = useRef(false);
-  const [progress, setProgress] = useState(preview ? 100 : 0);
+  const [progress, setProgress] = useState(preview || alreadyScratched ? 100 : 0);
   const prepare = useCallback(() => {
     // Revealing the coupon can grow the card with larger translated text.
     // A resize must not cover an already-revealed reward again.
-    if (preview || revealed.current || !canvasRef.current || !cardRef.current) return;
+    if (preview || alreadyScratched || revealed.current || !canvasRef.current || !cardRef.current) return;
     const canvas = canvasRef.current,
       rect = cardRef.current.getBoundingClientRect(),
       ratio = Math.min(devicePixelRatio || 1, 2),
@@ -511,7 +515,7 @@ function ScratchCard({ card, onReveal = () => {}, preview = false, t }) {
     ctx.fillText(t("swipeFinger"), rect.width / 2, rect.height / 2 + 18);
     revealed.current = false;
     setProgress(0);
-  }, [preview, t]);
+  }, [preview, alreadyScratched, t]);
   useEffect(() => {
     prepare();
     if (preview) return;
@@ -581,7 +585,7 @@ function ScratchCard({ card, onReveal = () => {}, preview = false, t }) {
             </b>
           )}
         </div>
-        {!preview && (
+        {!preview && !alreadyScratched && (
           <canvas
             ref={canvasRef}
             onPointerDown={(e) => {
@@ -618,6 +622,8 @@ function Creator({
   user,
   business,
   onCreated,
+  onCreateBranch,
+  onManageBranches,
   ui = workspaceTranslator(),
 }) {
   const [form, setForm] = useState(() => ({
@@ -628,15 +634,28 @@ function Creator({
     couponCode: generateDraftCoupon(),
     branchId: "",
     campaignName: "",
+    customerPhone: "",
     expiresAt: "",
     language: "en",
+    ...Object.fromEntries(Object.entries(savedBulkDraft(business.businessId)?.form || {}).filter(([key]) =>
+      [...Object.keys(DEFAULT_CARD), "campaignName", "customerPhone", "language", "expiresAt"].includes(key) && key !== "senderName")),
+    // Restore shared form fields only, never request-only recipients, branch rows or retry keys.
+    ...Object.fromEntries(Object.entries(pendingBulk(business.businessId) || {}).filter(([key]) =>
+      [...Object.keys(DEFAULT_CARD), "campaignName", "customerPhone", "language"].includes(key))),
+    expiresAt: pendingBulk(business.businessId)?.expiresAt
+      ? (() => { const date = new Date(pendingBulk(business.businessId).expiresAt); return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16); })()
+      : pendingBulk(business.businessId) ? "" : savedBulkDraft(business.businessId)?.form?.expiresAt || "",
   }));
+  const [mode, setMode] = useState(() => pendingBulk(business.businessId) || completedBulk(business.businessId) || savedBulkDraft(business.businessId) ? "bulk" : "single");
+  const bulk = useBulkGeneration({ form, setForm, business, token, user, onCreated, enabled: mode === "bulk" });
+  const isBulk = mode === "bulk";
   const cardT = useMemo(() => cardTranslator(form.language), [form.language]);
   const [result, setResult] = useState(null),
     [status, setStatus] = useState("idle"),
     [message, setMessage] = useState("");
+  const saving = isBulk ? bulk.status === "saving" : status === "saving";
   const branchName = (business?.branches || []).find(
-    (branch) => branch.branchId === form.branchId,
+    (branch) => branch.branchId === (isBulk ? bulk.previewId : form.branchId),
   )?.name || cardT("allBranches");
   const update = (event) => {
     if (event.target.name !== "senderName")
@@ -646,25 +665,60 @@ function Creator({
       }));
   };
   const shareUrl = result ? `${location.origin}/card/${result.slug}` : "";
+  const creatingRef = useRef(false);
   const createCard = async (event) => {
     event.preventDefault();
+    if (creatingRef.current) return;
+    const directSend = event.nativeEvent.submitter?.value === "direct-send";
+    let customerPhone;
+    try {
+      customerPhone = normalizeWhatsAppNumber(form.customerPhone);
+    } catch (error) {
+      setMessage(error.message);
+      setStatus("error");
+      event.currentTarget.elements.customerPhone.focus();
+      return;
+    }
+    creatingRef.current = true;
+    // Open synchronously during the click so the async API call does not trigger popup blocking.
+    let whatsappWindow = null;
+    if (directSend) {
+      try { whatsappWindow = window.open("about:blank", "_blank"); } catch { /* The result popup provides a retry link. */ }
+    }
+    if (whatsappWindow) whatsappWindow.opener = null;
     setStatus("saving");
     setMessage("");
     try {
       const data = await portalApi("/api/cards", token, "POST", {
         ...form,
+        customerPhone,
         expiresAt: form.expiresAt
           ? new Date(form.expiresAt).toISOString()
           : null,
         businessId: user.businessId,
       });
-      setResult(data);
-      setForm((current) => ({ ...current, couponCode: generateDraftCoupon() }));
+      const whatsappUrl = whatsAppCardUrl(customerPhone, `${location.origin}/card/${data.slug}`);
+      setResult({ ...data, whatsappUrl });
+      if (directSend) {
+        if (whatsappWindow && !whatsappWindow.closed) {
+          try { whatsappWindow.location.replace(whatsappUrl); }
+          catch {
+            whatsappWindow.close();
+            setMessage("WhatsApp could not open. Use Share on WhatsApp below to open the customer's chat.");
+          }
+        } else {
+          setMessage("WhatsApp could not open. Use Share on WhatsApp below to open the customer's chat.");
+        }
+      }
+      setForm((current) => ({ ...current, couponCode: generateDraftCoupon(), customerPhone: "" }));
       setStatus("done");
       onCreated?.();
     } catch (error) {
+      whatsappWindow?.close();
       setMessage(error.message);
       setStatus("error");
+    } finally {
+      creatingRef.current = false;
     }
   };
   const copy = async () => {
@@ -677,15 +731,27 @@ function Creator({
   };
   const whatsapp = () =>
     window.open(
-      `https://wa.me/?text=${encodeURIComponent(`A surprise is waiting for you! Scratch your card here: ${shareUrl}`)}`,
+      result.whatsappUrl,
       "_blank",
       "noopener,noreferrer",
     );
   return (
     <main className="creator-page">
+      <div className="bulk-mode-switch" role="group" aria-label="Card creation mode">
+        <button type="button" className={`p-button ${!isBulk ? "primary" : ""}`} aria-pressed={!isBulk} disabled={saving || bulk.pending} onClick={() => setMode("single")}>{ui("Single Card")}</button>
+        <button type="button" className={`p-button ${isBulk ? "primary" : ""}`} aria-pressed={isBulk} disabled={saving} onClick={() => setMode("bulk")}>{ui("Bulk Generate")}</button>
+      </div>
+      {isBulk && bulk.pending && <p className="p-alert" role="status">A batch request is awaiting confirmation. Retry the stored request to recover its saved coupons. Fields are locked to prevent duplicate batches.</p>}
+      {isBulk && bulk.result && !bulk.pending && !bulk.restoring && <div className="p-alert bulk-state-notice" role="status">
+        <span>{ui("Keep this draft open: add another branch or increase a quantity to generate only the remaining coupons. Existing coupons are not generated again.")}</span>
+      </div>}
+      {isBulk && bulk.restoring && <div className="p-alert" role="status">{ui(bulk.status === "restoring" ? "Restoring saved batch results…" : "Saved batch results could not be loaded.")}
+        {bulk.status === "error" && <div className="bulk-row-actions"><button type="button" className="p-button" onClick={bulk.restore}>{ui("Retry loading batch")}</button>
+          {!bulk.pending && <button type="button" className="p-button" onClick={bulk.reset}>{ui("Start new draft")}</button>}</div>}</div>}
       <div className="creator-layout">
         <section className="builder">
-          <form onSubmit={createCard}>
+          <form onSubmit={isBulk ? bulk.submit : createCard}>
+            <fieldset className="creator-form-fields" disabled={saving || (isBulk && (bulk.restoring || bulk.pending))}>
             <div className="fields">
               <label>
                 <span>{ui("Card language")}</span>
@@ -699,7 +765,7 @@ function Creator({
               <span className="p-builder-note">
                 {ui("Changes only the card, not the dashboard. Default text is translated; enter custom messages in your chosen language.")}
               </span>
-              <label>
+              {!isBulk && <label>
                 <span>{t("branch")}</span>
                 <select name="branchId" value={form.branchId} onChange={update}>
                   <option value="">{t("allBranches")}</option>
@@ -711,7 +777,7 @@ function Creator({
                       </option>
                     ))}
                 </select>
-              </label>
+              </label>}
               <label>
                 <span>{t("messageAbove")}</span>
                 <input
@@ -742,7 +808,7 @@ function Creator({
                   required
                 />
               </label>
-              <label>
+              {!isBulk && <label>
                 <span>
                   {t("couponCode")} <em>{t("uniqueAuto")}</em>
                 </span>
@@ -765,7 +831,7 @@ function Creator({
                     {t("newCode")}
                   </button>
                 </div>
-              </label>
+              </label>}
               <label>
                 <span>
                   {t("claimLink")} <em>{t("optional")}</em>
@@ -797,10 +863,28 @@ function Creator({
                   onChange={update}
                 />
               </label>
+              <label>
+                <span>{ui("WhatsApp number")}{isBulk ? " (optional, shared across this batch)" : ""}</span>
+                <input
+                  name="customerPhone"
+                  type="tel"
+                  inputMode="tel"
+                  autoComplete="off"
+                  value={form.customerPhone}
+                  onChange={update}
+                  maxLength="40"
+                  placeholder="+91 98765 43210"
+                  required={!isBulk}
+                  aria-label={ui("WhatsApp number")}
+                  aria-describedby="customer-phone-note"
+                />
+                <small id="customer-phone-note">{ui("Enter a 10-digit Indian mobile number or include the country code (e.g. +91). Never shown on the shared card.")}</small>
+              </label>
               <span className="p-builder-note">
                 {ui("Each link can reveal its reward once. Campaigns and branches help you track your results.")}
               </span>
             </div>
+            {isBulk && <BranchQuantities bulk={bulk} business={business} onCreateBranch={onCreateBranch} onManageBranches={onManageBranches} />}
             <fieldset className="theme-panel">
               <legend>{t("cardTheme")}</legend>
               <div className="theme-controls">
@@ -824,10 +908,19 @@ function Creator({
                 ))}
               </div>
             </fieldset>
-            <button className="primary" disabled={status === "saving"}>
-              {status === "saving" ? t("creating") : t("createLink")}
-            </button>
-            {status === "error" && (
+            </fieldset>
+            <div className="creator-actions">
+              <button type="submit" className="primary" value="create-link" disabled={saving || (isBulk && (bulk.restoring || (!bulk.pending && !bulk.total)))}>
+                {saving ? t("creating") : isBulk ? bulk.pending ? ui("Retry saved batch") : !bulk.total && bulk.result ? ui("All requested coupons generated") : ui("Generate {count} Coupons", { count: bulk.total }) : t("createLink")}
+              </button>
+              {!isBulk &&
+              <button type="submit" className="direct-send wa" value="direct-send" disabled={status === "saving"}>
+                <WhatsAppIcon /> {ui("Direct send")}
+              </button>}
+            </div>
+            {!isBulk && <p className="p-builder-note">{ui("Direct send creates the card and opens the customer's WhatsApp chat. Review the message and tap Send in WhatsApp.")}</p>}
+            {isBulk && bulk.message && <p className={bulk.status === "error" ? "error" : "p-alert"} role={bulk.status === "error" ? "alert" : "status"}>{bulk.message}</p>}
+            {!isBulk && status === "error" && (
               <p className="error" role="alert">
                 {ui(message)}
               </p>
@@ -853,11 +946,12 @@ function Creator({
               <GiftIcon /> {cardT("surprise")}
             </div>
             <h2>{form.headline || cardT("previewHeadline")}</h2>
-            <ScratchCard card={{ ...form, branchName }} preview t={cardT} />
+            <ScratchCard card={{ ...form, branchId: isBulk ? bulk.previewId : form.branchId, couponCode: isBulk ? "AUTO-GENERATED" : form.couponCode, branchName }} preview t={cardT} />
             <small>{cardT("scratchLayer")}</small>
           </div>
         </aside>
       </div>
+      {isBulk && bulk.result && <BulkResults key={bulk.result.batchId} result={bulk.result} onReset={bulk.reset} locked={saving || bulk.pending || bulk.restoring} token={token} businessId={business.businessId} />}
       {result && (
         <div
           className="backdrop"
@@ -920,6 +1014,7 @@ function PublicCard({ slug, language: dashboardLanguage }) {
     requestJson(`/api/cards/${encodeURIComponent(slug)}`)
       .then((data) => {
         setCard(data);
+        setRevealed(Boolean(data.scratchedAt));
         setState(data.used ? "used" : "ready");
       })
       .catch(() => setState("error"));
@@ -979,7 +1074,7 @@ function PublicCard({ slug, language: dashboardLanguage }) {
         `/api/cards/${encodeURIComponent(slug)}/claim`,
         { method: "POST" },
       );
-      setCard((current) => ({ ...current, couponCode: result.couponCode }));
+      setCard((current) => ({ ...current, couponCode: result.couponCode, scratchedAt: result.scratchedAt }));
       setRevealed(true);
       setState("ready");
       return true;

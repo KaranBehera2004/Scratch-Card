@@ -1,4 +1,16 @@
 /* Responsive layout shared by the portal, creator and public reward pages. */
+.creator-actions { display: flex; flex-wrap: wrap; align-items: stretch; gap: 12px; }
+.creator-actions > button { flex: 1 1 190px; min-width: 0; }
+.creator-actions .direct-send { display: flex; justify-content: center; align-items: center; gap: 8px; min-height: 48px; padding: 12px 20px; border: 0; border-radius: 9px; font-weight: 700; cursor: pointer; }
+.creator-actions .direct-send:disabled { opacity: .65; cursor: wait; }
+.creator-actions + .p-builder-note { margin-top: 12px; line-height: 1.6; }
+.p-coupon-filters .p-card-title { margin-bottom: 18px; }
+.p-coupon-filter-fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.p-coupon-custom-dates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; max-width: 660px; }
+.p-coupon-filters label, .p-coupon-filters :is(input, select) { min-width: 0; width: 100%; }
+.p-coupon-filters select { text-overflow: ellipsis; }
+.p-coupon-filter-summary { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; margin-top: 18px; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.p-coupon-filter-summary span { overflow-wrap: anywhere; }
 .p-shell, .p-main, .p-content, .creator-layout, .fields > label {
   min-width: 0;
 }
@@ -47,6 +59,7 @@
 .recipient .offer-content { max-width: 100%; }
 
 @media (max-width: 1200px) {
+  .p-coupon-filter-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .p-overview-grid { grid-template-columns: minmax(0, 1fr); }
   .p-welcome-row, .p-page-heading { flex-wrap: wrap; }
   .p-metrics, .p-metrics-platform { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -86,6 +99,8 @@
 }
 
 @media (max-width: 600px) {
+  .p-coupon-filter-fields, .p-coupon-custom-dates { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .p-coupon-filters :is(input, select) { min-height: 44px; font-size: 16px; }
   .p-content { padding: 20px 12px max(20px, env(safe-area-inset-bottom)); }
   .p-card { padding: 14px; }
   .p-topbar .p-breadcrumb { display: none; }
