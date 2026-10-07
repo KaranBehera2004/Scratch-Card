@@ -45,9 +45,9 @@ export function validateRecipients(rows, branches, total) {
   return recipients;
 }
 export function couponStatus(card) {
-  return card.redeemedAt ? "redeemed" : card.disabled ? "disabled"
+  return card.redeemedAt || card.scratchedAt ? "redeemed" : card.disabled ? "disabled"
     : card.expiresAt && new Date(card.expiresAt) <= new Date() ? "expired"
-      : card.scratchedAt ? "scratched" : "available";
+      : "available";
 }
 export function batchFingerprint(base, branches, recipients = null) {
   // Ignore random generated identifiers and normalize row order for retry comparison.

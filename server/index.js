@@ -66,6 +66,7 @@ const Business = mongoose.model(
       loginEmail: String,
       loginId: { type: String, unique: true, sparse: true },
       passwordHash: String,
+      passwordVersion: { type: String, default: "" },
       status: { type: String, default: "active" },
       generationRevision: { type: Number, default: 0 },
       deletedAt: Date,
@@ -203,6 +204,10 @@ async function initializeDatabase() {
   await Card.updateMany({ redeemedAt: { $ne: null }, scratchedAt: null }, [
     { $set: { scratchedAt: "$redeemedAt" } },
   ]);
+  // Scratching is now redemption. Preserve the original reveal time and branch.
+  await Card.updateMany({ scratchedAt: { $ne: null }, redeemedAt: null }, [
+    { $set: { redeemedAt: "$scratchedAt", redeemedBranchId: { $ifNull: ["$branchId", ""] } } },
+  ]);
   const ControlRecord = mongoose.model("ControlRecord");
   await ControlRecord.init();
   await Business.init();
@@ -239,9 +244,14 @@ async function normalizeLocalCoupons() {
   const usedCodes = new Set();
   let changed = false;
   for (const card of cards) {
-    // Preserve legacy redemption history; previously scratching also redeemed.
+    // Keep historical timestamps; never reactivate a previously revealed coupon.
     if (card.redeemedAt && !card.scratchedAt) {
       card.scratchedAt = card.redeemedAt;
+      changed = true;
+    }
+    if (card.scratchedAt && !card.redeemedAt) {
+      card.redeemedAt = card.scratchedAt;
+      card.redeemedBranchId = card.branchId || "";
       changed = true;
     }
     let code = clean(card.couponCode, 24).toUpperCase();
@@ -332,39 +342,40 @@ async function claimLocalCard(slug) {
   return mutateLocalCards((cards) => {
     const index = cards.findIndex((card) => card.slug === slug);
     if (index === -1) return { status: "missing" };
-    if (cards[index].redeemedAt) return { status: "used" };
+    if (cards[index].redeemedAt || cards[index].scratchedAt) return { status: "used" };
     if (
       cards[index].disabled ||
       (cards[index].expiresAt && new Date(cards[index].expiresAt) <= new Date())
     )
       return { status: "unavailable" };
-    if (cards[index].scratchedAt) return { status: "claimed", card: cards[index] };
-    cards[index].scratchedAt = new Date().toISOString();
+    const redeemedAt = new Date().toISOString();
+    cards[index].scratchedAt = redeemedAt;
+    cards[index].redeemedAt = redeemedAt;
+    cards[index].redeemedBranchId = cards[index].branchId || "";
     return { status: "claimed", card: cards[index] };
   });
 }
 async function claimCard(slug) {
   if (!atlasConnected) return claimLocalCard(slug);
+  const redeemedAt = new Date();
   const card = await Card.findOneAndUpdate(
     {
       slug,
       disabled: { $ne: true },
       redeemedAt: null,
       scratchedAt: null,
-      $or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }],
+      $or: [{ expiresAt: null }, { expiresAt: { $gt: redeemedAt } }],
     },
-    { $set: { scratchedAt: new Date() } },
+    [{ $set: { scratchedAt: redeemedAt, redeemedAt,
+      redeemedBranchId: { $ifNull: ["$branchId", ""] } } }],
     { new: true },
   ).lean();
   if (card) return { status: "claimed", card };
   const existing = await Card.findOne({ slug }).lean();
-  if (existing?.scratchedAt && !existing.redeemedAt && !existing.disabled &&
-      (!existing.expiresAt || new Date(existing.expiresAt) > new Date()))
-    return { status: "claimed", card: existing };
   return {
     status: !existing
       ? "missing"
-      : existing.redeemedAt
+      : existing.redeemedAt || existing.scratchedAt
         ? "used"
         : "unavailable",
   };
@@ -376,9 +387,8 @@ function publicCard(card) {
     "branchId", "branchName", "language", "campaignName", "expiresAt", "createdAt"];
   return {
     ...Object.fromEntries(fields.map((key) => [key, card[key]])),
-    used: Boolean(card.redeemedAt),
+    used: Boolean(card.redeemedAt || card.scratchedAt),
     scratchedAt: card.scratchedAt || null,
-    ...(card.scratchedAt && !card.redeemedAt ? { couponCode: card.couponCode } : {}),
   };
 }
 const clean = (value, max) =>
@@ -533,39 +543,8 @@ app.post("/api/portal/cards/:slug/redeem", authenticate, async (req, res, next) 
     if (req.user.role === "viewer") throw bad("Viewer accounts cannot redeem coupons.", 403);
     const card = (await cardRows(req)).find((item) => item.slug === req.params.slug);
     if (!card) throw bad("Card not found.", 404);
-    const business = await getBusiness(card.businessId);
-    if (business.status !== "active") throw bad("This business has paused its rewards.", 403);
-    const branchId = req.body.branchId;
-    if (!business.branches?.some((branch) => branch.branchId === branchId && branch.status === "active"))
-      throw bad("Choose an active redemption branch.");
-    if (card.branchId && card.branchId !== branchId) throw bad("This coupon can only be redeemed at its assigned branch.", 403);
-    const eligible = (current) => {
-      if (current.redeemedAt) throw bad("This coupon has already been redeemed.", 409);
-      if (!current.scratchedAt) throw bad("The customer must scratch this card before redemption.", 409);
-      if (current.disabled || current.expiresAt && new Date(current.expiresAt) <= new Date())
-        throw bad("This card is disabled or expired.", 410);
-    };
-    eligible(card);
-    const redeemedAt = new Date();
-    if (atlasConnected) {
-      const result = await Card.updateOne({ slug: card.slug,
-        redeemedAt: null, scratchedAt: { $ne: null }, disabled: { $ne: true },
-        $and: [
-          card.businessId === "impact-vibes" ? { $or: [{ businessId: card.businessId }, { businessId: { $exists: false } }] } : { businessId: card.businessId },
-          card.branchId ? { branchId: card.branchId } : { $or: [{ branchId: "" }, { branchId: null }] },
-          { $or: [{ expiresAt: null }, { expiresAt: { $gt: redeemedAt } }] },
-        ],
-      }, { $set: { redeemedAt, redeemedBranchId: branchId } });
-      if (!result.modifiedCount) throw bad("This coupon is no longer available for redemption.", 409);
-    } else await mutateLocalCards((cards) => {
-      const current = cards.find((item) => item.slug === card.slug);
-      if (!current) throw bad("Card not found.", 404);
-      eligible(current);
-      if (current.branchId && current.branchId !== branchId) throw bad("This coupon can only be redeemed at its assigned branch.", 403);
-      current.redeemedAt = redeemedAt.toISOString(); current.redeemedBranchId = branchId;
-    });
-    await audit(req, "Coupon redeemed", card.businessId, `${card.couponCode} · ${branchId}`).catch(console.error);
-    res.json({ ok: true, status: "redeemed", redeemedAt, branchId });
+    // Tell older clients to upgrade; this endpoint must never consume a coupon.
+    throw bad("Coupons are redeemed automatically when scratched. Manual redemption is no longer supported.", 410);
   } catch (error) { next(error); }
 });
 
@@ -679,6 +658,9 @@ app.post("/api/cards/:slug/claim", async (req, res, next) => {
         return res
           .status(403)
           .json({ message: "This business has paused its rewards." });
+      if (existing.branchId && !business.branches?.some((branch) =>
+        branch.branchId === existing.branchId && branch.status === "active"))
+        return res.status(403).json({ message: "This coupon's assigned branch is not active." });
     }
     const result = await claimCard(req.params.slug);
     if (result.status === "missing")
@@ -694,9 +676,13 @@ app.post("/api/cards/:slug/claim", async (req, res, next) => {
           message: "This coupon has already been redeemed.",
           used: true,
         });
-    res.json({
+    await audit(req, "Coupon redeemed by scratching", result.card.businessId || "impact-vibes",
+      `${result.card.couponCode} · ${result.card.redeemedBranchId || "All branches"}`).catch(console.error);
+    res.set("Cache-Control", "no-store").json({
       couponCode: result.card.couponCode,
       scratchedAt: result.card.scratchedAt,
+      redeemedAt: result.card.redeemedAt,
+      status: "redeemed",
     });
   } catch (error) {
     next(error);

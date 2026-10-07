@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 
 test("SaaS permissions, persistence, and one-time rewards", async (t) => {
   const temporary = await fs.mkdtemp(
@@ -306,7 +307,7 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
     },
   );
   await t.test(
-    "scratching is retry-safe and authenticated redemption happens once",
+    "scratching atomically redeems once and manual redemption is retired",
     async () => {
       assert.equal(
         (
@@ -334,20 +335,25 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
           request(`/api/cards/${cardSlug}/claim`, null, "POST", {}),
         ),
       );
-      assert.equal(results.filter((item) => item.status === 200).length, 6);
-      assert.equal(new Set(results.map((item) => item.scratchedAt)).size, 1);
+      assert.equal(results.filter((item) => item.status === 200).length, 1);
+      assert.equal(results.filter((item) => item.status === 409).length, 5);
+      const winner = results.find((item) => item.status === 200);
+      assert.ok(winner.redeemedAt);
+      assert.equal(winner.scratchedAt, winner.redeemedAt);
       for (const result of results) {
         assert.equal(result.customerPhone, undefined);
         assert.ok(!JSON.stringify(result).includes("9876543210"));
       }
       assert.equal((await request(`/api/cards/${cardSlug}`)).customerPhone, undefined);
-      assert.equal((await request(`/api/cards/${cardSlug}`)).used, false);
-      assert.equal((await request(`/api/cards/${cardSlug}`)).couponCode, "TEST-UNIQUE");
-      assert.equal((await request("/api/portal/cards", owner)).cards.find((item) => item.slug === cardSlug).status, "scratched");
+      assert.equal(winner.couponCode, "TEST-UNIQUE");
+      assert.equal((await request(`/api/cards/${cardSlug}`)).used, true);
+      assert.equal((await request(`/api/cards/${cardSlug}`)).couponCode, undefined);
+      const redeemed = (await request("/api/portal/cards", owner)).cards.find((item) => item.slug === cardSlug);
+      assert.equal(redeemed.status, "redeemed");
+      assert.equal(redeemed.redeemedBranchId, redeemed.branchId);
       assert.equal((await request(`/api/portal/cards/${cardSlug}/redeem`, null, "POST", { branchId })).status, 401);
       const redemptions = await Promise.all(Array.from({ length: 6 }, () => request(`/api/portal/cards/${cardSlug}/redeem`, owner, "POST", { branchId })));
-      assert.equal(redemptions.filter((item) => item.status === 200).length, 1);
-      assert.equal(redemptions.filter((item) => item.status === 409).length, 5);
+      assert.equal(redemptions.filter((item) => item.status === 410).length, 6);
       assert.equal((await request(`/api/cards/${cardSlug}`)).used, true);
       assert.equal(
         (await request("/api/portal/cards", owner)).cards.find(
@@ -731,6 +737,53 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
     assert.ok(!storage.includes("Changed-Generated-Password"));
     assert.equal((await request(`/api/portal/businesses/${created.business.businessId}`, fresh, "DELETE", { confirmName: "Generated Test" })).status, 200);
     assert.equal((await request("/api/auth/me", businessLogin.token)).status, 401);
+  });
+  await t.test("super admins reset business passwords without exposing secrets and revoke old sessions", async () => {
+    const rootToken = await login("platform@example.test", "Changed-Platform-Password");
+    for (const legacy of [false, true]) {
+      const created = await request("/api/portal/businesses", rootToken, "POST", {
+        name: legacy ? "Legacy reset test" : "Generated reset test",
+        limits: { card: 10, branch: 1, account: 1 },
+        ...(legacy ? { loginEmail: "legacy-reset@example.test", password: "Original-Reset-Password" } : {}),
+      });
+      assert.equal(created.status, 201);
+      const id = created.business.businessId;
+      const original = created.credentials || { loginId: created.business.loginEmail, password: "Original-Reset-Password" };
+      const signedIn = await request("/api/auth/login", null, "POST", original);
+      assert.equal(signedIn.status, 200);
+      const url = `/api/portal/businesses/${id}`;
+      const password = "New-Business-Password!234";
+      assert.equal((await request(url, null, "PATCH", { password })).status, 401);
+      assert.equal((await request(url, signedIn.token, "PATCH", { password })).status, 403);
+      for (const invalid of ["", "short", "x".repeat(201), null, 12345678901, {}])
+        assert.equal((await request(url, rootToken, "PATCH", { password: invalid })).status, 400);
+      assert.equal((await request("/api/auth/me", signedIn.token)).status, 200);
+      const reset = await request(url, rootToken, "PATCH", { password });
+      assert.equal(reset.status, 200);
+      assert.ok(!JSON.stringify(reset).includes(password));
+      assert.equal((await request("/api/auth/me", signedIn.token)).status, 401);
+      assert.equal((await request("/api/auth/login", null, "POST", original)).status, 401);
+      const replacement = await request("/api/auth/login", null, "POST", { loginId: original.loginId, password });
+      assert.equal(replacement.status, 200);
+      assert.equal((await request("/api/auth/me", replacement.token)).status, 200);
+      const business = (await request("/api/portal/businesses", rootToken)).businesses.find((item) => item.businessId === id);
+      assert.equal(business.loginId || business.loginEmail, original.loginId);
+      assert.equal(business.passwordHash, undefined);
+      assert.equal(business.passwordVersion, undefined);
+      const controlText = await fs.readFile(path.join(temporary, "server/data/control.json"), "utf8");
+      const businessText = await fs.readFile(businessesPath, "utf8");
+      assert.ok(!controlText.includes(password)); assert.ok(!businessText.includes(password));
+      const meta = JSON.parse(controlText);
+      assert.ok(meta.audit.some((event) => event.action === "Business password reset" && event.businessId === id));
+      // An in-flight old-password login could pick up the new session counter;
+      // its old credential version must still invalidate that signed token.
+      const stale = JSON.parse(Buffer.from(signedIn.token.split(".")[0], "base64url"));
+      stale.version = meta.versions[id];
+      const body = Buffer.from(JSON.stringify(stale)).toString("base64url");
+      const staleToken = `${body}.${crypto.createHmac("sha256", process.env.AUTH_SECRET).update(body).digest("base64url")}`;
+      assert.equal((await request("/api/auth/me", staleToken)).status, 401);
+      assert.equal((await request(url, rootToken, "DELETE", { confirmName: created.business.name })).status, 200);
+    }
   });
   await t.test("bulk deletion checks confirmation, current targets and permissions", async () => {
     const fresh = await login("platform@example.test", "Changed-Platform-Password");

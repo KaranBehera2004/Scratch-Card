@@ -26,8 +26,6 @@
 .bulk-send-consent input { width: 18px; height: 18px; flex-shrink: 0; margin: 0; }
 .bulk-share-recipient { display: grid; gap: 8px; margin: 18px 0; }
 .bulk-share-download { overflow-wrap: anywhere; }
-.p-badge.scratched { background: #ede8ff; color: #6545b8; }
-[data-theme=dark] .p-badge.scratched { background: #393052; color: #d1bdff; }
 @media (max-width: 480px) {
   .bulk-mode-switch .p-button { flex: 1; }
   .bulk-state-notice .p-button { width: 100%; }

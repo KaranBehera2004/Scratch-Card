@@ -32,16 +32,20 @@ test("recipient imports require unique valid numbers and exact branch counts", (
   assert.notEqual(batchFingerprint(base, branches, normalized), batchFingerprint(base, branches, [normalized[1], normalized[0], normalized[2]]));
 });
 
-test("persistent branch batches are atomic, unique, retry-safe, scoped and branch-redeemable", async (t) => {
+test("persistent branch batches are atomic, unique, retry-safe, scoped and automatically redeemed on scratch", async (t) => {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "scratch-bulk-test-"));
   Object.assign(process.env, { DOTENV_CONFIG_PATH: path.join(temporary, "missing-env"), SCRATCH_DATA_ROOT: temporary,
     MONGODB_URI: "", AUTH_SECRET: "isolated-bulk-test-secret", SUPER_ADMIN_LOGIN_ID: "bulk-root",
     SUPER_ADMIN_PASSWORD: "Bulk-Root-Password", IMPACT_VIBES_EMAIL: "bulk-owner@example.test", IMPACT_VIBES_PASSWORD: "Bulk-Owner-Password" });
   for (const key of ["VERCEL", "NETLIFY", "AWS_LAMBDA_FUNCTION_NAME"]) delete process.env[key];
-  // Legacy migration must preserve redemption and backfill scratch history.
+  // Migration preserves completed redemptions and consumes old scratched cards.
   const dataDir = path.join(temporary, "server/data");
   await fs.mkdir(dataDir, { recursive: true });
-  await fs.writeFile(path.join(dataDir, "cards.json"), JSON.stringify([{ slug: "legacy01", couponCode: "LEGACY-CODE", redeemedAt: "2025-01-01T00:00:00.000Z" }]));
+  await fs.writeFile(path.join(dataDir, "cards.json"), JSON.stringify([
+    { slug: "legacy01", couponCode: "LEGACY-CODE", redeemedAt: "2025-01-01T00:00:00.000Z" },
+    { slug: "legacy02", couponCode: "OLD-SCRATCHED", scratchedAt: "2025-02-01T00:00:00.000Z", branchId: "historical-branch", disabled: true },
+    { slug: "legacy03", couponCode: "OLD-REDEEMED", scratchedAt: "2025-02-02T00:00:00.000Z", redeemedAt: "2025-02-03T00:00:00.000Z", redeemedBranchId: "original-branch" },
+  ]));
   const { app, connectDatabase } = await import("./index.js");
   await connectDatabase();
   const server = app.listen(0, "127.0.0.1");
@@ -99,6 +103,11 @@ test("persistent branch batches are atomic, unique, retry-safe, scoped and branc
   for (const branch of branches) assert.equal(batch.coupons.filter((card) => card.branchId === branch.branchId).length, 25);
   const disk = JSON.parse(await fs.readFile(path.join(dataDir, "cards.json"), "utf8"));
   assert.equal(disk[0].scratchedAt, disk[0].redeemedAt);
+  assert.equal(disk[1].redeemedAt, "2025-02-01T00:00:00.000Z");
+  assert.equal(disk[1].redeemedBranchId, "historical-branch");
+  assert.equal(disk[1].disabled, true);
+  assert.equal(disk[2].redeemedAt, "2025-02-03T00:00:00.000Z");
+  assert.equal(disk[2].redeemedBranchId, "original-branch");
   assert.equal(disk.filter((card) => card.batchKey === batch.batchId).length, 75);
   for (const card of disk.filter((card) => card.batchKey)) {
     assert.equal(card.customerPhone, ""); assert.equal(card.language, "te"); assert.equal(card.campaignName, "Summer");
@@ -113,16 +122,19 @@ test("persistent branch batches are atomic, unique, retry-safe, scoped and branc
   assert.equal(over.httpStatus, 403); assert.equal(over.savedCount, 0);
   assert.equal((await request("/api/portal/cards", owner)).cards.length, before + 75);
   const card = batch.coupons[0], branchId = card.branchId;
-  assert.equal((await request(`/api/portal/cards/${card.slug}/redeem`, owner, { branchId })).httpStatus, 409);
-  const revealed = await request(`/api/cards/${card.slug}/claim`, null, {});
-  assert.equal(revealed.httpStatus, 200); assert.ok(revealed.scratchedAt); assert.equal(revealed.redeemedAt, undefined);
+  assert.equal((await request(`/api/portal/cards/${card.slug}/redeem`, owner, { branchId })).httpStatus, 410);
+  // A supplied branch cannot override the persisted assignment on a public claim.
+  const revealed = await request(`/api/cards/${card.slug}/claim`, null, { branchId: branches[1].branchId });
+  assert.equal(revealed.httpStatus, 200); assert.ok(revealed.redeemedAt);
+  assert.equal(revealed.redeemedAt, revealed.scratchedAt); assert.equal(revealed.status, "redeemed");
+  const saved = (await request("/api/portal/cards", owner)).cards.find((item) => item.slug === card.slug);
+  assert.equal(saved.redeemedBranchId, branchId); assert.equal(saved.status, "redeemed");
   const publicCard = await request(`/api/cards/${card.slug}`);
-  assert.equal(publicCard.branchName, "Ameerpet"); assert.equal(publicCard.used, false); assert.equal(publicCard.couponCode, card.couponCode);
+  assert.equal(publicCard.branchName, "Ameerpet"); assert.equal(publicCard.used, true); assert.equal(publicCard.couponCode, undefined);
   for (const field of ["customerPhone", "batchKey", "batchFingerprint"]) assert.equal(publicCard[field], undefined);
-  assert.equal((await request(`/api/portal/cards/${card.slug}/redeem`, owner, { branchId: branches[1].branchId })).httpStatus, 403);
+  assert.equal((await request(`/api/portal/cards/${card.slug}/redeem`, owner, { branchId: branches[1].branchId })).httpStatus, 410);
   const redemptions = await Promise.all(Array.from({ length: 5 }, () => request(`/api/portal/cards/${card.slug}/redeem`, owner, { branchId })));
-  assert.equal(redemptions.filter((result) => result.httpStatus === 200).length, 1);
-  assert.equal(redemptions.filter((result) => result.httpStatus === 409).length, 4);
+  assert.equal(redemptions.filter((result) => result.httpStatus === 410).length, 5);
   assert.equal((await request(`/api/cards/${card.slug}/claim`, null, {})).httpStatus, 409);
   assert.equal((await request(`/api/cards/${card.slug}`)).used, true);
   // Viewer and another tenant cannot create or redeem someone else's batch.
@@ -143,17 +155,20 @@ test("persistent branch batches are atomic, unique, retry-safe, scoped and branc
   assert.equal(race.filter((result) => result.httpStatus === 403).length, 1);
   assert.equal((await request("/api/portal/cards", owner)).cards.length, before + 80);
   const disabled = batch.coupons[2];
-  await request(`/api/cards/${disabled.slug}/claim`, null, {});
   assert.equal((await request(`/api/portal/cards/${disabled.slug}`, owner, { disabled: true }, "PATCH")).httpStatus, 200);
+  assert.equal((await request(`/api/cards/${disabled.slug}/claim`, null, {})).httpStatus, 410);
   assert.equal((await request(`/api/portal/cards/${disabled.slug}/redeem`, owner, { branchId: disabled.branchId })).httpStatus, 410);
   // Replays still return original coupons if a branch is renamed/paused.
   assert.equal((await request(`/api/portal/businesses/impact-vibes/branches/${branches[0].branchId}`, owner, { name: "Renamed branch", status: "paused" }, "PATCH")).httpStatus, 200);
   assert.equal((await request("/api/cards/bulk", owner, draft)).savedCount, 75);
+  const pausedBranchCard = batch.coupons[3];
+  assert.equal((await request(`/api/cards/${pausedBranchCard.slug}/claim`, null, {})).httpStatus, 403);
+  assert.equal((await request("/api/portal/cards", owner)).cards.find((item) => item.slug === pausedBranchCard.slug).used, false);
   const expired = batch.coupons.find((card) => card.branchId === branches[1].branchId);
-  assert.equal((await request(`/api/cards/${expired.slug}/claim`, null, {})).httpStatus, 200);
   const expiredFixture = JSON.parse(await fs.readFile(path.join(dataDir, "cards.json"), "utf8"));
   expiredFixture.find((card) => card.slug === expired.slug).expiresAt = "2020-01-01T00:00:00Z";
   await fs.writeFile(path.join(dataDir, "cards.json"), JSON.stringify(expiredFixture));
+  assert.equal((await request(`/api/cards/${expired.slug}/claim`, null, {})).httpStatus, 410);
   assert.equal((await request(`/api/portal/cards/${expired.slug}/redeem`, owner, { branchId: expired.branchId })).httpStatus, 410);
   assert.equal((await request(`/api/cards/${expired.slug}`)).httpStatus, 410);
 
@@ -220,9 +235,9 @@ test("persistent branch batches are atomic, unique, retry-safe, scoped and branc
   assert.equal(assignedClaim.httpStatus, 200); assert.equal(assignedClaim.customerPhone, undefined);
   assert.equal((await request(`/api/cards/${assignedBatch.coupons[0].slug}`)).customerPhone, undefined);
   assert.equal((await request("/api/portal/cards", owner)).cards.find((card) => card.slug === assignedBatch.coupons[0].slug).customerPhone, "+919876543210");
-  assert.equal((await request(recoveryUrl(), owner)).coupons[0].status, "scratched");
+  assert.equal((await request(recoveryUrl(), owner)).coupons[0].status, "redeemed");
   assert.equal((await request(`/api/portal/cards/${assignedBatch.coupons[0].slug}/redeem`, owner,
-    { branchId: assignedBatch.coupons[0].branchId })).httpStatus, 200);
+    { branchId: assignedBatch.coupons[0].branchId })).httpStatus, 410);
   assert.equal((await request(`/api/portal/cards/${assignedBatch.coupons[1].slug}`, owner,
     { disabled: true }, "PATCH")).httpStatus, 200);
   const recoveryFixture = JSON.parse(await fs.readFile(path.join(dataDir, "cards.json"), "utf8"));
