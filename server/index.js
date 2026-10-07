@@ -410,7 +410,7 @@ const safeUrl = (value) => {
   return parsed.toString();
 };
 const MAX_SHARE_IMAGE_BYTES = 5 * 1024 * 1024;
-const SHARE_PREVIEW_VERSION = "2";
+const SHARE_PREVIEW_VERSION = "3";
 const SHARE_PREVIEW_WIDTH = 1200;
 const SHARE_PREVIEW_HEIGHT = 630;
 function safeShareImage(value) {
@@ -742,8 +742,7 @@ app.get("/share/:slug", async (req, res, next) => {
     <meta property="og:title" content="${html(title)}">
     <meta property="og:description" content="${html(description)}">
     <meta property="og:url" content="${html(shareUrl)}">${imageMeta}
-    <link rel="canonical" href="${html(cardUrl)}">
-    <meta http-equiv="refresh" content="0;url=${html(cardUrl)}">
+    <link rel="canonical" href="${html(shareUrl)}">
   </head><body>
     <p>Opening your scratch card… <a href="${html(cardUrl)}">Continue</a></p>
     <script>window.location.replace(${JSON.stringify(cardUrl)});</script>
