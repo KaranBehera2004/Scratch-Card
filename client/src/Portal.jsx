@@ -443,7 +443,7 @@ function Table({ columns, children, empty }) {
         <thead>
           <tr>
             {columns.map((column) => (
-              <th key={column}>{ui(column)}</th>
+              <th key={column} scope="col">{ui(column)}</th>
             ))}
           </tr>
         </thead>
@@ -459,7 +459,10 @@ function Table({ columns, children, empty }) {
               </td>
             </tr>
           ) : (
-            children
+            React.Children.map(children, (row) => React.isValidElement(row)
+              ? React.cloneElement(row, {}, React.Children.map(row.props.children, (cell, index) =>
+                  React.isValidElement(cell) ? React.cloneElement(cell, { "data-label": ui(columns[index] || "") }) : cell))
+              : row)
           )}
         </tbody>
       </table>
@@ -584,6 +587,47 @@ export default function Portal({
     [previewCard, setPreviewCard] = useState(null),
     [menu, setMenu] = useState(false),
     [busy, setBusy] = useState(false);
+  const [compactNavigation, setCompactNavigation] = useState(() => window.matchMedia("(max-width: 800px), (max-height: 500px) and (max-width: 1100px)").matches);
+  const sidebarRef = useRef(null);
+  const menuButtonRef = useRef(null);
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 800px), (max-height: 500px) and (max-width: 1100px)");
+    const update = () => {
+      setCompactNavigation(query.matches);
+      if (!query.matches) setMenu(false);
+    };
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+  useEffect(() => {
+    if (!compactNavigation || !menu) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const sidebar = sidebarRef.current;
+    sidebar?.querySelector("nav button.active")?.focus({ preventScroll: true });
+    const handleKey = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setMenu(false);
+      } else if (event.key === "Tab") {
+        const controls = [...sidebar.querySelectorAll("button:not(:disabled), a[href], [tabindex='0']")];
+        const first = controls[0], last = controls.at(-1);
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last?.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first?.focus();
+        }
+      }
+    };
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", handleKey);
+      menuButtonRef.current?.focus({ preventScroll: true });
+    };
+  }, [compactNavigation, menu]);
   const business = businesses.find((item) => item.businessId === workspaceId);
   const admin = ["super-admin", "business", "admin"].includes(
     session.user.role,
@@ -1771,7 +1815,9 @@ export default function Portal({
         aria-label={ui("Close menu")}
         onClick={() => setMenu(false)}
       />
-      <aside className="p-sidebar">
+      <aside className="p-sidebar" id="workspace-navigation" ref={sidebarRef}
+        inert={compactNavigation && !menu ? true : undefined}
+        aria-hidden={compactNavigation && !menu ? true : undefined}>
         <a
           className="p-brand"
           href="/"
@@ -1831,11 +1877,14 @@ export default function Portal({
           </button>
         </div>
       </aside>
-      <main className="p-main">
+      <main className="p-main" inert={compactNavigation && menu ? true : undefined}>
         <header className="p-topbar">
           <div>
             <button
               className="p-icon-button p-menu"
+              ref={menuButtonRef}
+              aria-expanded={menu}
+              aria-controls="workspace-navigation"
               onClick={() => setMenu(!menu)}
               aria-label={ui("Open navigation")}
             >

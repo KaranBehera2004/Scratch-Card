@@ -11,6 +11,7 @@ import { workspaceTranslator } from "./workspace-i18n.js";
 import "./styles.css";
 import "./share-link.css";
 import "./card-typography.css";
+import "./responsive.css";
 
 const TRANSLATIONS = {
   en: {
