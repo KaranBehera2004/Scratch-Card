@@ -28,7 +28,7 @@ export default function BatchWhatsAppShare({ batchId, batchIds, coupons, token, 
     try { return normalizeWhatsAppNumber(phone); }
     catch (failure) { setError(ui(failure.message)); return ""; }
   };
-  const chatUrl = (number, count) => `https://wa.me/${number.slice(1)}?text=${encodeURIComponent(
+  const chatUrl = (number, count) => `https://web.whatsapp.com/send?phone=${number.slice(1)}&text=${encodeURIComponent(
     `I will share an Excel file containing ${count} scratch-card coupons here. Please see the attached file after I upload it.`)}`;
   const openBlank = () => {
     try { const chat = window.open("about:blank", "_blank"); if (chat) chat.opener = null; return chat; }
@@ -45,7 +45,7 @@ export default function BatchWhatsAppShare({ batchId, batchIds, coupons, token, 
       lastChatOpen.current = Date.now();
     } catch {
       try { chat?.close(); } catch { /* Browser may already own the tab. */ }
-      setError(ui("WhatsApp chat could not be opened. Allow popups and try again."));
+      setError(ui("WhatsApp Web could not be opened. Allow popups and try again."));
     }
   };
   const share = async (event) => {
@@ -84,7 +84,7 @@ export default function BatchWhatsAppShare({ batchId, batchIds, coupons, token, 
         lastChatOpen.current = Date.now();
       } catch {
         try { chat?.close(); } catch { /* Browser may already own the tab. */ }
-        setError(ui("Excel downloaded, but your browser blocked the WhatsApp chat. Allow popups, then click Open WhatsApp chat."));
+        setError(ui("Excel downloaded, but your browser blocked WhatsApp Web. Allow popups, then click Open WhatsApp Web."));
       }
     } catch (failure) {
       try { chat?.close(); } catch { /* The reserved tab may already be closed. */ }
@@ -93,7 +93,7 @@ export default function BatchWhatsAppShare({ batchId, batchIds, coupons, token, 
   };
   return <dialog ref={dialog} className="p-dialog bulk-send-dialog" aria-labelledby="batch-share-title"
     onCancel={(event) => { event.preventDefault(); close(); }}>
-    <div className="p-dialog-head"><h2 id="batch-share-title">{ui("Send batch Excel via WhatsApp")}</h2>
+    <div className="p-dialog-head"><h2 id="batch-share-title">{ui("Send batch Excel via WhatsApp Web")}</h2>
       <button type="button" className="p-icon-button" aria-label={ui("Close dialog")} disabled={busy} onClick={close}><Icon name="close" /></button></div>
     <p>{ui("All {count} coupons generated in this draft will be included, regardless of branch filters or pages.", { count: coupons.length })}</p>
     <p className="p-builder-note">{ui("Excel includes each coupon’s assigned WhatsApp number. The recipient number below does not change those assignments.")}</p>
@@ -106,14 +106,14 @@ export default function BatchWhatsAppShare({ batchId, batchIds, coupons, token, 
         <label className="bulk-send-consent"><input type="checkbox" checked={permission} onChange={(event) => setPermission(event.target.checked)} />
           <span>{ui("I have permission to share these coupons and contact details with this number")}</span></label>
       </fieldset>
-      <p className="p-alert">{ui("After the chat opens, attach the downloaded Excel file using WhatsApp’s attachment button, then tap Send. This website cannot attach or send the file automatically.")}</p>
+      <p className="p-alert">{ui("After WhatsApp Web opens, attach the downloaded Excel file using its attachment button, then click Send. This website cannot attach or send the file automatically.")}</p>
       {downloaded && <p role="status" className="bulk-share-download">{downloaded.filename} · {ui("{count} coupons", { count: downloaded.count })}<br />
-        {ui("Excel downloaded. Attach the file in WhatsApp and tap Send. Nothing has been sent automatically.")}</p>}
+        {ui("Excel downloaded. Attach the file in WhatsApp Web and click Send. Nothing has been sent automatically.")}</p>}
       {error && <p className="error" role="alert">{error}</p>}
       <footer>
         <button type="button" className="p-button" disabled={busy} onClick={close}>{ui("Close dialog")}</button>
-        {downloaded ? <button type="button" className="p-button primary" disabled={busy || !permission} onClick={openDownloadedChat}>{ui("Open WhatsApp chat")}</button>
-          : <button type="submit" className="p-button primary" disabled={busy || !permission}>{ui(busy ? "Preparing Excel…" : "Download Excel & open WhatsApp")}</button>}
+        {downloaded ? <button type="button" className="p-button primary" disabled={busy || !permission} onClick={openDownloadedChat}>{ui("Open WhatsApp Web")}</button>
+          : <button type="submit" className="p-button primary" disabled={busy || !permission}>{ui(busy ? "Preparing Excel…" : "Download Excel & open WhatsApp Web")}</button>}
       </footer>
     </form>
   </dialog>;

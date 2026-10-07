@@ -995,9 +995,12 @@ test("mandatory WhatsApp creation, direct send, popup recovery and coupon expiry
   await login(page, "owner@example.test", "Owner-Test-Password");
   await nav(page, "Create scratch card");
   const whatsappInput = page.getByLabel("WhatsApp number", { exact: true });
-  const createRequests = [];
+  const createRequests = [], createBodies = [];
   page.on("request", request => {
-    if (request.method() === "POST" && new URL(request.url()).pathname === "/api/cards") createRequests.push(request.url());
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/api/cards") {
+      createRequests.push(request.url());
+      createBodies.push(request.postDataJSON());
+    }
   });
   await expect(whatsappInput).toHaveAttribute("required", "");
   await page.getByRole("button", { name: "Create scratch-card link" }).click();
@@ -1036,19 +1039,52 @@ test("mandatory WhatsApp creation, direct send, popup recovery and coupon expiry
   const calls = await page.evaluate(() => window.__whatsappCalls);
   expect(calls[0].url).toBe("about:blank");
   const whatsappUrl = new URL(calls.find(call => call.action === "navigate").url);
-  expect(whatsappUrl.origin).toBe("https://wa.me");
-  expect(whatsappUrl.pathname).toBe("/447700900123");
+  expect(whatsappUrl.origin).toBe("https://web.whatsapp.com");
+  expect(whatsappUrl.pathname).toBe("/send");
+  expect(whatsappUrl.searchParams.get("phone")).toBe("447700900123");
   expect(whatsappUrl.searchParams.get("text")).toContain(url);
-  await page.getByRole("button", { name: "Share on WhatsApp", exact: true }).click();
+  await page.getByRole("button", { name: "Open WhatsApp Web", exact: true }).click();
   expect((await page.evaluate(() => window.__whatsappCalls)).at(-1).url).toBe(whatsappUrl.href);
   await page.getByRole("button", { name: "Create another" }).click();
   await expect(whatsappInput).toHaveValue("");
-  await whatsappInput.fill("9876543212");
-  await page.getByLabel("Expiry date (optional)").fill("");
-  await page.evaluate(() => window.open = () => null);
+  await page.evaluate(() => {
+    window.__whatsappCalls = [];
+  });
+  const imageInput = page.getByLabel("WhatsApp image");
+  await imageInput.setInputFiles({
+    name: "festival-offer.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"),
+  });
+  await expect(page.getByAltText("WhatsApp share preview")).toBeVisible();
+  await expect(page.getByText("festival-offer.png", { exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 320, height: 700 });
+  await expect.poll(() => page.locator(".p-sidebar").evaluate(element => element.getBoundingClientRect().right)).toBeLessThanOrEqual(1);
+  await expectResponsiveFit(page);
+  await page.screenshot({ path: info.outputPath("direct-send-image-mobile.png"), fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await whatsappInput.fill("9876543213");
   await page.getByRole("button", { name: "Direct send", exact: true }).click();
   await expect(shareLink).toBeVisible();
-  await expect(page.locator(".modal .copied")).toContainText("WhatsApp could not open");
+  expect(createBodies.at(-1).shareImage).toMatch(/^data:image\/png;base64,/);
+  const imageWhatsAppCalls = await page.evaluate(() => window.__whatsappCalls);
+  expect(imageWhatsAppCalls.map(call => call.action)).toEqual(["open", "navigate"]);
+  const imageWhatsAppUrl = new URL(imageWhatsAppCalls[1].url);
+  expect(imageWhatsAppUrl.origin).toBe("https://web.whatsapp.com");
+  expect(imageWhatsAppUrl.searchParams.get("phone")).toBe("919876543213");
+  expect(imageWhatsAppUrl.searchParams.get("text")).toContain(await shareLink.inputValue());
+  await expect(page.locator(".modal .copied")).toContainText("preview-enabled link");
+  await expect(page.getByRole("button", { name: "Open WhatsApp Web", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Download image", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Create another" }).click();
+  await expect(imageInput).toHaveValue("");
+  await expect(page.getByAltText("WhatsApp share preview")).toHaveCount(0);
+  await page.evaluate(() => { window.open = () => null; });
+  await whatsappInput.fill("9876543212");
+  await page.getByLabel("Expiry date (optional)").fill("");
+  await page.getByRole("button", { name: "Direct send", exact: true }).click();
+  await expect(shareLink).toBeVisible();
+  await expect(page.locator(".modal .copied")).toContainText("WhatsApp Web could not open");
   await page.getByRole("button", { name: "Create another" }).click();
   await nav(page, "Coupons");
   const expiringRow = page.getByRole("row").filter({ hasText: "+447700900123" });
@@ -1469,10 +1505,10 @@ test("batch WhatsApp sharing exports every coupon and opens one chat for manual 
   };
   await mockWindow();
   await results.getByRole("button", { name: "Send via WhatsApp", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "Send batch Excel via WhatsApp", exact: true });
+  const dialog = page.getByRole("dialog", { name: "Send batch Excel via WhatsApp Web", exact: true });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByLabel("Recipient WhatsApp number", { exact: true })).toHaveValue("");
-  const submit = dialog.getByRole("button", { name: "Download Excel & open WhatsApp", exact: true });
+  const submit = dialog.getByRole("button", { name: "Download Excel & open WhatsApp Web", exact: true });
   await expect(submit).toBeDisabled();
   const permission = dialog.getByLabel("I have permission to share these coupons and contact details with this number", { exact: true });
   await permission.check();
@@ -1533,7 +1569,8 @@ test("batch WhatsApp sharing exports every coupon and opens one chat for manual 
   expect(calls.map(call => call.action)).toEqual(["open", "navigate"]);
   expect(calls[0].url).toBe("about:blank");
   const url = new URL(calls[1].url);
-  expect(url.origin).toBe("https://wa.me"); expect(url.pathname).toBe("/447700900123");
+  expect(url.origin).toBe("https://web.whatsapp.com"); expect(url.pathname).toBe("/send");
+  expect(url.searchParams.get("phone")).toBe("447700900123");
   expect(url.searchParams.get("text")).toContain("32");
   expect(url.searchParams.get("text").toLowerCase()).toContain("excel");
   await expect(dialog).toContainText("This website cannot attach or send the file automatically.");
@@ -1551,13 +1588,16 @@ test("batch WhatsApp sharing exports every coupon and opens one chat for manual 
   await submit.click();
   await blockedDownloadPromise;
   await expect(dialog.getByRole("alert")).toContainText("blocked");
-  await expect(dialog.getByRole("button", { name: "Open WhatsApp chat", exact: true })).toBeEnabled();
+  await expect(dialog.getByRole("button", { name: "Open WhatsApp Web", exact: true })).toBeEnabled();
   expect(downloads).toHaveLength(2);
   await mockWindow();
-  await dialog.getByRole("button", { name: "Open WhatsApp chat", exact: true }).click();
+  await dialog.getByRole("button", { name: "Open WhatsApp Web", exact: true }).click();
   const recoveryCalls = await page.evaluate(() => window.__batchChatCalls);
   expect(recoveryCalls.filter(call => call.action === "navigate")).toHaveLength(1);
-  expect(new URL(recoveryCalls.find(call => call.action === "navigate").url).pathname).toBe("/919876543210");
+  const recoveryUrl = new URL(recoveryCalls.find(call => call.action === "navigate").url);
+  expect(recoveryUrl.origin).toBe("https://web.whatsapp.com");
+  expect(recoveryUrl.pathname).toBe("/send");
+  expect(recoveryUrl.searchParams.get("phone")).toBe("919876543210");
   expect(downloads).toHaveLength(2);
   if ((await page.locator(".p-shell").getAttribute("data-theme")) !== "dark") {
     await dialog.getByRole("button", { name: "Close dialog", exact: true }).last().click();
@@ -1805,10 +1845,10 @@ test("bulk branch controls continue the same draft across generations, refreshes
     };
   });
   await results.getByRole("button", { name: "Send via WhatsApp", exact: true }).click();
-  const shareDialog = page.getByRole("dialog", { name: "Send batch Excel via WhatsApp", exact: true });
+  const shareDialog = page.getByRole("dialog", { name: "Send batch Excel via WhatsApp Web", exact: true });
   await shareDialog.getByLabel("Recipient WhatsApp number", { exact: true }).fill("9876543210");
   await shareDialog.getByLabel("I have permission to share these coupons and contact details with this number", { exact: true }).check();
-  const shareSubmit = shareDialog.getByRole("button", { name: "Download Excel & open WhatsApp", exact: true });
+  const shareSubmit = shareDialog.getByRole("button", { name: "Download Excel & open WhatsApp Web", exact: true });
   const batchReads = [], shareDownloads = [];
   page.on("download", download => shareDownloads.push(download));
   await page.route("**/api/portal/batches/**", route => {
@@ -1835,7 +1875,10 @@ test("bulk branch controls continue the same draft across generations, refreshes
   await expect(shareDialog.getByRole("status")).toContainText("7");
   const chats = await page.evaluate(() => window.__continuousChats);
   expect(chats.filter(call => call.action === "navigate")).toHaveLength(1);
-  expect(new URL(chats.find(call => call.action === "navigate").url).pathname).toBe("/919876543210");
+  const continuousChatUrl = new URL(chats.find(call => call.action === "navigate").url);
+  expect(continuousChatUrl.origin).toBe("https://web.whatsapp.com");
+  expect(continuousChatUrl.pathname).toBe("/send");
+  expect(continuousChatUrl.searchParams.get("phone")).toBe("919876543210");
   await shareDialog.getByRole("button", { name: "Close dialog", exact: true }).last().click();
   await page.getByLabel("Remove branch row 1", { exact: true }).click();
   await addRow.click();

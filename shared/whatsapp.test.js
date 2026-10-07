@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeWhatsAppNumber, whatsAppCardUrl } from "./whatsapp.js";
+import { normalizeWhatsAppNumber, whatsAppCardMessage, whatsAppCardUrl } from "./whatsapp.js";
 
 test("WhatsApp numbers normalize Indian mobile and explicit international formats", () => {
   assert.equal(normalizeWhatsAppNumber("98765 43210"), "+919876543210");
@@ -20,7 +20,9 @@ test("WhatsApp numbers must be present and contain a valid international or Indi
 test("WhatsApp links target the entered customer with an encoded card message", () => {
   const cardUrl = "https://example.test/card/abc123";
   const url = new URL(whatsAppCardUrl("9876543210", cardUrl));
-  assert.equal(url.origin, "https://wa.me");
-  assert.equal(url.pathname, "/919876543210");
-  assert.equal(url.searchParams.get("text"), `A surprise is waiting for you! Scratch your card here: ${cardUrl}`);
+  assert.equal(url.origin, "https://web.whatsapp.com");
+  assert.equal(url.pathname, "/send");
+  assert.equal(url.searchParams.get("phone"), "919876543210");
+  assert.equal(url.searchParams.get("text"), whatsAppCardMessage(cardUrl));
+  assert.equal(whatsAppCardMessage(cardUrl), `A surprise is waiting for you! Scratch your card here: ${cardUrl}`);
 });
