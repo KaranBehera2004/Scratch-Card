@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import "./portal.css";
 import "./portal-theme.css";
 import { WorkspaceLocale, useWorkspaceText, workspaceTranslator } from "./workspace-i18n.js";
+import { summarizeCampaigns } from "./campaigns.js";
+import { EMPTY_COUPON_FILTERS, couponBranchKey, couponCampaignKey, couponDateBounds, filterCouponCards } from "./coupon-filters.js";
 
 export async function portalApi(url, token, method = "GET", body) {
   const response = await fetch(url, {
@@ -24,7 +26,7 @@ export async function portalApi(url, token, method = "GET", body) {
   if (!response.ok) {
     if (response.status === 401 && token)
       window.dispatchEvent(new Event("scratch:expired"));
-    throw new Error(result.message || "Unable to complete request.");
+    throw Object.assign(new Error(result.message || "Unable to complete request."), { status: response.status, savedCount: result.savedCount });
   }
   return result;
 }
@@ -435,7 +437,7 @@ function CredentialsDialog({ credentials, onClose }) {
     </dialog>
   );
 }
-function Table({ columns, children, empty }) {
+export function Table({ columns, children, empty }) {
   const ui = useWorkspaceText();
   return (
     <div className="p-table-scroll">
@@ -460,7 +462,7 @@ function Table({ columns, children, empty }) {
             </tr>
           ) : (
             React.Children.map(children, (row) => React.isValidElement(row)
-              ? React.cloneElement(row, {}, React.Children.map(row.props.children, (cell, index) =>
+              ? React.cloneElement(row, {}, React.Children.toArray(row.props.children).map((cell, index) =>
                   React.isValidElement(cell) ? React.cloneElement(cell, { "data-label": ui(columns[index] || "") }) : cell))
               : row)
           )}
@@ -469,7 +471,7 @@ function Table({ columns, children, empty }) {
     </div>
   );
 }
-function Badge({ status }) {
+export function Badge({ status }) {
   const ui = useWorkspaceText();
   return <span className={`p-badge ${status}`}>{ui(status)}</span>;
 }
@@ -582,6 +584,7 @@ export default function Portal({
     [notice, setNotice] = useState(""),
     [search, setSearch] = useState(""),
     [status, setStatus] = useState("all"),
+    [couponFilters, setCouponFilters] = useState(() => ({ ...EMPTY_COUPON_FILTERS })),
     [editor, setEditor] = useState(null),
     [credentials, setCredentials] = useState(null),
     [previewCard, setPreviewCard] = useState(null),
@@ -629,6 +632,9 @@ export default function Portal({
     };
   }, [compactNavigation, menu]);
   const business = businesses.find((item) => item.businessId === workspaceId);
+  useEffect(() => {
+    setCouponFilters({ ...EMPTY_COUPON_FILTERS });
+  }, [tab, workspaceId]);
   const admin = ["super-admin", "business", "admin"].includes(
     session.user.role,
   );
@@ -750,18 +756,28 @@ export default function Portal({
     }
   };
   const saved = async (values) => {
-    const result = await editor.save(values);
+    const savedEditor = editor;
+    const result = await savedEditor.save(values);
     setEditor(null);
     if (result?.credentials) setCredentials({ ...result.credentials, name: result.business?.name || result.user?.name });
-    setNotice(editor.successMessage || "Changes saved successfully.");
-    await refresh();
+    setNotice(savedEditor.successMessage || "Changes saved successfully.");
+    savedEditor.onSaved?.(result);
+    await refresh(savedEditor.quietRefresh === true);
   };
   const match = (value) =>
     `${JSON.stringify(value)} ${ui(value.status || "")} ${value.defaultName || ("campaignName" in value && !value.campaignName) ? ui("General rewards") : ""}`
       .toLowerCase().includes(search.toLowerCase());
-  const visibleCards = cards.filter(
+  const couponSection = ["Coupons", "Scratch cards"].includes(tab);
+  const visibleCards = filterCouponCards(cards.filter(
     (item) => match(item) && (status === "all" || item.status === status),
-  );
+  ), couponSection ? couponFilters : EMPTY_COUPON_FILTERS);
+  const couponDateError = couponDateBounds(couponFilters).error;
+  const updateCouponFilter = (key, value) => setCouponFilters((current) => ({ ...current, [key]: value }));
+  const clearCouponFilters = () => {
+    setCouponFilters({ ...EMPTY_COUPON_FILTERS });
+    setSearch("");
+    setStatus("all");
+  };
   const branches = businesses
     .filter((item) => global || item.businessId === workspaceId)
     .flatMap((item) =>
@@ -775,6 +791,22 @@ export default function Portal({
     value: item.businessId,
     label: item.name,
   }));
+  const visibleBranches = branches.filter(match);
+  const couponBranchOptions = new Map(branches.map((branch) => [couponBranchKey(branch), {
+    key: couponBranchKey(branch),
+    name: global ? `${branch.businessName} · ${branch.name}` : branch.name,
+  }]));
+  // Retain options for older cards whose assigned branch no longer appears in management.
+  for (const card of cards) {
+    if (!card.branchId || couponBranchOptions.has(couponBranchKey(card))) continue;
+    const name = card.branchName || card.branchId;
+    couponBranchOptions.set(couponBranchKey(card), {
+      key: couponBranchKey(card), name: global ? `${card.senderName} · ${name}` : name,
+    });
+  }
+  const couponCampaignOptions = [...new Map(cards.map((card) => [couponCampaignKey(card.campaignName), {
+    key: couponCampaignKey(card.campaignName), name: card.campaignName || ui("General rewards"),
+  }])).values()].sort((a, b) => a.name.localeCompare(b.name));
   const businessSelect = {
     key: "businessId",
     label: "Business",
@@ -849,17 +881,27 @@ export default function Portal({
           businessPayload(values),
         ),
     });
-  const createBranch = () =>
+  const createBranch = (inline = false, onSaved) =>
     setEditor({
       title: "Add branch",
       fields: [...(global ? [businessSelect] : []), ...branchFields],
       values: { businessId: workspaceId },
-      save: (values) =>
-        api(
+      quietRefresh: inline === true,
+      onSaved: typeof onSaved === "function" ? onSaved : undefined,
+      save: async (values) => {
+        const result = await api(
           `/api/portal/businesses/${values.businessId}/branches`,
           "POST",
           values,
-        ),
+        );
+        // The response confirms persistence. Update this workspace without
+        // unmounting its draft form, even if a later background refresh fails.
+        if (inline === true && result.branch) setBusinesses((current) => current.map((item) =>
+          item.businessId === values.businessId ? { ...item, branches: [
+            ...(item.branches || []).filter((branch) => branch.branchId !== result.branch.branchId), result.branch,
+          ] } : item));
+        return result;
+      },
     });
   const createAccount = () =>
     setEditor({
@@ -929,7 +971,7 @@ export default function Portal({
     setError("");
     try {
       const { default: write } = await import("write-excel-file/universal");
-      const labels = t("excelHeaders"),
+      const labels = [...t("excelHeaders"), ui("Expiry date"), ui("WhatsApp number")],
         rows = visibleCards.map((item) =>
           [
             item.couponCode,
@@ -953,6 +995,8 @@ export default function Portal({
               ? new Date(item.redeemedAt).toLocaleString(`${language}-IN`)
               : "—",
             `${location.origin}/card/${item.slug}`,
+            item.expiresAt ? localizedDate(item.expiresAt) : ui("No expiry"),
+            item.customerPhone || "—",
           ].map((value) => ({ value: String(value ?? "") })),
         );
       const blob = await write(
@@ -988,24 +1032,81 @@ export default function Portal({
   };
   const used = cards.filter((item) => item.used).length,
     available = cards.filter((item) => item.status === "available").length;
-  const campaigns = Object.values(
-    cards.reduce((groups, item) => {
-      const key = `${item.businessId}:${item.campaignName || "General rewards"}`;
-      const group = (groups[key] ||= {
-        name: item.campaignName || "General rewards",
-        defaultName: !item.campaignName,
-        businessId: item.businessId,
-        businessName:
-          businesses.find((value) => value.businessId === item.businessId)
-            ?.name || item.senderName,
-        total: 0,
-        used: 0,
-      });
-      group.total++;
-      group.used += item.used ? 1 : 0;
-      return groups;
-    }, {}),
-  );
+  const campaigns = summarizeCampaigns(cards, businesses);
+  const campaignRows = campaigns.flatMap((campaign) => campaign.branches.map((branch) => ({
+    ...campaign,
+    ...branch,
+    branches: undefined,
+  }))).filter(match);
+  const exportCampaigns = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const { default: write } = await import("write-excel-file/universal");
+      const labels = ["Campaign", "Business", "Branch", "Scratch cards", "Redeemed", "Conversion"].map((label) => ui(label));
+      const rows = campaignRows.map((item) => [
+        { value: item.defaultName ? ui("General rewards") : item.name },
+        { value: item.businessName || "—" },
+        { value: item.branchId ? item.branchName : ui("All branches") },
+        { value: item.total, type: Number },
+        { value: item.used, type: Number },
+        { value: item.used / item.total, type: Number, format: "0%" },
+      ]);
+      const blob = await write([
+        labels.map((value) => ({ value, fontWeight: "bold", backgroundColor: "#17142D", textColor: "#FFFFFF" })),
+        ...rows,
+      ], {
+        sheet: ui("Campaigns"),
+        columns: labels.map((_, index) => ({ width: index < 3 ? 30 : 18 })),
+        stickyRowsCount: 1,
+      }).toBlob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `campaigns-${language}-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setNotice("Excel download started.");
+    } catch (error) {
+      setError(error.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const exportBranches = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const { default: write } = await import("write-excel-file/universal");
+      const labels = ["Branch", "Business", "Address", "Access"].map((label) => ui(label));
+      const rows = visibleBranches.map((branch) => [
+        branch.name, branch.businessName, branch.address || "—", ui(branch.status || "active"),
+      ].map((value) => ({ value: String(value ?? "") })));
+      const blob = await write([
+        labels.map((value) => ({ value, fontWeight: "bold", backgroundColor: "#17142D", textColor: "#FFFFFF" })),
+        ...rows,
+      ], {
+        sheet: ui("Branches"),
+        columns: [{ width: 30 }, { width: 30 }, { width: 45 }, { width: 18 }],
+        stickyRowsCount: 1,
+      }).toBlob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `branches-${language}-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setNotice("Excel download started.");
+    } catch (error) {
+      setError(error.message);
+    } finally {
+      setBusy(false);
+    }
+  };
   const stats = [
     {
       title: global ? "Businesses" : "Scratch cards",
@@ -1040,14 +1141,16 @@ export default function Portal({
       icon: "analytics",
     },
   ];
-  const cardsTable = (rows) => (
+  const cardsTable = (rows, showPhone = false) => (
     <Table
       columns={[
         "Reward & coupon",
+        ...(showPhone ? ["WhatsApp number"] : []),
         ...(global ? ["Business"] : ["Branch"]),
         "Campaign",
         "Status",
         "Created",
+        ...(showPhone ? ["Expiry date"] : []),
         "Actions",
       ]}
       empty={!rows.length}
@@ -1058,6 +1161,7 @@ export default function Portal({
             <b>{item.offerTitle}</b>
             <small className="p-code">{item.couponCode}</small>
           </td>
+          {showPhone && <td>{item.customerPhone || "—"}</td>}
           <td>
             {global
               ? businesses.find((value) => value.businessId === item.businessId)
@@ -1070,6 +1174,7 @@ export default function Portal({
             <Badge status={item.status} />
           </td>
           <td>{localizedDate(item.createdAt)}</td>
+          {showPhone && <td>{item.expiresAt ? localizedDate(item.expiresAt) : ui("No expiry")}</td>}
           <td>
             <div className="p-row-actions">
               <button onClick={() => setPreviewCard(item)}>{ui("Preview")}</button>
@@ -1101,6 +1206,19 @@ export default function Portal({
                 >
                   {ui(item.disabled ? "Enable" : "Disable")}
                 </button>
+              )}
+              {canCreate && item.status === "scratched" && (
+                <button disabled={busy} onClick={() => {
+                  const businessBranches = businesses.find((value) => value.businessId === item.businessId)?.branches || branches.filter((value) => value.businessId === item.businessId);
+                  const choices = businessBranches.filter((value) => value.status === "active" && (!item.branchId || value.branchId === item.branchId));
+                  if (!choices.length) { setError("No active redemption branch is available."); return; }
+                  setEditor({ title: "Redeem coupon", description: `Confirm redemption of ${item.couponCode} at its assigned branch.`,
+                    fields: [{ key: "branchId", label: "Redemption branch", type: "select", required: true,
+                      options: choices.map((branch) => ({ value: branch.branchId, label: branch.name })) }],
+                    values: { branchId: choices[0].branchId },
+                    save: (values) => api(scoped(`/api/portal/cards/${item.slug}/redeem`), "POST", { ...values, businessId: item.businessId }),
+                  });
+                }}>{ui("Redeem")}</button>
               )}
             </div>
           </td>
@@ -1245,6 +1363,8 @@ export default function Portal({
             }}
             business={business}
             onCreated={() => refresh(true)}
+            onCreateBranch={admin ? (onSaved) => createBranch(true, onSaved) : undefined}
+            onManageBranches={() => navigate("Branches")}
           />
         </div>
       );
@@ -1330,9 +1450,9 @@ export default function Portal({
       );
     }
     if (tab === "Scratch cards" || tab === "Coupons")
-      return <article className="p-card">{cardsTable(visibleCards)}</article>;
+      return <article className="p-card">{cardsTable(visibleCards, true)}</article>;
     if (tab === "Branches") {
-      const rows = branches.filter(match);
+      const rows = visibleBranches;
       return (
         <article className="p-card">
           <Table
@@ -1459,16 +1579,25 @@ export default function Portal({
       </article>;
     }
     if (tab === "Campaigns") {
-      const rows = campaigns.filter(match);
+      const rows = campaignRows;
       return (
+        <>
+        <div className="p-metrics">
+          <article>
+            <span>{ui("Total scratch cards")}</span>
+            <strong>{cards.length}</strong>
+            <small>{ui("Across all campaigns and branches")}</small>
+          </article>
+        </div>
         <article className="p-card">
           <div className="p-info">
-            {ui("Set a campaign name when creating a scratch card. Cards with the same name in a business are reported together.")}
+            {ui("Campaign results are grouped by business and branch. All branches counts cards without a specific branch.")}
           </div>
           <Table
             columns={[
               "Campaign",
               "Business",
+              "Branch",
               "Scratch cards",
               "Redeemed",
               "Conversion",
@@ -1476,11 +1605,12 @@ export default function Portal({
             empty={!rows.length}
           >
             {rows.map((item) => (
-              <tr key={`${item.businessId}:${item.name}`}>
+              <tr key={JSON.stringify([item.key, item.branchId])}>
                 <td>
                   <b>{item.defaultName ? ui("General rewards") : item.name}</b>
                 </td>
                 <td>{item.businessName}</td>
+                <td>{item.branchId ? item.branchName : ui("All branches")}</td>
                 <td>{item.total}</td>
                 <td>{item.used}</td>
                 <td>{Math.round((item.used / item.total) * 100)}%</td>
@@ -1488,6 +1618,7 @@ export default function Portal({
             ))}
           </Table>
         </article>
+        </>
       );
     }
     if (tab === "Analytics")
@@ -1940,6 +2071,11 @@ export default function Portal({
                 <h1>{ui(tab)}</h1>
               </div>
               <div className="p-heading-actions">
+              {!global && canCreate && tab === "Campaigns" && (
+                <button className="p-button primary" onClick={() => navigate("Create scratch card")}>
+                  <Icon name="plus" />{ui("Create scratch card")}
+                </button>
+              )}
               {global && tab === "Businesses" && (
                 <button className="p-button danger" disabled={busy || loading || !businesses.length} onClick={deleteAllBusinesses}>
                   Delete all businesses
@@ -1991,6 +2127,16 @@ export default function Portal({
                 />
               </div>
               <div>
+                {tab === "Campaigns" && (
+                  <button className="p-button" disabled={busy || loading || !campaignRows.length} onClick={exportCampaigns}>
+                    <Icon name="download" />{busy ? ui("Working…") : ui("Export campaigns")}
+                  </button>
+                )}
+                {tab === "Branches" && (
+                  <button className="p-button" disabled={busy || loading || !visibleBranches.length} onClick={exportBranches}>
+                    <Icon name="download" />{busy ? ui("Working…") : ui("Export branches")}
+                  </button>
+                )}
                 {["Coupons", "Scratch cards"].includes(tab) && (
                   <>
                     <select
@@ -2001,6 +2147,7 @@ export default function Portal({
                       {[
                         "all",
                         "available",
+                        "scratched",
                         "redeemed",
                         "disabled",
                         "expired",
@@ -2029,6 +2176,73 @@ export default function Portal({
                 </button>
               </div>
             </div>
+          )}
+          {couponSection && (
+            <section className="p-card p-coupon-filters" aria-label={ui("Coupon filters")}>
+              <div className="p-card-title">
+                <h2>{ui("Coupon filters")}</h2>
+                <button type="button" className="p-button small" onClick={clearCouponFilters}>
+                  {ui("Clear filters")}
+                </button>
+              </div>
+              <div className="p-coupon-filter-fields">
+                <label>
+                  {ui("WhatsApp number")}
+                  <input type="search" inputMode="tel" autoComplete="off"
+                    aria-label={ui("Search WhatsApp number")}
+                    placeholder={ui("Number or last digits…")}
+                    value={couponFilters.number}
+                    onChange={(event) => updateCouponFilter("number", event.target.value)} />
+                </label>
+                <label>
+                  {ui("Branch")}
+                  <select aria-label={ui("Filter by branch")} value={couponFilters.branch}
+                    onChange={(event) => updateCouponFilter("branch", event.target.value)}>
+                    <option value="">{ui("Any branch")}</option>
+                    <option value="unassigned">{ui("No specific branch")}</option>
+                    {[...couponBranchOptions.values()].sort((a, b) => a.name.localeCompare(b.name)).map((branch) => (
+                      <option key={branch.key} value={branch.key}>{branch.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  {ui("Campaign")}
+                  <select aria-label={ui("Filter by campaign")} value={couponFilters.campaign}
+                    onChange={(event) => updateCouponFilter("campaign", event.target.value)}>
+                    <option value="">{ui("All campaigns")}</option>
+                    {couponCampaignOptions.map((campaign) => (
+                      <option key={campaign.key} value={campaign.key}>{campaign.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  {ui("Created date range")}
+                  <select aria-label={ui("Created date range")} value={couponFilters.dateRange}
+                    onChange={(event) => setCouponFilters((current) => ({ ...current, dateRange: event.target.value, from: "", to: "" }))}>
+                    {[["all", "All time"], ["today", "Today"], ["week", "Last 7 days"], ["month", "Last 30 days"], ["custom", "Custom dates"]].map(([value, label]) => (
+                      <option key={value} value={value}>{ui(label)}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              {couponFilters.dateRange === "custom" && (
+                <div className="p-coupon-custom-dates">
+                  <label>{ui("Created from")}
+                    <input type="date" aria-label={ui("Created from")} value={couponFilters.from}
+                      onChange={(event) => updateCouponFilter("from", event.target.value)} />
+                  </label>
+                  <label>{ui("Created to")}
+                    <input type="date" aria-label={ui("Created to")} value={couponFilters.to}
+                      onChange={(event) => updateCouponFilter("to", event.target.value)} />
+                  </label>
+                </div>
+              )}
+              {couponDateError && <p className="error" role="alert">{ui(couponDateError)}</p>}
+              <div className="p-coupon-filter-summary">
+                <span>{ui("Date filters use the card creation date.")}</span>
+                <span aria-live="polite">{ui("Showing {count} of {total} coupons", { count: visibleCards.length, total: cards.length })}</span>
+              </div>
+            </section>
           )}
           {loading ? (
             <div className="p-loading">

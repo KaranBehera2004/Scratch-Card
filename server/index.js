@@ -7,6 +7,8 @@ import express from "express";
 import mongoose from "mongoose";
 import { installControls } from "./control.js";
 import { ensureUniqueIndex } from "./indexes.js";
+import { normalizeWhatsAppNumber } from "../shared/whatsapp.js";
+import { installBulkRoutes, bad, couponStatus, checkCapacity } from "./bulk.js";
 
 const rootDir = process.env.SCRATCH_DATA_ROOT || process.cwd();
 const dataDir = path.join(rootDir, "server", "data");
@@ -17,7 +19,8 @@ const port = Number(process.env.PORT) || 5051;
 
 app.disable("x-powered-by");
 app.use(cors({ origin: process.env.CLIENT_ORIGIN || true }));
-app.use(express.json({ limit: "20kb" }));
+// A bounded 1,000-row recipient import can exceed the original single-card cap.
+app.use(express.json({ limit: "256kb" }));
 
 const schema = new mongoose.Schema(
   {
@@ -27,6 +30,7 @@ const schema = new mongoose.Schema(
     offerTitle: { type: String, required: true, maxlength: 30 },
     description: { type: String, required: true, maxlength: 80 },
     couponCode: { type: String, required: true, maxlength: 24 },
+    customerPhone: { type: String, maxlength: 16, default: "" },
     claimUrl: { type: String, maxlength: 500, default: "" },
     accentColor: { type: String, default: "#ffb33f" },
     pageColor: { type: String, default: "#0b0c1c" },
@@ -39,6 +43,10 @@ const schema = new mongoose.Schema(
     expiresAt: { type: Date, default: null },
     disabled: { type: Boolean, default: false },
     redeemedAt: { type: Date, default: null },
+    scratchedAt: { type: Date, default: null },
+    redeemedBranchId: { type: String, default: "" },
+    batchKey: { type: String, index: true },
+    batchFingerprint: String,
   },
   { timestamps: true, versionKey: false, autoIndex: false },
 );
@@ -57,6 +65,7 @@ const Business = mongoose.model(
       loginId: { type: String, unique: true, sparse: true },
       passwordHash: String,
       status: { type: String, default: "active" },
+      generationRevision: { type: Number, default: 0 },
       deletedAt: Date,
       branches: {
         type: [
@@ -68,6 +77,10 @@ const Business = mongoose.model(
     { timestamps: true, versionKey: false, autoIndex: false },
   ),
 );
+const CouponBatch = mongoose.model("CouponBatch", new mongoose.Schema({
+  key: { type: String, required: true }, fingerprint: String, businessId: String,
+  savedCount: Number,
+}, { timestamps: true, versionKey: false, autoIndex: false }));
 let atlasConnected = false;
 let databasePromise = null;
 let localCardQueue = Promise.resolve();
@@ -181,6 +194,13 @@ async function initializeDatabase() {
   });
   await normalizeMongoCoupons();
   await ensureUniqueIndex(Card.collection, "couponCode", "unique_coupon_code");
+  await ensureUniqueIndex(Card.collection, "slug", "unique_scratch_slug");
+  await Card.collection.createIndex({ batchKey: 1 });
+  await CouponBatch.init();
+  await ensureUniqueIndex(CouponBatch.collection, "key", "unique_coupon_batch_key");
+  await Card.updateMany({ redeemedAt: { $ne: null }, scratchedAt: null }, [
+    { $set: { scratchedAt: "$redeemedAt" } },
+  ]);
   const ControlRecord = mongoose.model("ControlRecord");
   await ControlRecord.init();
   await Business.init();
@@ -217,6 +237,11 @@ async function normalizeLocalCoupons() {
   const usedCodes = new Set();
   let changed = false;
   for (const card of cards) {
+    // Preserve legacy redemption history; previously scratching also redeemed.
+    if (card.redeemedAt && !card.scratchedAt) {
+      card.scratchedAt = card.redeemedAt;
+      changed = true;
+    }
     let code = clean(card.couponCode, 24).toUpperCase();
     while (!code || usedCodes.has(code)) {
       code = generateCouponCode();
@@ -240,50 +265,6 @@ async function normalizeMongoCoupons() {
       await Card.updateOne({ _id: card._id }, { $set: { couponCode: code } });
     usedCodes.add(code);
   }
-}
-async function saveCard(card, requestedCode) {
-  if (atlasConnected) {
-    const candidate = {
-      ...card,
-      couponCode: requestedCode || generateCouponCode(),
-    };
-    try {
-      return await Card.create(candidate);
-    } catch (error) {
-      if (error.code === 11000) {
-        if (requestedCode) {
-          const duplicate = new Error(
-            "This coupon code already exists. Choose another code or leave it blank.",
-          );
-          duplicate.code = "DUPLICATE_COUPON";
-          throw duplicate;
-        }
-        return saveCard(card, "");
-      }
-      throw error;
-    }
-  }
-  return mutateLocalCards((cards) => {
-    const usedCodes = new Set(
-      cards.map((item) => clean(item.couponCode, 24).toUpperCase()),
-    );
-    if (requestedCode && usedCodes.has(requestedCode)) {
-      const duplicate = new Error(
-        "This coupon code already exists. Choose another code or leave it blank.",
-      );
-      duplicate.code = "DUPLICATE_COUPON";
-      throw duplicate;
-    }
-    let couponCode = requestedCode || generateCouponCode();
-    while (usedCodes.has(couponCode)) couponCode = generateCouponCode();
-    const savedCard = {
-      ...card,
-      couponCode,
-      createdAt: new Date().toISOString(),
-    };
-    cards.push(savedCard);
-    return savedCard;
-  });
 }
 async function findCard(slug) {
   return atlasConnected
@@ -313,7 +294,7 @@ async function findAllCoupons() {
   const cards = atlasConnected
     ? await Card.find()
         .select(
-          "slug couponCode offerTitle senderName businessId createdAt redeemedAt",
+          "slug couponCode offerTitle senderName businessId customerPhone expiresAt createdAt redeemedAt",
         )
         .sort({ createdAt: -1 })
         .lean()
@@ -327,6 +308,8 @@ async function findAllCoupons() {
       offerTitle,
       senderName,
       businessId,
+      customerPhone,
+      expiresAt,
       createdAt,
       redeemedAt,
     }) => ({
@@ -335,6 +318,8 @@ async function findAllCoupons() {
       offerTitle,
       senderName,
       businessId: businessId || "impact-vibes",
+      customerPhone: customerPhone || "",
+      expiresAt: expiresAt || null,
       createdAt,
       redeemedAt: redeemedAt || null,
       used: Boolean(redeemedAt),
@@ -351,7 +336,8 @@ async function claimLocalCard(slug) {
       (cards[index].expiresAt && new Date(cards[index].expiresAt) <= new Date())
     )
       return { status: "unavailable" };
-    cards[index].redeemedAt = new Date().toISOString();
+    if (cards[index].scratchedAt) return { status: "claimed", card: cards[index] };
+    cards[index].scratchedAt = new Date().toISOString();
     return { status: "claimed", card: cards[index] };
   });
 }
@@ -362,13 +348,17 @@ async function claimCard(slug) {
       slug,
       disabled: { $ne: true },
       redeemedAt: null,
+      scratchedAt: null,
       $or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }],
     },
-    { $set: { redeemedAt: new Date() } },
+    { $set: { scratchedAt: new Date() } },
     { new: true },
   ).lean();
   if (card) return { status: "claimed", card };
   const existing = await Card.findOne({ slug }).lean();
+  if (existing?.scratchedAt && !existing.redeemedAt && !existing.disabled &&
+      (!existing.expiresAt || new Date(existing.expiresAt) > new Date()))
+    return { status: "claimed", card: existing };
   return {
     status: !existing
       ? "missing"
@@ -378,8 +368,16 @@ async function claimCard(slug) {
   };
 }
 function publicCard(card) {
-  const { _id, couponCode, ...safeCard } = card;
-  return { ...safeCard, used: Boolean(card.redeemedAt), redeemedAt: undefined };
+  // Explicitly allow presentation fields only. Customer contact details are private.
+  const fields = ["slug", "senderName", "headline", "offerTitle", "description",
+    "claimUrl", "accentColor", "pageColor", "textColor", "businessId",
+    "branchId", "branchName", "language", "campaignName", "expiresAt", "createdAt"];
+  return {
+    ...Object.fromEntries(fields.map((key) => [key, card[key]])),
+    used: Boolean(card.redeemedAt),
+    scratchedAt: card.scratchedAt || null,
+    ...(card.scratchedAt && !card.redeemedAt ? { couponCode: card.couponCode } : {}),
+  };
 }
 const clean = (value, max) =>
   String(value ?? "")
@@ -393,7 +391,7 @@ const safeUrl = (value) => {
     throw new Error("Claim link must use http or https.");
   return parsed.toString();
 };
-const { authenticate, audit, validateCreate, getBusiness } = installControls(
+const { authenticate, audit, validateCreate, getBusiness, businessLimits, cardRows, scope } = installControls(
   app,
   {
     Business,
@@ -411,6 +409,163 @@ const { authenticate, audit, validateCreate, getBusiness } = installControls(
     safeUrl,
   },
 );
+
+function buildCard(body, business, bulk = false, allowExpired = false) {
+  if (body.language !== undefined && !["en", "hi", "te"].includes(body.language))
+    throw bad("Choose English, Hindi or Telugu for the card language.");
+  const expiresAt = body.expiresAt ? new Date(body.expiresAt) : null;
+  if (expiresAt && (!Number.isFinite(expiresAt.getTime()) || (!allowExpired && expiresAt <= new Date())))
+    throw bad("Choose an expiry date in the future.");
+  const card = {
+    senderName: clean(business.name, 50), businessId: business.businessId,
+    language: body.language || "en", headline: clean(body.headline, 80),
+    offerTitle: clean(body.offerTitle, 30), description: clean(body.description, 80),
+    customerPhone: bulk && (body.customerPhone == null || (typeof body.customerPhone === "string" && !body.customerPhone.trim()))
+      ? "" : normalizeWhatsAppNumber(body.customerPhone),
+    claimUrl: safeUrl(body.claimUrl), campaignName: clean(body.campaignName, 80), expiresAt,
+    disabled: false, redeemedAt: null, scratchedAt: null,
+    ...Object.fromEntries([["accentColor", "#ffb33f"], ["pageColor", "#0b0c1c"], ["textColor", "#ffffff"]]
+      .map(([key, fallback]) => [key, /^#[0-9a-f]{6}$/i.test(body[key]) ? body[key] : fallback])),
+  };
+  if (!card.senderName || !card.headline || !card.offerTitle || !card.description)
+    throw bad("Please complete all required fields.");
+  return card;
+}
+const batchCard = (card) => Object.fromEntries([
+  "slug", "branchId", "branchName", "couponCode", "offerTitle", "description",
+  "campaignName", "expiresAt", "createdAt", "scratchedAt", "redeemedAt", "customerPhone",
+].map((key) => [key, card[key] ?? null]));
+function batchResult(key, fingerprint, cards, replayed = false) {
+  return { batchId: key, fingerprint, savedCount: cards.length, replayed,
+    coupons: cards.map((card) => ({ ...batchCard(card), status: couponStatus(card) })) };
+}
+async function findBatch(key) {
+  if (atlasConnected) {
+    const batch = await CouponBatch.findOne({ key }).lean();
+    if (!batch) return null;
+    return batchResult(key, batch.fingerprint, await Card.find({ batchKey: key }).sort({ createdAt: 1, _id: 1 }).lean());
+  }
+  const cards = (await readLocalCards()).filter((card) => card.batchKey === key);
+  return cards.length ? batchResult(key, cards[0].batchFingerprint, cards) : null;
+}
+async function saveGeneration({ base, branches, total, maximum, batchKey, fingerprint, recipients = null, requestedCode = "" }) {
+  const makeCards = (existing = []) => {
+    const codes = new Set(existing.map((card) => card.couponCode)), slugs = new Set(existing.map((card) => card.slug));
+    if (requestedCode && codes.has(requestedCode)) throw bad("This coupon code already exists. Choose another code or leave it blank.", 409);
+    const cards = [], createdAt = new Date().toISOString();
+    const recipientsByBranch = recipients && new Map(branches.map((branch) => [branch.branchId,
+      recipients.filter((recipient) => recipient.branchId === branch.branchId)]));
+    for (const branch of branches) for (let index = 0; index < branch.quantity; index++) {
+      let couponCode = requestedCode || generateCouponCode(), slug;
+      while (codes.has(couponCode)) couponCode = generateCouponCode();
+      do { slug = crypto.randomBytes(6).toString("base64url"); } while (slugs.has(slug));
+      codes.add(couponCode); slugs.add(slug);
+      cards.push({ ...base, branchId: branch.branchId, branchName: clean(branch.branchName, 60), slug, couponCode, createdAt,
+        ...(recipientsByBranch ? { customerPhone: recipientsByBranch.get(branch.branchId)[index].customerPhone } : {}),
+        ...(batchKey ? { batchKey, batchFingerprint: fingerprint } : {}) });
+    }
+    return cards;
+  };
+  const replay = (cards) => {
+    if (cards[0].batchFingerprint !== fingerprint) throw bad("This retry key belongs to different batch details.", 409);
+    return batchResult(batchKey, fingerprint, cards, true);
+  };
+  if (!atlasConnected) return mutateLocalCards((existing) => {
+    const previous = batchKey && existing.filter((card) => card.batchKey === batchKey);
+    if (previous?.length) return replay(previous);
+    checkCapacity(existing, base.businessId, total, maximum);
+    const cards = makeCards(existing);
+    existing.push(...cards);
+    return batchResult(batchKey, fingerprint, cards);
+  });
+  // Both single and bulk creation write the same business document before
+  // counting capacity. MongoDB retries write conflicts to serialize creators.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const session = await mongoose.startSession();
+    try {
+      let result;
+      await session.withTransaction(async () => {
+        if (batchKey) {
+          const prior = await CouponBatch.findOne({ key: batchKey }).session(session).lean();
+          if (prior) {
+            const cards = await Card.find({ batchKey }).sort({ createdAt: 1, _id: 1 }).session(session).lean();
+            result = replay(cards);
+            return;
+          }
+        }
+        const current = await Business.findOneAndUpdate(
+          { businessId: base.businessId, status: "active" }, { $inc: { generationRevision: 1 } },
+          { new: true, session },
+        ).lean();
+        if (!current) throw bad("This business is paused or unavailable.", 403);
+        if (branches.some((row) => row.branchId && !current.branches.some((branch) => branch.branchId === row.branchId && branch.status === "active")))
+          throw bad("A selected branch is no longer active. No coupons were saved.");
+        const query = base.businessId === "impact-vibes"
+          ? { $or: [{ businessId: base.businessId }, { businessId: { $exists: false } }] }
+          : { businessId: base.businessId };
+        const count = await Card.countDocuments(query).session(session);
+        const capacity = (await businessLimits(current)).card;
+        if (capacity > 0 && count + total > capacity)
+          throw bad(`This business has ${Math.max(0, capacity - count)} cards remaining. Requested ${total}.`, 403);
+        const cards = await Card.insertMany(makeCards(), { session, ordered: true });
+        if (batchKey) await CouponBatch.create([{ key: batchKey, fingerprint, businessId: base.businessId, savedCount: cards.length }], { session });
+        result = batchResult(batchKey, fingerprint, cards);
+      }, { readConcern: { level: "snapshot" }, writeConcern: { w: "majority" } });
+      return result;
+    } catch (error) {
+      if (error.code !== 11000) throw error;
+      const previous = batchKey && await findBatch(batchKey);
+      if (previous) {
+        if (previous.fingerprint !== fingerprint) throw bad("This retry key belongs to different batch details.", 409);
+        return { ...previous, replayed: true };
+      }
+      if (requestedCode) throw bad("This coupon code already exists. Choose another code or leave it blank.", 409);
+      if (attempt === 4) throw bad("Could not allocate unique coupons. No coupons were saved; retry this batch.", 503);
+    } finally { await session.endSession(); }
+  }
+}
+installBulkRoutes(app, { authenticate, validateCreate, businessLimits, buildCard, saveGeneration, findBatch, audit, scope, getBusiness });
+
+app.post("/api/portal/cards/:slug/redeem", authenticate, async (req, res, next) => {
+  try {
+    if (req.user.role === "viewer") throw bad("Viewer accounts cannot redeem coupons.", 403);
+    const card = (await cardRows(req)).find((item) => item.slug === req.params.slug);
+    if (!card) throw bad("Card not found.", 404);
+    const business = await getBusiness(card.businessId);
+    if (business.status !== "active") throw bad("This business has paused its rewards.", 403);
+    const branchId = req.body.branchId;
+    if (!business.branches?.some((branch) => branch.branchId === branchId && branch.status === "active"))
+      throw bad("Choose an active redemption branch.");
+    if (card.branchId && card.branchId !== branchId) throw bad("This coupon can only be redeemed at its assigned branch.", 403);
+    const eligible = (current) => {
+      if (current.redeemedAt) throw bad("This coupon has already been redeemed.", 409);
+      if (!current.scratchedAt) throw bad("The customer must scratch this card before redemption.", 409);
+      if (current.disabled || current.expiresAt && new Date(current.expiresAt) <= new Date())
+        throw bad("This card is disabled or expired.", 410);
+    };
+    eligible(card);
+    const redeemedAt = new Date();
+    if (atlasConnected) {
+      const result = await Card.updateOne({ slug: card.slug,
+        redeemedAt: null, scratchedAt: { $ne: null }, disabled: { $ne: true },
+        $and: [
+          card.businessId === "impact-vibes" ? { $or: [{ businessId: card.businessId }, { businessId: { $exists: false } }] } : { businessId: card.businessId },
+          card.branchId ? { branchId: card.branchId } : { $or: [{ branchId: "" }, { branchId: null }] },
+          { $or: [{ expiresAt: null }, { expiresAt: { $gt: redeemedAt } }] },
+        ],
+      }, { $set: { redeemedAt, redeemedBranchId: branchId } });
+      if (!result.modifiedCount) throw bad("This coupon is no longer available for redemption.", 409);
+    } else await mutateLocalCards((cards) => {
+      const current = cards.find((item) => item.slug === card.slug);
+      if (!current) throw bad("Card not found.", 404);
+      eligible(current);
+      if (current.branchId && current.branchId !== branchId) throw bad("This coupon can only be redeemed at its assigned branch.", 403);
+      current.redeemedAt = redeemedAt.toISOString(); current.redeemedBranchId = branchId;
+    });
+    await audit(req, "Coupon redeemed", card.businessId, `${card.couponCode} · ${branchId}`).catch(console.error);
+    res.json({ ok: true, status: "redeemed", redeemedAt, branchId });
+  } catch (error) { next(error); }
+});
 
 app.get("/api/health", (_req, res) =>
   res.json({
@@ -461,27 +616,9 @@ app.post("/api/cards", authenticate, async (req, res, next) => {
         .status(403)
         .json({ message: "You can only create cards for your own business." });
     const business = await validateCreate(req);
-    if (req.body.language !== undefined && !["en", "hi", "te"].includes(req.body.language))
-      return res.status(400).json({ message: "Choose English, Hindi or Telugu for the card language." });
     const requestedCouponCode = clean(req.body.couponCode, 24).toUpperCase();
     const card = {
-      slug: crypto.randomBytes(6).toString("base64url"),
-      senderName: clean(business.name, 50),
-      language: req.body.language || "en",
-      headline: clean(req.body.headline, 80),
-      offerTitle: clean(req.body.offerTitle, 30),
-      description: clean(req.body.description, 80),
-      claimUrl: safeUrl(req.body.claimUrl),
-      accentColor: /^#[0-9a-f]{6}$/i.test(req.body.accentColor)
-        ? req.body.accentColor
-        : "#ffb33f",
-      pageColor: /^#[0-9a-f]{6}$/i.test(req.body.pageColor)
-        ? req.body.pageColor
-        : "#0b0c1c",
-      textColor: /^#[0-9a-f]{6}$/i.test(req.body.textColor)
-        ? req.body.textColor
-        : "#ffffff",
-      businessId,
+      ...buildCard(req.body, business),
       branchId: clean(req.body.branchId, 60),
       // Snapshot the verified branch, never a caller-supplied display name.
       branchName: clean(
@@ -489,29 +626,12 @@ app.post("/api/cards", authenticate, async (req, res, next) => {
           || "All branches",
         60,
       ),
-      campaignName: clean(req.body.campaignName, 80),
-      expiresAt: req.body.expiresAt ? new Date(req.body.expiresAt) : null,
-      disabled: false,
     };
-    if (
-      card.expiresAt &&
-      (!Number.isFinite(card.expiresAt.getTime()) ||
-        card.expiresAt <= new Date())
-    )
-      return res
-        .status(400)
-        .json({ message: "Choose an expiry date in the future." });
-    if (
-      !card.senderName ||
-      !card.headline ||
-      !card.offerTitle ||
-      !card.description
-    )
-      return res
-        .status(400)
-        .json({ message: "Please complete all required fields." });
-    const savedCard = await saveCard(card, requestedCouponCode);
-    await audit(req, "Scratch card created", businessId, savedCard.couponCode);
+    const generation = await saveGeneration({ base: card,
+      branches: [{ branchId: card.branchId, branchName: card.branchName, quantity: 1 }],
+      total: 1, maximum: (await businessLimits(business)).card, requestedCode: requestedCouponCode });
+    const savedCard = generation.coupons[0];
+    await audit(req, "Scratch card created", businessId, savedCard.couponCode).catch(console.error);
     res
       .status(201)
       .json({ slug: savedCard.slug, couponCode: savedCard.couponCode });
@@ -569,12 +689,12 @@ app.post("/api/cards/:slug/claim", async (req, res, next) => {
       return res
         .status(409)
         .json({
-          message: "This coupon has already been revealed and used.",
+          message: "This coupon has already been redeemed.",
           used: true,
         });
     res.json({
       couponCode: result.card.couponCode,
-      redeemedAt: result.card.redeemedAt,
+      scratchedAt: result.card.scratchedAt,
     });
   } catch (error) {
     next(error);
@@ -593,8 +713,17 @@ if (isLocalServer) {
     res.sendFile(path.join(rootDir, "client", "dist", "index.html")),
   );
 }
-app.use((error, _req, res, _next) => {
+app.use((error, req, res, _next) => {
   console.error(error.message);
+  if (req.path === "/api/cards/bulk") {
+    const uncertain = error.hasErrorLabel?.("UnknownTransactionCommitResult");
+    return res.status(error.status || 503).json({
+      message: `${error.message || "Batch generation failed."} ${uncertain
+        ? "Commit confirmation was lost. Retry the same batch to recover the actual saved count."
+        : "No coupons were saved by this request. Retry with the same batch key."}`,
+      savedCount: uncertain ? null : 0,
+    });
+  }
   if (error.code === "DUPLICATE_COUPON" || error.code === 11000)
     return res
       .status(409)
