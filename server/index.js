@@ -8,6 +8,7 @@ import mongoose from "mongoose";
 import { installControls } from "./control.js";
 import { ensureUniqueIndex } from "./indexes.js";
 import { normalizeWhatsAppNumber } from "../shared/whatsapp.js";
+import { PRODUCTION_APP_URL } from "../shared/urls.js";
 import { installBulkRoutes, bad, couponStatus, checkCapacity } from "./bulk.js";
 
 const rootDir = process.env.SCRATCH_DATA_ROOT || process.cwd();
@@ -18,7 +19,8 @@ export const app = express();
 const port = Number(process.env.PORT) || 5051;
 
 app.disable("x-powered-by");
-app.use(cors({ origin: process.env.CLIENT_ORIGIN || true }));
+app.use(cors({ origin: process.env.CLIENT_ORIGIN ||
+  (process.env.NODE_ENV === "production" ? PRODUCTION_APP_URL : true) }));
 // A bounded 1,000-row recipient import can exceed the original single-card cap.
 app.use(express.json({ limit: "256kb" }));
 

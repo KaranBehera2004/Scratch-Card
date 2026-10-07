@@ -4,7 +4,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://scratch-card-hbnz.onrender.com/api/:path*"
+      "destination": "https://api-scratch.justconnect.biz/api/:path*"
     },
     {
       "source": "/(.*)",

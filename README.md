@@ -7,7 +7,8 @@ Manage multiple businesses, branches, business login accounts and one-time scrat
 ```
 client/       React + Vite frontend
 server/       Express API and MongoDB models
-api/          Vercel serverless API entry point
+shared/       Shared validation and public URL helpers
+api/          Legacy Vercel serverless API entry point
 netlify/      Netlify function entry point
 ```
 
@@ -20,7 +21,7 @@ npm install
 npm run dev
 ```
 
-Copy `.env.example` to `.env` and set `AUTH_SECRET`, `SUPER_ADMIN_EMAIL` and `SUPER_ADMIN_PASSWORD`. Set `IMPACT_VIBES_EMAIL` and `IMPACT_VIBES_PASSWORD` to provision the initial business owner. Open the frontend URL printed in the terminal (normally `http://localhost:5174`; Vite picks the next free port if it is occupied).
+Copy `.env.example` to `.env` and set `AUTH_SECRET`, `SUPER_ADMIN_LOGIN_ID` and `SUPER_ADMIN_PASSWORD`. `SUPER_ADMIN_EMAIL` remains supported for existing installations. Set `IMPACT_VIBES_EMAIL` and `IMPACT_VIBES_PASSWORD` to provision the initial business owner. Open the frontend URL printed in the terminal (normally `http://localhost:5174`; Vite picks the next free port if it is occupied).
 
 The API defaults to port 5051. The client proxies `/api` to that port. The `npm run dev` command must show both `API` and `WEB` processes; running only the frontend will not enable sign-in or card creation. If you change `PORT`, also change the Vite proxy target. Stop the old Scratch-card terminal process before restarting; leave other projects running.
 
@@ -127,18 +128,36 @@ The included `netlify.toml` builds the React site and deploys the Express API as
 
 The generated share link will automatically use your Netlify domain, such as `https://your-site.netlify.app/card/abc123`. Cards created only in the local JSON file are not copied to Atlas; cards created on the deployed site are stored in Atlas.
 
-## Deploy to Vercel
+## Production: Vercel frontend and Render API
 
-The included `vercel.json` builds the Vite frontend, keeps client-side routes working, and sends `/api/*` requests to the Express Vercel Function.
+| Service | Production URL |
+| --- | --- |
+| Website and scratch-card links | `https://scratch.justconnect.biz` |
+| API server | `https://api-scratch.justconnect.biz` |
+| API health check | `https://api-scratch.justconnect.biz/api/health` |
+| Frontend proxy health check | `https://scratch.justconnect.biz/api/health` |
 
-1. Import the complete `Scratch-card` project into Vercel.
-2. Add `MONGODB_URI` under **Project Settings → Environment Variables** for Production, Preview, and Development as needed.
-3. Optionally add `MONGODB_DB` (the default is `scratch_cards`).
-4. Ensure MongoDB Atlas Network Access permits connections from Vercel Functions.
-5. Add `AUTH_SECRET`, `SUPER_ADMIN_EMAIL` and `SUPER_ADMIN_PASSWORD`. Add the initial business-owner variables only if you need to provision that account. Use the same authentication variables for Netlify.
-6. Redeploy the project.
+The frontend calls relative `/api/*` paths. `client/vercel.json` forwards those requests to `https://api-scratch.justconnect.biz/api/*`, keeping login and card requests on the frontend's origin in the browser. The root `vercel.json` uses the same API destination for builds from the repository root. Both disable caching of API responses and retain the SPA fallback for `/card/:slug`. Do not remove the `/api` prefix from the destination or replace the local Vite proxy with the production database/API.
 
-Do not deploy only the `client/dist` directory because it does not contain the API function.
+### Render backend
+
+1. Connect the repository's production branch. Leave **Root Directory** empty; use **Build Command** `npm ci` and **Start Command** `npm start`.
+2. Set the environment variables listed in `.env.production.example` in Render's **Environment** settings. In particular, set `CLIENT_ORIGIN=https://scratch.justconnect.biz`, `NODE_ENV=production`, and `NODE_VERSION=24.x`. Render supplies `PORT`.
+3. Keep your existing MongoDB URI/database, auth secret and super-admin credentials. A domain change does not require creating a database or resetting users. An account password already changed in the portal still takes precedence over its bootstrap environment password.
+4. Under **Settings → Custom Domains**, add `api-scratch.justconnect.biz` and configure the DNS record requested by Render. Wait for domain verification and HTTPS. Keep MongoDB Atlas Network Access configured to allow the Render service.
+5. Set **Health Check Path** to `/api/health`, then deploy. The API root `/` does not host the frontend; use the health-check URL above to verify the backend. The JSON must show `"ok":true` and `"storage":"mongodb-atlas"`.
+
+### Vercel frontend
+
+1. Set **Root Directory** to `client`, **Framework Preset** to Vite, **Build Command** to `npm run build`, **Output Directory** to `dist`, and Node.js to `24.x`. Leave the install command automatic.
+2. Enable **Include files outside the root directory in the Build Step**, because the client imports `shared/` modules.
+3. Add `scratch.justconnect.biz` under **Settings → Domains** and configure the DNS record requested by Vercel. Wait for verification and HTTPS. Keep previous domains active if customers still have links using them.
+4. Commit the configuration and push/merge it into the production branch, then wait for the deployment to be **Ready**. A redeploy of an older commit does not include new files.
+5. Open the frontend proxy health URL above, then sign in and check existing businesses/coupons. Vercel's frontend does not need database credentials or an auth secret; those belong on Render. No `VITE_API_URL` setting is required.
+
+`shared/urls.js` defines the public app/API addresses. Single-card sharing, copy-link actions, WhatsApp messages and Excel exports use the app domain on production and Vercel aliases/previews. Existing coupon slugs, codes and database records stay unchanged. Localhost and LAN builds keep local card links, so local tests never direct recipients to the production app. Alternative self-hosted/Netlify domains continue to use their own origin.
+
+Preview deployments also proxy to this production API and share its data. Use a separate API/database and corresponding configuration if isolated staging is required. The tracked `.env.production.example` is only a reference: editing it does not update Render's saved environment variables. Keep `.env` configured for local development and do not commit its secrets.
 
 ## Run the production build locally
 

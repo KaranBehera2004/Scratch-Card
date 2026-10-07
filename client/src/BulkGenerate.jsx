@@ -3,6 +3,7 @@ import { portalApi, Table, Badge, Icon } from "./Portal.jsx";
 import { BULK_EXCEL_HEADERS, bulkExcelRows, branchQuantityError, unusedBulkBranches, addBulkBranch, mergeBulkResults, generatedByBranch, remainingBranchQuantities } from "./bulk-coupons.js";
 import { useWorkspaceText } from "./workspace-i18n.js";
 import BatchWhatsAppShare from "./BatchWhatsAppShare.jsx";
+import { scratchCardUrl } from "../../shared/urls.js";
 
 const storageKey = (id) => `scratch-bulk-pending:${id}`;
 const resultsKey = (id) => `scratch-bulk-results:${id}`;
@@ -209,7 +210,7 @@ export function BulkResults({ result, onReset, locked, token, businessId }) {
   const filtered = coupons.filter((card) => !branch || card.branchId === branch);
   const pageCount = Math.max(1, Math.ceil(filtered.length / 25));
   const copy = async (slug) => {
-    try { await navigator.clipboard.writeText(`${location.origin}/card/${slug}`); setNotice("Scratch link copied."); }
+    try { await navigator.clipboard.writeText(scratchCardUrl(slug)); setNotice("Scratch link copied."); }
     catch { setNotice("Unable to copy. Select and copy the scratch link manually."); }
   };
   const download = async () => {
@@ -239,7 +240,7 @@ export function BulkResults({ result, onReset, locked, token, businessId }) {
     <Table columns={["Branch", "Coupon code", "WhatsApp number", "Offer", "Scratch link", "Expiry", "Status", "Actions"]} empty={!filtered.length}>
       {filtered.slice(page * 25, (page + 1) * 25).map((card) => <tr key={card.slug}>
         <td>{card.branchName}</td><td className="p-code">{card.couponCode}</td><td>{card.customerPhone || ui("No number assigned")}</td><td>{card.offerTitle}</td>
-        <td><a href={`/card/${card.slug}`} target="_blank" rel="noreferrer">{`${location.origin}/card/${card.slug}`}</a></td>
+        <td><a href={scratchCardUrl(card.slug)} target="_blank" rel="noreferrer">{scratchCardUrl(card.slug)}</a></td>
         <td>{card.expiresAt ? new Date(card.expiresAt).toLocaleString() : ui("No expiry")}</td><td><Badge status={card.status} /></td>
         <td><button type="button" className="p-button small" onClick={() => copy(card.slug)}>{ui("Copy link")}</button></td>
       </tr>)}
