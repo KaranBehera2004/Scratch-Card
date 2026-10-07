@@ -62,6 +62,10 @@ npm run test:ui
 
 The API tests use a temporary data directory, covering business isolation, roles, duplicate codes, simultaneous redemption, limits, settings, audit and session revocation. Browser tests use installed Google Chrome and a separate fixture server on port 5099, never the configured Atlas database. They check management flows, mobile layouts, public scratching and workbook contents in all three languages. Screenshots and test reports are ignored by Git.
 
+## Responsive layout checks
+
+The browser suite checks login, super-admin pages, business forms, dialogs, previews and public cards at 320, 360, 390, 430, 600, 768, 820, 844, 1024, 1440 and 1920 pixels wide, including phone landscape. It checks page overflow, dialog bounds, translated controls and mobile navigation keyboard behavior. Small-screen tables become labeled rows; wider tables keep contained horizontal scrolling. The navigation drawer locks background scrolling, supports Escape and returns keyboard focus when closed. These are browser viewport checks, not a guarantee for every physical device or browser engine.
+
 ## Use MongoDB Atlas
 
 1. Create an Atlas database and database user.

@@ -668,6 +668,129 @@ test("generated credentials popup copies business and super-admin logins and sho
   await expect(page.getByRole("row").filter({ hasText: "Credentials Test Admin" }).getByRole("button", { name: "Pause" })).toHaveCount(0);
 });
 
+const responsiveSizes = [
+  [320, 568], [360, 640], [390, 844], [430, 932], [600, 960],
+  [768, 1024], [820, 1180], [844, 390], [1024, 768], [1440, 900], [1920, 1080],
+];
+const expectResponsiveFit = async (page) => {
+  await expect.poll(() => page.evaluate(() => ({
+    pageFits: document.documentElement.scrollWidth <= window.innerWidth + 1,
+    topbarFits: !document.querySelector(".p-topbar") || document.querySelector(".p-topbar").scrollWidth <= document.querySelector(".p-topbar").clientWidth + 1,
+  }))).toEqual({ pageFits: true, topbarFits: true });
+};
+
+test("super admin pages and workspace dialogs align across phone, tablet and desktop sizes", async ({ page }, info) => {
+  test.setTimeout(120000);
+  for (const [width, height] of responsiveSizes) {
+    await page.setViewportSize({ width, height });
+    await page.goto("/");
+    await expect(page.locator(".p-login")).toBeVisible();
+    await expectResponsiveFit(page);
+    if ([320, 768, 1440].includes(width)) await page.screenshot({ path: info.outputPath(`responsive-login-${width}.png`), fullPage: true });
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await login(page, "platform@example.test", "Platform-Test-Password");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  for (const [width, height] of responsiveSizes) {
+    await page.setViewportSize({ width, height });
+    for (const tab of ["Overview", "Businesses", "Scratch cards", "Security", "Platform settings"]) {
+      await page.goto(`/?tab=${encodeURIComponent(tab)}`);
+      await expect(page.locator(".p-loading")).toHaveCount(0);
+      await expect(page.locator(".p-shell")).toBeVisible();
+      await expectResponsiveFit(page);
+      if (width <= 600) {
+        for (const table of await page.locator(".p-table-scroll").all()) {
+          expect(await table.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+        }
+      }
+    }
+    await page.goto("/?tab=Businesses");
+    await page.getByRole("button", { name: "Create business", exact: true }).click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    expect(await dialog.evaluate(el => {
+      const rect = el.getBoundingClientRect();
+      return rect.left >= 0 && rect.right <= innerWidth + 1 && rect.top >= 0
+        && rect.bottom <= innerHeight + 1 && el.scrollWidth <= el.clientWidth + 1;
+    })).toBe(true);
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await page.getByRole("switch", { name: "Dark mode" }).click();
+    await expectResponsiveFit(page);
+    await expect(page.locator(".p-topbar .p-button")).toHaveCSS("background-color", "rgb(36, 46, 65)");
+    if ([320, 768, 1440].includes(width)) await page.screenshot({ path: info.outputPath(`responsive-admin-${width}.png`), fullPage: true });
+    await page.getByRole("switch", { name: "Dark mode" }).click();
+  }
+  await page.setViewportSize({ width: 320, height: 568 });
+  const toggle = page.getByRole("button", { name: "Open navigation", exact: true });
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(page.locator(".p-main")).toHaveAttribute("inert", "");
+  await expect(page.locator("body")).toHaveCSS("overflow", "hidden");
+  await page.locator(".p-sidebar nav button").last().focus();
+  await page.keyboard.press("Tab");
+  expect(await page.locator(".p-sidebar").evaluate(el => el.contains(document.activeElement))).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(toggle).toBeFocused();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(page.locator(".p-sidebar")).toHaveAttribute("inert", "");
+  await toggle.click();
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await expect(page.locator(".p-shell")).not.toHaveClass(/menu-open/);
+  await expect(page.locator(".p-sidebar")).not.toHaveAttribute("inert", "");
+  await expect(page.locator("body")).not.toHaveCSS("overflow", "hidden");
+});
+
+test("business forms, multilingual previews and public cards fit narrow and landscape screens", async ({ page }, info) => {
+  test.setTimeout(120000);
+  await login(page, "owner@example.test", "Owner-Test-Password");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const authResponse = await page.request.post("/api/auth/login", { data: { loginId: "owner@example.test", password: "Owner-Test-Password" } });
+  const auth = await authResponse.json();
+  const cardsResponse = await page.request.get("/api/portal/cards", { headers: { Authorization: `Bearer ${auth.token}` } });
+  const { cards } = await cardsResponse.json();
+  const publicCard = cards.find(card => !card.disabled && !card.expiresAt);
+  expect(publicCard).toBeTruthy();
+  for (const [width, height] of responsiveSizes) {
+    await page.setViewportSize({ width, height });
+    await page.goto("/?tab=Overview");
+    await expect(page.locator(".p-welcome-row")).toBeVisible();
+    await expectResponsiveFit(page);
+    await page.goto("/?tab=Create%20scratch%20card");
+    await expect(page.getByLabel("Campaign name")).toBeVisible();
+    await page.getByLabel("Message above card", { exact: true }).fill("A special celebration reward for you and your family on your next visit");
+    await page.getByLabel("Main offer", { exact: true }).fill("50% OFF ON EVERY ORDER");
+    await page.getByLabel("Offer details", { exact: true }).fill("Celebrate with this reward at your favourite neighbourhood branch");
+    await expectResponsiveFit(page);
+    expect(await page.locator(".phone").evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+    await page.evaluate(() => window.scrollTo(0, 0));
+    if ([320, 768, 1440].includes(width)) await page.screenshot({ path: info.outputPath(`responsive-builder-${width}.png`), fullPage: true });
+    await page.goto("/?tab=Coupons");
+    const preview = page.getByRole("button", { name: "Preview", exact: true }).first();
+    await expect(preview).toBeVisible();
+    await preview.click();
+    const dialog = page.getByRole("dialog", { name: "Scratch-card preview" });
+    await expect(dialog).toBeVisible();
+    expect(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+    await dialog.getByLabel("Close preview", { exact: true }).click();
+    await expectResponsiveFit(page);
+    await page.goto(`/card/${publicCard.slug}`);
+    await expect(page.locator(".recipient .scratch-card")).toBeVisible();
+    await expectResponsiveFit(page);
+    expect(await page.locator(".experience").evaluate(el => {
+      const rect = el.getBoundingClientRect();
+      return rect.left >= 0 && rect.right <= innerWidth + 1;
+    })).toBe(true);
+    if ([320, 768].includes(width)) await page.screenshot({ path: info.outputPath(`responsive-public-card-${width}.png`), fullPage: true });
+  }
+  await page.setViewportSize({ width: 320, height: 568 });
+  for (const language of ["hi", "te", "en"]) {
+    await page.goto("/?tab=Create%20scratch%20card");
+    await page.locator(".p-topbar select").selectOption(language);
+    await page.getByRole("combobox", { name: /Card language|कार्ड की भाषा|కార్డ్ భాష/ }).selectOption(language);
+    await expectResponsiveFit(page);
+  }
+});
+
 test("delete all businesses requires confirmation and keeps the Businesses page after refresh", async ({ page }, info) => {
   await login(page, "platform@example.test", "Platform-Test-Password");
   await nav(page, "Businesses");
