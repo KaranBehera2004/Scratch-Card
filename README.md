@@ -76,7 +76,7 @@ Results combine every saved generation from the same draft, with branch filterin
 
 ### Share a single card with an image preview
 
-The optional **WhatsApp image** accepts JPG, PNG or WebP files up to 5 MB. Creating the card stores the image with that coupon. In production, **Direct send** opens the exact customer chat in WhatsApp Web with a `https://scratch.justconnect.biz/share/...` URL. Vercel proxies that route to the API, which returns server-rendered Open Graph metadata and the saved image; a person opening the link is immediately redirected to the normal `/card/...` scratch page. The image is not rendered on the scratch card or included in coupon-table payloads.
+The optional **WhatsApp image** accepts JPG, PNG or WebP files up to 5 MB. Creating the card stores the image with that coupon. In production, **Direct send** opens the exact customer chat in WhatsApp Web with a versioned `https://scratch.justconnect.biz/share/...` URL. Vercel proxies that route to the API, which returns server-rendered Open Graph metadata and a same-domain image. The server converts the original to a 1200×630 progressive JPEG suitable for WhatsApp before serving it; the original artwork remains stored with the coupon. A person opening the link is immediately redirected to the normal `/card/...` scratch page. The image is not rendered on the scratch card or included in coupon-table payloads.
 
 WhatsApp—not this application—renders and caches the preview. The image endpoint is publicly readable by anyone who has the unguessable coupon URL so WhatsApp can fetch it. Direct send pre-fills the customer number and message, but the signed-in user must review the preview and click **Send** in WhatsApp Web. No browser website can silently click Send on the user's behalf.
 

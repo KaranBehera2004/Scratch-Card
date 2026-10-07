@@ -12,7 +12,7 @@ test("production shares use the app domain from custom, preview and legacy Verce
     "https://scratch-card-preview-123.vercel.app",
   ]) {
     assert.equal(scratchCardUrl("Abc123_-", origin), "https://scratch.justconnect.biz/card/Abc123_-");
-    assert.equal(scratchShareUrl("Abc123_-", origin), "https://scratch.justconnect.biz/share/Abc123_-");
+    assert.equal(scratchShareUrl("Abc123_-", origin), "https://scratch.justconnect.biz/share/Abc123_-?v=2");
   }
 });
 

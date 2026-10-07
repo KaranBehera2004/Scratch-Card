@@ -219,14 +219,19 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
       assert.equal(savedCards.find((card) => card.slug === cardSlug).shareImageBase64, previewImageBase64);
       const imageResponse = await fetch(`${base}/api/cards/${cardSlug}/share-image`);
       assert.equal(imageResponse.status, 200);
-      assert.equal(imageResponse.headers.get("content-type"), "image/png");
-      assert.deepEqual(Buffer.from(await imageResponse.arrayBuffer()), Buffer.from(previewImageBase64, "base64"));
-      const previewResponse = await fetch(`${base}/share/${cardSlug}`);
+      assert.equal(imageResponse.headers.get("content-type"), "image/jpeg");
+      const optimizedImage = Buffer.from(await imageResponse.arrayBuffer());
+      assert.deepEqual(optimizedImage.subarray(0, 3), Buffer.from("ffd8ff", "hex"));
+      assert.ok(optimizedImage.length < 300 * 1024);
+      const previewResponse = await fetch(`${base}/share/${cardSlug}?v=2`);
       const previewHtml = await previewResponse.text();
       assert.equal(previewResponse.status, 200);
       assert.match(previewHtml, /property="og:image"/);
-      assert.match(previewHtml, new RegExp(`api-scratch\\.justconnect\\.biz/api/cards/${cardSlug}/share-image`));
+      assert.match(previewHtml, new RegExp(`scratch\\.justconnect\\.biz/share/${cardSlug}/image\\?v=2`));
       assert.match(previewHtml, new RegExp(`scratch\\.justconnect\\.biz/card/${cardSlug}`));
+      assert.match(previewHtml, /property="og:image:type" content="image\/jpeg"/);
+      assert.match(previewHtml, /property="og:image:width" content="1200"/);
+      assert.match(previewHtml, /property="og:image:height" content="630"/);
       assert.equal((await request("/api/cards", owner, "POST", {
         ...draft, shareImage: "data:text/html;base64,PGgxPkJhZDwvaDE+",
       })).status, 400);
