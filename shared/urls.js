@@ -23,6 +23,7 @@ export function scratchShareUrl(slug, currentOrigin = globalThis.location?.origi
   // Production shares pass through a server-rendered Open Graph page so
   // WhatsApp can fetch the coupon's uploaded preview image. Local and custom
   // self-hosted development origins keep the directly usable card route.
-  const route = origin === PRODUCTION_APP_URL ? "share" : "card";
-  return `${origin}/${route}/${encodeURIComponent(slug)}`;
+  const production = origin === PRODUCTION_APP_URL;
+  const route = production ? "share" : "card";
+  return `${origin}/${route}/${encodeURIComponent(slug)}${production ? "?v=2" : ""}`;
 }

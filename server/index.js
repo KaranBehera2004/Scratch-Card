@@ -5,10 +5,11 @@ import path from "node:path";
 import cors from "cors";
 import express from "express";
 import mongoose from "mongoose";
+import sharp from "sharp";
 import { installControls } from "./control.js";
 import { ensureUniqueIndex } from "./indexes.js";
 import { normalizeWhatsAppNumber } from "../shared/whatsapp.js";
-import { PRODUCTION_API_URL, PRODUCTION_APP_URL } from "../shared/urls.js";
+import { PRODUCTION_APP_URL } from "../shared/urls.js";
 import { installBulkRoutes, bad, couponStatus, checkCapacity } from "./bulk.js";
 
 const rootDir = process.env.SCRATCH_DATA_ROOT || process.cwd();
@@ -409,6 +410,9 @@ const safeUrl = (value) => {
   return parsed.toString();
 };
 const MAX_SHARE_IMAGE_BYTES = 5 * 1024 * 1024;
+const SHARE_PREVIEW_VERSION = "2";
+const SHARE_PREVIEW_WIDTH = 1200;
+const SHARE_PREVIEW_HEIGHT = 630;
 function safeShareImage(value) {
   if (value == null || value === "") return {};
   if (typeof value !== "string" || value.length > Math.ceil(MAX_SHARE_IMAGE_BYTES * 4 / 3) + 128)
@@ -676,10 +680,20 @@ app.get("/api/cards/:slug/share-image", async (req, res, next) => {
       || (card.expiresAt && new Date(card.expiresAt) < new Date()))
       return res.status(404).end();
     await getBusiness(card.businessId || "impact-vibes");
-    const image = Buffer.from(card.shareImageBase64, "base64");
+    const image = await sharp(Buffer.from(card.shareImageBase64, "base64"))
+      .rotate()
+      .resize({
+        width: SHARE_PREVIEW_WIDTH,
+        height: SHARE_PREVIEW_HEIGHT,
+        fit: "contain",
+        background: { r: 255, g: 255, b: 255 },
+      })
+      .flatten({ background: "#ffffff" })
+      .jpeg({ quality: 72, chromaSubsampling: "4:2:0", progressive: true })
+      .toBuffer();
     res.set({
       "Cache-Control": "public, max-age=3600",
-      "Content-Type": card.shareImageMime,
+      "Content-Type": "image/jpeg",
       "Content-Length": String(image.length),
       "X-Content-Type-Options": "nosniff",
     }).send(image);
@@ -697,16 +711,20 @@ app.get("/share/:slug", async (req, res, next) => {
     await getBusiness(card.businessId || "impact-vibes");
     const slug = encodeURIComponent(card.slug);
     const cardUrl = `${PRODUCTION_APP_URL}/card/${slug}`;
-    const shareUrl = `${PRODUCTION_APP_URL}/share/${slug}`;
+    const version = /^\d+$/.test(String(req.query.v || "")) ? String(req.query.v) : SHARE_PREVIEW_VERSION;
+    const shareUrl = `${PRODUCTION_APP_URL}/share/${slug}?v=${encodeURIComponent(version)}`;
     const imageUrl = card.shareImageBase64
-      ? `${PRODUCTION_API_URL}/api/cards/${slug}/share-image`
+      ? `${PRODUCTION_APP_URL}/share/${slug}/image?v=${encodeURIComponent(version)}`
       : "";
     const title = `${card.offerTitle} · ${card.senderName}`;
     const description = `${card.headline} — ${card.description}`;
     const imageMeta = imageUrl ? `
     <meta property="og:image" content="${html(imageUrl)}">
     <meta property="og:image:secure_url" content="${html(imageUrl)}">
-    <meta property="og:image:type" content="${html(card.shareImageMime)}">
+    <meta property="og:image:type" content="image/jpeg">
+    <meta property="og:image:width" content="${SHARE_PREVIEW_WIDTH}">
+    <meta property="og:image:height" content="${SHARE_PREVIEW_HEIGHT}">
+    <meta property="og:image:alt" content="${html(`${card.offerTitle} scratch-card preview`)}">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:image" content="${html(imageUrl)}">` : "";
     res.status(200).set({
