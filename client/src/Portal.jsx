@@ -3,6 +3,7 @@ import "./portal.css";
 import "./portal-theme.css";
 import { WorkspaceLocale, useWorkspaceText, workspaceTranslator } from "./workspace-i18n.js";
 import { summarizeCampaigns } from "./campaigns.js";
+import { scratchCardUrl } from "../../shared/urls.js";
 import { EMPTY_COUPON_FILTERS, couponBranchKey, couponCampaignKey, couponDateBounds, filterCouponCards } from "./coupon-filters.js";
 
 export async function portalApi(url, token, method = "GET", body) {
@@ -994,7 +995,7 @@ export default function Portal({
             item.redeemedAt
               ? new Date(item.redeemedAt).toLocaleString(`${language}-IN`)
               : "—",
-            `${location.origin}/card/${item.slug}`,
+            scratchCardUrl(item.slug),
             item.expiresAt ? localizedDate(item.expiresAt) : ui("No expiry"),
             item.customerPhone || "—",
           ].map((value) => ({ value: String(value ?? "") })),
@@ -1182,7 +1183,7 @@ export default function Portal({
                 disabled={busy}
                 onClick={() =>
                   navigator.clipboard
-                    .writeText(`${location.origin}/card/${item.slug}`)
+                    .writeText(scratchCardUrl(item.slug))
                     .then(() => setNotice("Share link copied."))
                     .catch(() =>
                       setError(

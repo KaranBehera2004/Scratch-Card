@@ -9,6 +9,7 @@ import { createRoot } from "react-dom/client";
 import Portal, { PortalLogin, portalApi } from "./Portal.jsx";
 import { workspaceTranslator } from "./workspace-i18n.js";
 import { normalizeWhatsAppNumber, whatsAppCardUrl } from "../../shared/whatsapp.js";
+import { scratchCardUrl } from "../../shared/urls.js";
 import { pendingBulk, completedBulk, savedBulkDraft, useBulkGeneration, BranchQuantities, BulkResults } from "./BulkGenerate.jsx";
 import "./bulk.css";
 import "./styles.css";
@@ -413,7 +414,9 @@ async function requestJson(url, options) {
     response = await fetch(url, options);
   } catch {
     throw new Error(
-      "The scratch-card server is not running. Stop the old preview and run npm run dev again.",
+      import.meta.env.PROD
+        ? "The scratch-card service could not be reached. Please try again shortly."
+        : "The scratch-card server is not running. Stop the old preview and run npm run dev again.",
     );
   }
 
@@ -425,7 +428,7 @@ async function requestJson(url, options) {
     } catch {
       throw new Error(
         import.meta.env.PROD
-          ? "The deployed API is not configured correctly. Check the backend function and MongoDB Atlas settings, then redeploy."
+          ? "The scratch-card service returned an unexpected response. Please try again shortly."
           : "The page is connected to the wrong local server. Restart this project with npm run dev.",
       );
     }
@@ -439,9 +442,9 @@ async function requestJson(url, options) {
     let fallbackMessage = `The scratch-card API returned error ${response.status}.`;
     if (import.meta.env.PROD && response.status === 404) {
       fallbackMessage =
-        "The backend function was not deployed. Redeploy the complete project instead of uploading only the dist folder.";
+        "The scratch-card service could not find this page. Please check your link or contact your administrator.";
     } else if (import.meta.env.PROD && response.status >= 500) {
-      fallbackMessage = `The deployed backend function failed (${response.status}). Check that MONGODB_URI is configured in your hosting environment, then redeploy.`;
+      fallbackMessage = `The scratch-card service is temporarily unavailable (${response.status}). Please try again shortly.`;
     }
     const error = new Error(apiMessage || fallbackMessage);
     error.status = response.status;
@@ -664,7 +667,7 @@ function Creator({
         [event.target.name]: event.target.value,
       }));
   };
-  const shareUrl = result ? `${location.origin}/card/${result.slug}` : "";
+  const shareUrl = result ? scratchCardUrl(result.slug) : "";
   const creatingRef = useRef(false);
   const createCard = async (event) => {
     event.preventDefault();
@@ -697,7 +700,7 @@ function Creator({
           : null,
         businessId: user.businessId,
       });
-      const whatsappUrl = whatsAppCardUrl(customerPhone, `${location.origin}/card/${data.slug}`);
+      const whatsappUrl = whatsAppCardUrl(customerPhone, scratchCardUrl(data.slug));
       setResult({ ...data, whatsappUrl });
       if (directSend) {
         if (whatsappWindow && !whatsappWindow.closed) {
