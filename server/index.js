@@ -31,7 +31,7 @@ const schema = new mongoose.Schema(
   {
     slug: { type: String, unique: true, index: true, required: true },
     senderName: { type: String, required: true, maxlength: 50 },
-    shareTitle: { type: String, maxlength: 100, default: "Congratulations, you got an offer" },
+    shareTitle: { type: String, maxlength: 100, default: "Congratulation you got an offer" },
     headline: { type: String, required: true, maxlength: 80 },
     offerTitle: { type: String, required: true, maxlength: 30 },
     description: { type: String, required: true, maxlength: 80 },
@@ -467,7 +467,7 @@ function buildCard(body, business, bulk = false, allowExpired = false) {
   const card = {
     senderName: clean(business.name, 50), businessId: business.businessId,
     language: body.language || "en",
-    shareTitle: clean(body.shareTitle, 100) || "Congratulations, you got an offer",
+    shareTitle: clean(body.shareTitle, 100) || "Congratulation you got an offer",
     headline: clean(body.headline, 80),
     offerTitle: clean(body.offerTitle, 30), description: clean(body.description, 80),
     customerPhone: bulk && (body.customerPhone == null || (typeof body.customerPhone === "string" && !body.customerPhone.trim()))
@@ -723,7 +723,7 @@ app.get("/share/:slug", async (req, res, next) => {
     const imageUrl = card.shareImageBase64
       ? `${PRODUCTION_APP_URL}/share/${slug}/image?v=${encodeURIComponent(version)}`
       : "";
-    const title = card.shareTitle || "Congratulations, you got an offer";
+    const title = card.shareTitle || "Congratulation you got an offer";
     const description = `${card.offerTitle} · ${card.senderName} — ${card.headline}`;
     const imageMeta = imageUrl ? `
     <meta property="og:image" content="${html(imageUrl)}">

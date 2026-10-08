@@ -400,7 +400,7 @@ function generateDraftCoupon() {
 
 const DEFAULT_CARD = {
   senderName: "Impact Vibes",
-  shareTitle: "Congratulations, you got an offer",
+  shareTitle: "Congratulation you got an offer",
   headline: "A little surprise for you",
   offerTitle: "25% OFF",
   description: "On your next order",
@@ -853,7 +853,7 @@ function Creator({
               <label>
                 <span>{ui("WhatsApp preview title")}</span>
                 <input name="shareTitle" value={form.shareTitle} onChange={update} maxLength="100"
-                  required placeholder="Congratulations, you got an offer" />
+                  required placeholder="Congratulation you got an offer" />
                 <small>{ui("Shown as the bold title when WhatsApp creates a link preview.")}</small>
               </label>
               <label>
