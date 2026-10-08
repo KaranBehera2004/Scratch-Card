@@ -207,7 +207,7 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
         language: "hi",
         couponCode: "TEST-UNIQUE",
         customerPhone: "+91 (98765) 43210",
-        shareTitle: "Congratulations, you got an offer",
+        shareTitle: "Congratulation you got an offer",
         shareImage: `data:image/png;base64,${previewImageBase64}`,
       });
       assert.equal(created.status, 201, created.message);
@@ -217,7 +217,7 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
       assert.equal(cards[0].campaignName, "Diwali");
       assert.equal(cards[0].branchId, branchId);
       assert.equal(cards[0].branchName, "Secunderabad");
-      assert.equal(cards[0].shareTitle, "Congratulations, you got an offer");
+      assert.equal(cards[0].shareTitle, "Congratulation you got an offer");
       assert.equal(cards[0].language, "hi");
       assert.equal(cards[0].customerPhone, "+919876543210");
       assert.equal(cards[0].hasShareImage, true);
@@ -227,7 +227,7 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
       assert.equal(publicResult.customerPhone, undefined);
       assert.ok(!JSON.stringify(publicResult).includes("9876543210"));
       assert.equal(publicResult.hasShareImage, true);
-      assert.equal(publicResult.shareTitle, "Congratulations, you got an offer");
+      assert.equal(publicResult.shareTitle, "Congratulation you got an offer");
       assert.equal(publicResult.shareImageBase64, undefined);
       const savedCards = JSON.parse(await fs.readFile(path.join(temporary, "server/data/cards.json"), "utf8"));
       assert.equal(savedCards.find((card) => card.slug === cardSlug).customerPhone, "+919876543210");
@@ -238,12 +238,12 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
       const optimizedImage = Buffer.from(await imageResponse.arrayBuffer());
       assert.deepEqual(optimizedImage.subarray(0, 3), Buffer.from("ffd8ff", "hex"));
       assert.ok(optimizedImage.length < 300 * 1024);
-      const previewResponse = await fetch(`${base}/share/${cardSlug}?v=3`);
+      const previewResponse = await fetch(`${base}/share/${cardSlug}?v=4`);
       const previewHtml = await previewResponse.text();
       assert.equal(previewResponse.status, 200);
       assert.match(previewHtml, /property="og:image"/);
-      assert.match(previewHtml, /property="og:title" content="Congratulations, you got an offer"/);
-      assert.match(previewHtml, new RegExp(`scratch\\.justconnect\\.biz/share/${cardSlug}/image\\?v=3`));
+      assert.match(previewHtml, /property="og:title" content="Congratulation you got an offer"/);
+      assert.match(previewHtml, new RegExp(`scratch\\.justconnect\\.biz/share/${cardSlug}/image\\?v=4`));
       assert.match(previewHtml, new RegExp(`scratch\\.justconnect\\.biz/card/${cardSlug}`));
       assert.doesNotMatch(previewHtml, /http-equiv="refresh"/i);
       assert.match(previewHtml, /property="og:image:type" content="image\/jpeg"/);

@@ -25,5 +25,5 @@ export function scratchShareUrl(slug, currentOrigin = globalThis.location?.origi
   // self-hosted development origins keep the directly usable card route.
   const production = origin === PRODUCTION_APP_URL;
   const route = production ? "share" : "card";
-  return `${origin}/${route}/${encodeURIComponent(slug)}${production ? "?v=3" : ""}`;
+  return `${origin}/${route}/${encodeURIComponent(slug)}${production ? "?v=4" : ""}`;
 }
