@@ -24,7 +24,7 @@ const defaults = {
   supportEmail: "",
   supportUrl: "",
   loginMessage: "Sign in to manage your scratch-card workspace.",
-  defaultLimits: { card: 100, branch: 2, account: 1 },
+  defaultLimits: { card: 100, branch: 2, department: 2, account: 1 },
   memberAccess: true,
   cardCreation: true,
   sessionHours: 12,
@@ -35,6 +35,7 @@ const basePlans = [
     name: "Starter",
     cardLimit: 100,
     branchLimit: 2,
+    departmentLimit: 2,
     userLimit: 3,
     monthlyPrice: 0,
   },
@@ -43,6 +44,7 @@ const basePlans = [
     name: "Growth",
     cardLimit: 1000,
     branchLimit: 10,
+    departmentLimit: 10,
     userLimit: 20,
     monthlyPrice: 999,
   },
@@ -51,6 +53,7 @@ const basePlans = [
     name: "Unlimited",
     cardLimit: 0,
     branchLimit: 0,
+    departmentLimit: 0,
     userLimit: 0,
     monthlyPrice: 0,
   },
@@ -135,10 +138,21 @@ export function installControls(app, context) {
     queue = run.catch(() => {});
     return run;
   }
-  const settings = async () => ({
-    ...defaults,
-    ...(await readMeta()).settings,
-  });
+  const settings = async () => {
+    const saved = (await readMeta()).settings || {};
+    const savedLimits = saved.defaultLimits || {};
+    return {
+      ...defaults,
+      ...saved,
+      defaultLimits: {
+        ...defaults.defaultLimits,
+        ...savedLimits,
+        // Existing installations predate department limits. Start them with
+        // the configured branch allowance instead of silently making them unlimited.
+        department: savedLimits.department ?? savedLimits.branch ?? defaults.defaultLimits.department,
+      },
+    };
+  };
   // Read old assignments only to preserve existing businesses' allowances.
   const legacyPlans = async () => (await readMeta()).plans || basePlans;
   async function businessLimits(business, legacy = null) {
@@ -149,16 +163,26 @@ export function installControls(app, context) {
     return {
       card: business.limits?.card ?? plan?.cardLimit ?? 0,
       branch: business.limits?.branch ?? plan?.branchLimit ?? 0,
+      department:
+        business.limits?.department ??
+        plan?.departmentLimit ??
+        business.limits?.branch ??
+        plan?.branchLimit ??
+        0,
       account:
         business.limits?.account ?? (previousUsers > 0 ? previousUsers + 1 : 0),
     };
   }
   function validateLimits(value) {
     if (!value || typeof value !== "object" || Array.isArray(value))
-      throw fail("Enter the business's card, branch and account limits.");
+      throw fail("Enter the business's card, branch, department and account limits.");
     const limits = {};
-    for (const key of ["card", "branch", "account"]) {
-      const input = value[key];
+    for (const key of ["card", "branch", "department", "account"]) {
+      // Older clients did not send a department allowance. Matching the
+      // branch allowance keeps those requests compatible and bounded.
+      const input = key === "department" && value[key] === undefined
+        ? value.branch
+        : value[key];
       if (
         !["number", "string"].includes(typeof input) ||
         String(input).trim() === ""
@@ -175,11 +199,44 @@ export function installControls(app, context) {
   }
   const users = async () => (await readMeta()).users || [];
   const primaryLogin = () => String(process.env.SUPER_ADMIN_LOGIN_ID || process.env.SUPER_ADMIN_EMAIL || "admin@luckydrop.local").trim().toLowerCase();
+  const validateLoginId = (value) => {
+    const loginId = String(value || "").trim();
+    if (!/^(?=.*[a-z])(?=.*\d)[a-z\d]{6,16}$/i.test(loginId))
+      throw fail("Login ID must be 6–16 characters and contain only letters and numbers, including at least one of each.");
+    return loginId;
+  };
+  const loginIdInUse = async (value, excludeBusinessId = "") => {
+    const key = String(value || "").toLowerCase(), meta = await readMeta();
+    return key === primaryLogin()
+      || (await listBusinesses()).some((item) => item.businessId !== excludeBusinessId
+        && String(item.loginId || item.loginEmail || "").toLowerCase() === key)
+      || (meta.users || []).some((item) => String(item.loginId || item.email || "").toLowerCase() === key)
+      || (meta.superAdmins || []).some((item) => String(item.loginId || "").toLowerCase() === key);
+  };
+  async function reserveLoginId(value, { current = "", excludeBusinessId = "" } = {}) {
+    const loginId = validateLoginId(value), key = loginId.toLowerCase(), currentKey = String(current || "").toLowerCase();
+    if (key !== currentKey && await loginIdInUse(loginId, excludeBusinessId))
+      throw fail("This login ID already exists.", 409);
+    await changeMeta("loginIds", (ids = []) => {
+      if (key !== currentKey && ids.some((item) => String(item).toLowerCase() === key))
+        throw fail("This login ID already exists.", 409);
+      return ids.some((item) => String(item).toLowerCase() === key) ? ids : [...ids, loginId];
+    });
+    return loginId;
+  }
   // Reserve login IDs atomically across server instances. Passwords are
   // supplied by the creating administrator and only their hashes are stored.
   async function issueLoginId() {
     let loginId;
+    const meta = await readMeta();
+    const occupied = new Set([
+      primaryLogin(),
+      ...(await listBusinesses()).map((item) => String(item.loginId || item.loginEmail || "").toLowerCase()),
+      ...(meta.users || []).map((item) => String(item.loginId || item.email || "").toLowerCase()),
+      ...(meta.superAdmins || []).map((item) => String(item.loginId || "").toLowerCase()),
+    ]);
     await changeMeta("loginIds", (ids = []) => {
+      for (const id of ids) occupied.add(String(id).toLowerCase());
       const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ", digits = "0123456789",
         characters = `${letters}${digits}`,
         pick = (source) => source[crypto.randomInt(source.length)];
@@ -191,7 +248,7 @@ export function installControls(app, context) {
         }
         loginId = parts.join("");
       }
-      while (ids.includes(loginId));
+      while (occupied.has(loginId.toLowerCase()));
       return [...ids, loginId];
     });
     return loginId;
@@ -593,22 +650,26 @@ export function installControls(app, context) {
     superOnly,
     route(async (req, res) => {
       const name = text(req.body.name, 60),
-        generated = req.body.generateCredentials === true || !req.body.loginEmail;
+        loginBased = req.body.generateCredentials === true || req.body.loginId !== undefined || !req.body.loginEmail;
       if (!name) throw fail("Business name is required.");
-      const limits = validateLimits(req.body.limits);
-      const password = generated ? accountPassword(req.body.password) : String(req.body.password || ""),
-        credentials = generated ? { loginId: await issueLoginId(), password } : null;
+      const limits = validateLimits(req.body.limits), website = safeUrl(req.body.website);
+      const password = loginBased ? accountPassword(req.body.password) : String(req.body.password || ""),
+        requestedLoginId = String(req.body.loginId || "").trim(),
+        credentials = loginBased ? {
+          loginId: requestedLoginId ? await reserveLoginId(requestedLoginId) : await issueLoginId(),
+          password,
+        } : null;
       const email = text(req.body.loginEmail).toLowerCase(),
         normalizedPassword = credentials?.password || password;
       if (
-        (!generated && !/^\S+@\S+\.\S+$/.test(email)) ||
-        (!generated && normalizedPassword.length < 10) ||
+        (!loginBased && !/^\S+@\S+\.\S+$/.test(email)) ||
+        (!loginBased && normalizedPassword.length < 10) ||
         normalizedPassword.length > 200
       )
         throw fail(
           "Business name, valid email and a password of at least 10 characters are required.",
         );
-      if (!generated && (
+      if (!loginBased && (
         (await listBusinesses()).some((item) => item.loginEmail === email) ||
         (await users()).some((item) => item.email === email) ||
         email === primaryLogin()
@@ -617,9 +678,9 @@ export function installControls(app, context) {
       const business = {
         businessId: `biz_${crypto.randomBytes(6).toString("hex")}`,
         name,
-        ...(generated ? { loginId: credentials.loginId } : { loginEmail: email }),
+        ...(loginBased ? { loginId: credentials.loginId } : { loginEmail: email }),
         passwordHash: hashPassword(normalizedPassword),
-        website: safeUrl(req.body.website),
+        website,
         status: "active",
         departments: [],
         branches: [],
@@ -645,6 +706,8 @@ export function installControls(app, context) {
       owner(req);
       const business = await getBusiness(id),
         patch = {};
+      if (req.body.loginId !== undefined && req.user.role !== "super-admin")
+        throw fail("Only the super administrator can change a business login ID.", 403);
       if (req.body.password !== undefined && req.user.role !== "super-admin")
         throw fail("Only the super administrator can reset a business password.", 403);
       if (req.body.limits !== undefined && req.user.role !== "super-admin")
@@ -656,7 +719,32 @@ export function installControls(app, context) {
         throw fail(
           "Set limits directly on the business instead of assigning a plan.",
         );
+      if (req.body.name !== undefined) {
+        if (!["super-admin", "business"].includes(req.user.role))
+          throw fail("Only the business owner or super administrator can change the business name.", 403);
+        patch.name = text(req.body.name, 60);
+        if (!patch.name) throw fail("Business name is required.");
+      }
       if (req.user.role === "super-admin") {
+        if (req.body.loginId !== undefined) {
+          const currentLoginId = business.loginId || business.loginEmail || "";
+          const requestedLoginId = String(req.body.loginId || "").trim();
+          const nextLoginId = requestedLoginId
+            ? validateLoginId(requestedLoginId)
+            : await issueLoginId();
+          if (nextLoginId.toLowerCase() !== currentLoginId.toLowerCase()) {
+            patch.loginId = requestedLoginId
+              ? await reserveLoginId(nextLoginId, {
+                current: currentLoginId,
+                excludeBusinessId: id,
+              })
+              : nextLoginId;
+            await changeMeta("versions", (values) => ({
+              ...values,
+              [id]: (values?.[id] || 0) + 1,
+            }));
+          }
+        }
         if (
           req.body.loginEmail !== undefined &&
           req.body.loginEmail !== business.loginEmail && !business.loginId
@@ -677,10 +765,6 @@ export function installControls(app, context) {
             ...values,
             [id]: (values?.[id] || 0) + 1,
           }));
-        }
-        if (req.body.name !== undefined) {
-          patch.name = text(req.body.name, 60);
-          if (!patch.name) throw fail("Business name is required.");
         }
         if (req.body.status !== undefined) {
           if (!["active", "paused"].includes(req.body.status))
@@ -775,6 +859,9 @@ export function installControls(app, context) {
         input = req.body?.departments;
       if (!Array.isArray(input) || input.length < 1 || input.length > 20)
         throw fail("Add between 1 and 20 departments.");
+      const limits = await businessLimits(business);
+      if (limits.department > 0 && currentDepartments.length + input.length > limits.department)
+        throw fail(`department limit reached (${limits.department}). Contact your administrator.`, 403);
       const departmentNames = new Set(currentDepartments.map((item) => item.name.toLowerCase()));
       const branchNames = new Set(currentBranches.map((item) => item.name.toLowerCase()));
       let totalBranches = 0;
@@ -804,9 +891,8 @@ export function installControls(app, context) {
         }
       }
       if (totalBranches > 200) throw fail("A single hierarchy can contain at most 200 branches.");
-      const maximum = (await businessLimits(business)).branch;
-      if (maximum > 0 && currentBranches.length + totalBranches > maximum)
-        throw fail(`branch limit reached (${maximum}). Contact your administrator.`, 403);
+      if (limits.branch > 0 && currentBranches.length + totalBranches > limits.branch)
+        throw fail(`branch limit reached (${limits.branch}). Contact your administrator.`, 403);
       await updateBusiness(id, {
         departments: [...currentDepartments, ...createdDepartments],
         branches: [...currentBranches, ...createdBranches],
@@ -1132,7 +1218,9 @@ export function installControls(app, context) {
         [req.user.id]: (values?.[req.user.id] || 0) + 1,
       }));
       await audit(req, "Password changed", req.user.businessId);
-      res.json({ ok: true });
+      const version = (await readMeta()).versions?.[req.user.id] || 0;
+      const user = { ...req.user, version };
+      res.json({ ok: true, token: await sign(user), user });
     }),
   );
   app.patch(

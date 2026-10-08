@@ -1385,6 +1385,10 @@ function App() {
   return (
     <Portal
       session={session}
+      onSessionChange={(data) => {
+        sessionStorage.setItem("lucky-drop-session", JSON.stringify(data));
+        setSession(data);
+      }}
       language={language}
       setLanguage={setLanguage}
       t={t}

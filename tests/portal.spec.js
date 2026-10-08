@@ -30,7 +30,6 @@ const createdCredentials = async (page) => {
     loginId: await popup.getByLabel("Login ID", { exact: true }).inputValue(),
     password: await popup.getByLabel("Password", { exact: true }).inputValue(),
   };
-  expect(credentials.loginId).toMatch(/^(?=.*[A-Z])(?=.*\d)[A-Z\d]{12}$/);
   expect(credentials.password.length).toBeGreaterThan(0);
   await popup.getByRole("button", { name: "Done", exact: true }).click();
   await expect(popup).not.toBeVisible();
@@ -141,17 +140,21 @@ test("super admin can manage workspaces, create rewards, and export English work
   await page.setViewportSize({ width: 1440, height: 1000 });
   await dialog.getByLabel("Business name").fill("Orbit Retail");
   await expect(dialog.getByLabel("Owner login email")).toHaveCount(0);
+  await expect(dialog.getByLabel("Login ID (optional)")).toHaveValue("");
+  await dialog.getByLabel("Login ID (optional)").fill("ORBIT58");
   await dialog.getByLabel("Password", { exact: true }).fill("ORBITPASS58F");
   await dialog.getByLabel("Confirm password", { exact: true }).fill("ORBITPASS58F");
   await expect(dialog.getByLabel("Branch limit", { exact: true })).toHaveValue(
     "2",
   );
+  await expect(dialog.getByLabel("Department limit", { exact: true })).toHaveValue("2");
   await expect(dialog.getByLabel("Business account limit")).toHaveValue("1");
   await expect(
     dialog.getByRole("combobox", { name: "Subscription plan" }),
   ).toHaveCount(0);
   await dialog.getByLabel("Scratch-card limit").fill("250");
   await dialog.getByLabel("Branch limit", { exact: true }).fill("4");
+  await dialog.getByLabel("Department limit", { exact: true }).fill("3");
   await dialog.getByLabel("Business account limit").fill("3");
   await page.screenshot({
     path: info.outputPath("business-limits.png"),
@@ -159,6 +162,7 @@ test("super admin can manage workspaces, create rewards, and export English work
   });
   await dialog.getByRole("button", { name: "Save changes" }).click();
   const orbitCredentials = await createdCredentials(page);
+  expect(orbitCredentials.loginId).toBe("ORBIT58");
   await expect(dialog).not.toBeVisible();
   await expect(
     page.getByRole("row").filter({ hasText: "Orbit Retail" }),
@@ -168,6 +172,7 @@ test("super admin can manage workspaces, create rewards, and export English work
   await expect(businessRow).not.toContainText(orbitCredentials.password);
   await expect(businessRow).toContainText("250 scratch cards");
   await expect(businessRow).toContainText("4 branches");
+  await expect(businessRow).toContainText("3 departments");
   await expect(businessRow).toContainText("3 business accounts");
   const notice = page.getByRole("status");
   await expect(notice).toContainText("Changes saved successfully.");
@@ -187,15 +192,29 @@ test("super admin can manage workspaces, create rewards, and export English work
   await expect(dialog.getByLabel("Branch limit", { exact: true })).toHaveValue(
     "4",
   );
+  await expect(dialog.getByLabel("Owner login ID")).toHaveValue("ORBIT58");
+  await dialog.getByRole("button", { name: "Generate new", exact: true }).click();
+  await expect(dialog.getByLabel("Owner login ID")).toHaveValue(/^(?=.*[A-Z])(?=.*\d)[A-Z\d]{12}$/);
+  await dialog.getByLabel("Owner login ID").fill("ORBIT59");
   await dialog.getByLabel("Branch limit", { exact: true }).fill("2");
   await dialog.getByRole("button", { name: "Save changes" }).click();
   await expect(dialog).not.toBeVisible();
+  await expect(businessRow).toContainText("ORBIT59");
   await expect(businessRow).toContainText("2 branches");
-  await page
-    .getByRole("row")
-    .filter({ hasText: "Impact Vibes" })
-    .getByRole("button", { name: "Open workspace" })
-    .click();
+  await nav(page, "Branches");
+  await page.getByRole("button", { name: "Add departments & branches", exact: true }).click();
+  const capacityDialog = page.getByRole("dialog", { name: "Add departments and branches" });
+  await capacityDialog.getByRole("combobox", { name: "Business", exact: true }).selectOption({ label: "Orbit Retail" });
+  await expect(capacityDialog.getByLabel("Number of departments")).toHaveAttribute("max", "2");
+  const capacityBranchCount = capacityDialog.getByLabel("Number of branches");
+  await expect(capacityBranchCount).toHaveAttribute("max", "2");
+  await capacityBranchCount.fill("5");
+  await expect(capacityBranchCount).toHaveValue("2");
+  await expect(capacityDialog).toContainText("2 of 2 branch slots remaining");
+  await capacityDialog.getByRole("button", { name: "Cancel" }).click();
+  await nav(page, "Businesses");
+  const impactBusinessRow = page.getByRole("row").filter({ hasText: "Impact Vibes" });
+  await impactBusinessRow.getByRole("button", { name: "Open workspace" }).click();
   await expect(page.locator(".p-workspace-banner")).toContainText(
     "Impact Vibes",
   );
@@ -344,6 +363,15 @@ test("super admin can manage workspaces, create rewards, and export English work
     await nav(page, tab);
     await expect(page.locator(".p-page-heading h1")).toHaveText(tab);
     await expect(page.locator(".p-alert.error")).toHaveCount(0);
+    if (tab === "Security") {
+      await expect(page.getByLabel("Password", { exact: true })).toHaveAttribute("type", "password");
+      await page.getByRole("button", { name: "Change password to set a new value" }).click();
+      const passwordDialog = page.getByRole("dialog", { name: "Change your password" });
+      await expect(passwordDialog.getByLabel("Current password", { exact: true })).toBeVisible();
+      await expect(passwordDialog.getByLabel("New password", { exact: true })).toBeVisible();
+      await expect(passwordDialog.getByLabel("Confirm new password", { exact: true })).toBeVisible();
+      await passwordDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    }
   }
   await nav(page, "Businesses");
   const orbitRow = page.getByRole("row").filter({ hasText: "Orbit Retail" });
@@ -426,6 +454,24 @@ test("super admin can reset a forgotten business password without changing its l
     await login(ownerPage, credentials.loginId, "New-Owner-Password!234");
     await expect(ownerPage.locator(".p-workspace-chip b")).toHaveText(business.name);
     await expect(ownerPage.getByRole("button", { name: "Reset password", exact: true })).toHaveCount(0);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.getByRole("row").filter({ hasText: business.name }).getByRole("button", { name: "Open workspace" }).click();
+    await nav(page, "Business settings");
+    await expect(page.getByLabel("Login ID")).toBeDisabled();
+    const protectedPassword = page.getByLabel("Password", { exact: true });
+    await expect(protectedPassword).toHaveAttribute("type", "password");
+    await page.getByRole("button", { name: "Reset password to reveal a new value" }).click();
+    const settingsReset = page.getByRole("dialog", { name: `Reset ${business.name} owner password` });
+    await settingsReset.getByRole("textbox", { name: /^New password/ }).fill("Visible-Owner-Password!345");
+    await settingsReset.getByRole("textbox", { name: /^Confirm new password/ }).fill("Visible-Owner-Password!345");
+    await settingsReset.getByRole("button", { name: "Reset password", exact: true }).click();
+    await expect(settingsReset).not.toBeVisible();
+    await expect(protectedPassword).toHaveValue("Visible-Owner-Password!345");
+    await expect(protectedPassword).toHaveAttribute("type", "password");
+    await page.getByRole("button", { name: "Show password", exact: true }).click();
+    await expect(protectedPassword).toHaveAttribute("type", "text");
+    await page.getByRole("button", { name: "Hide password", exact: true }).click();
+    await expect(protectedPassword).toHaveAttribute("type", "password");
   } finally {
     await ownerContext.close();
     await page.request.delete(`/api/portal/businesses/${business.businessId}`, { headers: rootHeaders, data: { confirmName: business.name } });
@@ -493,12 +539,14 @@ test("platform settings customize login and prefill new business limits", async 
   await page.getByLabel("Support website", { exact: true }).fill("https://example.test/help");
   await page.getByLabel("Default scratch-card limit").fill("500");
   await page.getByLabel("Default branch limit").fill("5");
+  await page.getByLabel("Default department limit").fill("4");
   await page.getByLabel("Default business account limit").fill("2");
   await page.getByRole("button", { name: "Save platform settings" }).click();
   await expect(page.getByRole("status")).toContainText("Changes saved successfully.");
   await page.reload();
   await expect(page.locator(".p-page-heading h1")).toHaveText("Platform settings");
   await expect(page.getByLabel("Default branch limit")).toHaveValue("5");
+  await expect(page.getByLabel("Default department limit")).toHaveValue("4");
   await page.screenshot({ path: info.outputPath("platform-settings.png"), fullPage: true });
   await page.getByRole("switch", { name: "Dark mode" }).click();
   await page.screenshot({ path: info.outputPath("dark-platform-settings.png"), fullPage: true });
@@ -534,6 +582,7 @@ test("business login stays scoped and mobile navigation fits the screen", async 
     "Campaigns",
     "Coupons",
     "Branches",
+     "Business settings",
   ]);
   await page.getByRole("button", { name: "View all", exact: true }).click();
   await expect(page.locator(".p-page-heading h1")).toHaveText("Coupons");
@@ -551,6 +600,28 @@ test("business login stays scoped and mobile navigation fits the screen", async 
   });
   await page.getByRole("button", { name: "Open navigation" }).click();
   await expect(page.locator(".menu-open .p-sidebar")).toBeVisible();
+  await nav(page, "Business settings");
+  await expect(page.locator(".p-page-heading h1")).toHaveText("Business settings");
+  await expect(page.getByLabel("Login ID")).toHaveValue("owner@example.test");
+  await expect(page.getByLabel("Login ID")).toBeDisabled();
+  await expect(page.getByText(/existing password cannot be recovered because it is protected/i)).toBeVisible();
+  const businessNameSetting = page.getByLabel("Business name");
+  await businessNameSetting.fill("Impact Vibes Rewards");
+  await page.getByLabel("Website").fill("https://impact.example.test");
+  await page.getByRole("button", { name: "Save business information" }).click();
+  await expect(page.getByRole("status")).toContainText("Changes saved successfully.");
+  await expect(businessNameSetting).toHaveValue("Impact Vibes Rewards");
+  await businessNameSetting.fill("Impact Vibes");
+  await page.getByLabel("Website").fill("");
+  await page.getByRole("button", { name: "Save business information" }).click();
+  await expect(businessNameSetting).toHaveValue("Impact Vibes");
+  await page.getByRole("button", { name: "Change password", exact: true }).click();
+  const passwordDialog = page.getByRole("dialog", { name: "Change your password" });
+  await expect(passwordDialog.getByRole("textbox", { name: /^Current password/ })).toBeVisible();
+  await expect(passwordDialog.getByRole("textbox", { name: /^New password/ })).toBeVisible();
+  await passwordDialog.getByRole("button", { name: "Cancel" }).click();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.getByRole("button", { name: "Open navigation" }).click();
   await nav(page, "Create scratch card");
   await expect(
     page.getByRole("combobox", { name: "Branch", exact: true }),
@@ -574,14 +645,14 @@ test("business languages translate the whole workspace without changing cards or
   await login(page, "owner@example.test", "Owner-Test-Password");
   const languagePicker = page.locator(".p-topbar select");
   for (const locale of [
-    { code: "hi", nav: ["अवलोकन", "स्क्रैच कार्ड बनाएँ", "अभियान", "कूपन", "शाखाएँ"],
+    { code: "hi", nav: ["अवलोकन", "स्क्रैच कार्ड बनाएँ", "अभियान", "कूपन", "शाखाएँ", "व्यवसाय सेटिंग्स"],
       workspace: "Impact Vibes कार्यक्षेत्र", available: "उपलब्ध इनाम", signOut: "साइन आउट",
       cardLanguage: "कार्ड की भाषा", campaign: "अभियान का नाम", branch: "शाखा", allBranches: "सभी शाखाएँ",
       preview: "पूर्वावलोकन", previewTitle: "स्क्रैच-कार्ड पूर्वावलोकन", closePreview: "पूर्वावलोकन बंद करें",
       add: "शाखा जोड़ें", branchName: "शाखा का नाम", address: "पता", save: "बदलाव सहेजें", cancel: "रद्द करें",
       branchError: "शाखा का नाम ज़रूरी है।", edit: "संपादित करें", editTitle: "शाखा संपादित करें",
       success: "बदलाव सफलतापूर्वक सहेजे गए।", empty: "कोई रिकॉर्ड नहीं मिला", header: "इनाम और कूपन", exportHeader: "कूपन कोड" },
-    { code: "te", nav: ["అవలోకనం", "స్క్రాచ్ కార్డ్ సృష్టించండి", "ప్రచారాలు", "కూపన్లు", "శాఖలు"],
+    { code: "te", nav: ["అవలోకనం", "స్క్రాచ్ కార్డ్ సృష్టించండి", "ప్రచారాలు", "కూపన్లు", "శాఖలు", "వ్యాపార సెట్టింగ్‌లు"],
       workspace: "Impact Vibes కార్యస్థలం", available: "అందుబాటులో ఉన్న బహుమతులు", signOut: "సైన్ అవుట్",
       cardLanguage: "కార్డ్ భాష", campaign: "ప్రచారం పేరు", branch: "శాఖ", allBranches: "అన్ని శాఖలు",
       preview: "ప్రివ్యూ", previewTitle: "స్క్రాచ్ కార్డ్ ప్రివ్యూ", closePreview: "ప్రివ్యూను మూసివేయండి",
@@ -722,6 +793,7 @@ test("manual passwords and generated login IDs work for business and super-admin
   await expect(editor.getByRole("textbox", { name: "Owner login email" })).toHaveCount(0);
   await expect(editor.locator('input[type="password"]')).toHaveCount(2);
   await editor.getByLabel("Business name", { exact: true }).fill("Credentials Test Shop");
+  await expect(editor.getByLabel("Login ID (optional)")).toHaveValue("");
   await editor.getByLabel("Password", { exact: true }).fill("my simple password!");
   await editor.getByLabel("Confirm password", { exact: true }).fill("my simple password!");
   await editor.getByRole("button", { name: "Show Password", exact: true }).click();
@@ -740,6 +812,7 @@ test("manual passwords and generated login IDs work for business and super-admin
     loginId: await popup.getByLabel("Login ID", { exact: true }).inputValue(),
     password: await popup.getByLabel("Password", { exact: true }).inputValue(),
   };
+  expect(credentials.loginId).toMatch(/^(?=.*[A-Z])(?=.*\d)[A-Z\d]{12}$/);
   expect(credentials.password).toBe("my simple password!");
   await expect(popup.getByLabel("Login ID", { exact: true })).toHaveAttribute("readonly", "");
   for (const [key, label] of [["loginId", "Login ID"], ["password", "Password"]]) {
@@ -790,6 +863,25 @@ test("manual passwords and generated login IDs work for business and super-admin
   await expect(page.locator(".p-sidebar nav").getByRole("button", { name: "Super admins", exact: true })).toBeVisible();
   await page.reload();
   await expect(page.locator(".p-welcome-row h1")).toBeVisible();
+  await nav(page, "Security");
+  await expect(page.getByText(/does not delete accounts, change passwords, or remove business data/i)).toBeVisible();
+  await page.getByRole("button", { name: "Change password", exact: true }).click();
+  const changePassword = page.getByRole("dialog", { name: "Change your password" });
+  await changePassword.getByLabel("Current password", { exact: true }).fill("admin @ 2026");
+  await changePassword.getByLabel("New password", { exact: true }).fill("admin changed @ 2026");
+  await changePassword.getByLabel("Confirm new password", { exact: true }).fill("admin changed @ 2026");
+  await changePassword.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(changePassword).not.toBeVisible();
+  const protectedAdminPassword = page.getByLabel("Password", { exact: true });
+  await expect(protectedAdminPassword).toHaveAttribute("type", "password");
+  await page.getByRole("button", { name: "Show password", exact: true }).click();
+  await expect(protectedAdminPassword).toHaveAttribute("type", "text");
+  await expect(protectedAdminPassword).toHaveValue("admin changed @ 2026");
+  expect(await page.evaluate(() => JSON.stringify({ ...sessionStorage }))).not.toContain("admin changed @ 2026");
+  await page.reload();
+  await expect(page.locator(".p-page-heading h1")).toHaveText("Security");
+  await expect(page.getByLabel("Password", { exact: true })).toHaveAttribute("type", "password");
+  await expect(page.getByLabel("Password", { exact: true })).toHaveValue("protected-password");
   await nav(page, "Super admins");
   await expect(page.getByRole("row").filter({ hasText: "Credentials Test Admin" }).getByRole("button", { name: "Pause" })).toHaveCount(0);
 });

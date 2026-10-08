@@ -83,6 +83,7 @@
 .p-shell[data-theme="dark"] .p-department-list fieldset,
 .p-shell[data-theme="dark"] .p-hierarchy-summary > div { background: #15283b; border-color: var(--border); }
 .p-shell[data-theme="dark"] .p-hierarchy-branches > div { background: #101e2d; border-color: var(--border); }
+.p-shell[data-theme="dark"] .p-business-usage > div { background: #15283b; border-color: var(--border); }
 
 .p-shell[data-theme="dark"] .modal { background: #1b2332; color: var(--ink); border: 1px solid var(--border); }
 .p-shell[data-theme="dark"] .modal > p,
