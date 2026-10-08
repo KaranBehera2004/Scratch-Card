@@ -17,6 +17,7 @@ import "./styles.css";
 import "./share-link.css";
 import "./card-typography.css";
 import "./responsive.css";
+import "./brand.css";
 
 const TRANSLATIONS = {
   en: {
@@ -96,7 +97,7 @@ const TRANSLATIONS = {
     revealToShare: "Reveal to share",
     copied: "Copied!",
     copyLink: "Copy link",
-    privacy: "Created with Lucky Drop · One-time reward",
+    privacy: "Created with JustConnect · One-time reward",
     exportError: "Could not create the Excel file.",
     noCouponsExport: "There are no coupon codes to export.",
     excelSheet: "Coupons",
@@ -188,7 +189,7 @@ const TRANSLATIONS = {
     revealToShare: "साझा करने के लिए खोलें",
     copied: "कॉपी हो गया!",
     copyLink: "लिंक कॉपी करें",
-    privacy: "Lucky Drop से बनाया गया · एक बार का इनाम",
+    privacy: "JustConnect से बनाया गया · एक बार का इनाम",
     exportError: "Excel फ़ाइल नहीं बन सकी।",
     noCouponsExport: "निर्यात के लिए कोई कूपन नहीं है।",
     excelSheet: "कूपन",
@@ -280,7 +281,7 @@ const TRANSLATIONS = {
     revealToShare: "షేర్ చేయడానికి తెరవండి",
     copied: "కాపీ అయింది!",
     copyLink: "లింక్ కాపీ",
-    privacy: "Lucky Dropతో రూపొందించబడింది · ఒక్కసారి బహుమతి",
+    privacy: "JustConnectతో రూపొందించబడింది · ఒక్కసారి బహుమతి",
     exportError: "Excel ఫైల్ సృష్టించలేకపోయాం.",
     noCouponsExport: "ఎక్స్‌పోర్ట్ చేయడానికి కూపన్‌లు లేవు.",
     excelSheet: "కూపన్లు",
@@ -399,13 +400,14 @@ function generateDraftCoupon() {
 
 const DEFAULT_CARD = {
   senderName: "Impact Vibes",
+  shareTitle: "Congratulations, you got an offer",
   headline: "A little surprise for you",
   offerTitle: "25% OFF",
   description: "On your next order",
   couponCode: generateDraftCoupon(),
   claimUrl: "",
-  accentColor: "#ffb33f",
-  pageColor: "#0b0c1c",
+  accentColor: "#f6a800",
+  pageColor: "#002b5c",
   textColor: "#ffffff",
 };
 
@@ -835,15 +837,25 @@ function Creator({
                 <span>{t("branch")}</span>
                 <select name="branchId" value={form.branchId} onChange={update}>
                   <option value="">{t("allBranches")}</option>
-                  {(business?.branches || [])
-                    .filter((branch) => branch.status === "active")
-                    .map((branch) => (
-                      <option key={branch.branchId} value={branch.branchId}>
-                        {branch.name}
-                      </option>
-                    ))}
+                  {(() => {
+                    const active = (business?.branches || []).filter((branch) => branch.status === "active");
+                    const groups = (business?.departments || []).map((department) => ({
+                      ...department, branches: active.filter((branch) => branch.departmentId === department.departmentId),
+                    })).filter((department) => department.branches.length);
+                    const unassigned = active.filter((branch) => !branch.departmentId
+                      || !(business?.departments || []).some((department) => department.departmentId === branch.departmentId));
+                    return <>{groups.map((department) => <optgroup key={department.departmentId} label={department.name}>
+                      {department.branches.map((branch) => <option key={branch.branchId} value={branch.branchId}>{branch.name}</option>)}
+                    </optgroup>)}{unassigned.map((branch) => <option key={branch.branchId} value={branch.branchId}>{branch.name}</option>)}</>;
+                  })()}
                 </select>
               </label>}
+              <label>
+                <span>{ui("WhatsApp preview title")}</span>
+                <input name="shareTitle" value={form.shareTitle} onChange={update} maxLength="100"
+                  required placeholder="Congratulations, you got an offer" />
+                <small>{ui("Shown as the bold title when WhatsApp creates a link preview.")}</small>
+              </label>
               <label>
                 <span>{t("messageAbove")}</span>
                 <input
@@ -1106,7 +1118,7 @@ function PublicCard({ slug, language: dashboardLanguage }) {
     return (
       <main className="recipient status">
         <RecipientTopbar
-          brand="Lucky Drop"
+          brand="JustConnect"
         />
         <div className="loader" />
         <p>{t("gettingReady")}</p>
@@ -1116,7 +1128,7 @@ function PublicCard({ slug, language: dashboardLanguage }) {
     return (
       <main className="recipient status">
         <RecipientTopbar
-          brand="Lucky Drop"
+          brand="JustConnect"
         />
         <div className="broken">?</div>
         <h1>{t("notFound")}</h1>
@@ -1131,7 +1143,7 @@ function PublicCard({ slug, language: dashboardLanguage }) {
         style={{ "--accent": card?.accentColor }}
       >
         <RecipientTopbar
-          brand={card?.senderName || "Lucky Drop"}
+          brand={card?.senderName || "JustConnect"}
         />
         <div className="used-icon">✓</div>
         <h1>{t("alreadyUsed")}</h1>

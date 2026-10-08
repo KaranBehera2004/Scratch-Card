@@ -13,3 +13,12 @@
 
 /* Compact body text without scaling the layout or browser zoom. */
 body { font-size: 14px; }
+
+/* JustConnect customer experience colors. */
+.kicker { color: #075a9c; }
+input:focus, select:focus { border-color: #075a9c; box-shadow: 0 0 0 3px #075a9c20; }
+.primary { background: #002b5c; box-shadow: 0 12px 28px #002b5c30; }
+.phone { background: radial-gradient(circle at 50% 18%, #f6a80035, transparent 32%), linear-gradient(145deg, #063f75, #002b5c 58%, #00172f); border-color: #001b3a; }
+.mini svg, .eyebrow svg { stroke: #f6a800; }
+.recipient { background: radial-gradient(circle at 50% 18%, color-mix(in srgb,var(--accent,#f6a800) 24%,transparent),transparent 32%), linear-gradient(145deg,#063f75,#002b5c 58%,#00152d); }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible { outline-color: #f6a800; }

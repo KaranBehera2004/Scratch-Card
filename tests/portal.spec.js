@@ -30,8 +30,8 @@ const createdCredentials = async (page) => {
     loginId: await popup.getByLabel("Login ID", { exact: true }).inputValue(),
     password: await popup.getByLabel("Password", { exact: true }).inputValue(),
   };
-  expect(credentials.loginId).toMatch(/^(biz|user|sa)-[a-f0-9]{20}$/);
-  expect(credentials.password.length).toBeGreaterThanOrEqual(24);
+  expect(credentials.loginId).toMatch(/^(?=.*[A-Z])(?=.*\d)[A-Z\d]{12}$/);
+  expect(credentials.password.length).toBeGreaterThan(0);
   await popup.getByRole("button", { name: "Done", exact: true }).click();
   await expect(popup).not.toBeVisible();
   return credentials;
@@ -141,7 +141,8 @@ test("super admin can manage workspaces, create rewards, and export English work
   await page.setViewportSize({ width: 1440, height: 1000 });
   await dialog.getByLabel("Business name").fill("Orbit Retail");
   await expect(dialog.getByLabel("Owner login email")).toHaveCount(0);
-  await expect(dialog.locator('input[type="password"]')).toHaveCount(0);
+  await dialog.getByLabel("Password", { exact: true }).fill("ORBITPASS58F");
+  await dialog.getByLabel("Confirm password", { exact: true }).fill("ORBITPASS58F");
   await expect(dialog.getByLabel("Branch limit", { exact: true })).toHaveValue(
     "2",
   );
@@ -206,6 +207,18 @@ test("super admin can manage workspaces, create rewards, and export English work
   await expect(
     page.getByRole("cell", { name: "Hyderabad", exact: true }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "Add departments & branches", exact: true }).click();
+  const hierarchyDialog = page.getByRole("dialog", { name: "Add departments and branches" });
+  await hierarchyDialog.getByLabel("Department name").fill("Sales");
+  await hierarchyDialog.getByLabel("Branch name").fill("Secunderabad");
+  await hierarchyDialog.getByLabel("Address optional").fill("Main showroom");
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await hierarchyDialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await hierarchyDialog.getByRole("button", { name: "Create 1 department and 1 branch" }).click();
+  await expect(hierarchyDialog).not.toBeVisible();
+  await expect(page.getByRole("cell", { name: "Sales", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "Secunderabad", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Return to super admin" }).click();
   await nav(page, "Business accounts");
   await page.getByRole("button", { name: "Add account", exact: true }).click();
@@ -213,6 +226,8 @@ test("super admin can manage workspaces, create rewards, and export English work
     .getByRole("combobox", { name: "Business", exact: true })
     .selectOption("impact-vibes");
   await dialog.getByLabel("Full name").fill("Rewards Editor");
+  await dialog.getByLabel("Password", { exact: true }).fill("editor password!");
+  await dialog.getByLabel("Confirm password", { exact: true }).fill("editor password!");
   await dialog.getByRole("button", { name: "Save changes" }).click();
   const editorCredentials = await createdCredentials(page);
   await expect(page.getByText(editorCredentials.loginId)).toBeVisible();
@@ -377,7 +392,7 @@ test("super admin can reset a forgotten business password without changing its l
   const rootLogin = await page.request.post("/api/auth/login", { data: { loginId: "platform@example.test", password: "Platform-Test-Password" } });
   const rootHeaders = { Authorization: `Bearer ${(await rootLogin.json()).token}` };
   const created = await page.request.post("/api/portal/businesses", { headers: rootHeaders,
-    data: { name: "Password Reset UI Test", limits: { card: 5, branch: 1, account: 1 } } });
+    data: { name: "Password Reset UI Test", password: "RESETUIPASS58", limits: { card: 5, branch: 1, account: 1 } } });
   expect(created.status()).toBe(201);
   const { business, credentials } = await created.json();
   const previousLogin = await page.request.post("/api/auth/login", { data: credentials });
@@ -679,6 +694,8 @@ test("business languages translate the whole workspace without changing cards or
   await page.getByRole("button", { name: "Create business", exact: true }).click();
   const businessDialog = page.getByRole("dialog");
   await businessDialog.getByLabel("Business name").fill("Language Test Retail");
+  await businessDialog.getByLabel("Password", { exact: true }).fill("LANGUAGEPASS58");
+  await businessDialog.getByLabel("Confirm password", { exact: true }).fill("LANGUAGEPASS58");
   await businessDialog.getByRole("button", { name: "Save changes", exact: true }).click();
   const languageCredentials = await createdCredentials(page);
   await expect(businessDialog).not.toBeVisible();
@@ -695,7 +712,7 @@ test("business languages translate the whole workspace without changing cards or
   expect(errors).toEqual([]);
 });
 
-test("generated credentials popup copies business and super-admin logins and shows passwords only once", async ({ page, context }, info) => {
+test("manual passwords and generated login IDs work for business and super-admin accounts", async ({ page, context }, info) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await login(page, "platform@example.test", "Platform-Test-Password");
   await page.getByRole("switch", { name: "Dark mode" }).click();
@@ -703,8 +720,15 @@ test("generated credentials popup copies business and super-admin logins and sho
   await page.getByRole("button", { name: "Create business", exact: true }).click();
   const editor = page.getByRole("dialog", { name: "Create business workspace" });
   await expect(editor.getByRole("textbox", { name: "Owner login email" })).toHaveCount(0);
-  await expect(editor.locator('input[type="password"]')).toHaveCount(0);
+  await expect(editor.locator('input[type="password"]')).toHaveCount(2);
   await editor.getByLabel("Business name", { exact: true }).fill("Credentials Test Shop");
+  await editor.getByLabel("Password", { exact: true }).fill("my simple password!");
+  await editor.getByLabel("Confirm password", { exact: true }).fill("my simple password!");
+  await editor.getByRole("button", { name: "Show Password", exact: true }).click();
+  await expect(editor.getByLabel("Password", { exact: true })).toHaveAttribute("type", "text");
+  await expect(editor.getByLabel("Password", { exact: true })).toHaveValue("my simple password!");
+  await editor.getByRole("button", { name: "Hide Password", exact: true }).click();
+  await expect(editor.getByLabel("Password", { exact: true })).toHaveAttribute("type", "password");
   await editor.getByRole("button", { name: "Save changes", exact: true }).click();
   const popup = page.getByRole("dialog", { name: "Login credentials", exact: true });
   await expect(popup).toBeVisible();
@@ -716,6 +740,7 @@ test("generated credentials popup copies business and super-admin logins and sho
     loginId: await popup.getByLabel("Login ID", { exact: true }).inputValue(),
     password: await popup.getByLabel("Password", { exact: true }).inputValue(),
   };
+  expect(credentials.password).toBe("my simple password!");
   await expect(popup.getByLabel("Login ID", { exact: true })).toHaveAttribute("readonly", "");
   for (const [key, label] of [["loginId", "Login ID"], ["password", "Password"]]) {
     await popup.getByRole("button", { name: `Copy ${label}`, exact: true }).click();
@@ -747,11 +772,15 @@ test("generated credentials popup copies business and super-admin logins and sho
   await login(page, "platform@example.test", "Platform-Test-Password");
   await nav(page, "Super admins");
   await page.getByRole("button", { name: "Create super admin", exact: true }).click();
-  await page.getByRole("dialog").getByLabel("Full name", { exact: true }).fill("Credentials Test Admin");
-  await page.getByRole("dialog").getByRole("button", { name: "Save changes", exact: true }).click();
+  const adminDialog = page.getByRole("dialog");
+  await adminDialog.getByLabel("Full name", { exact: true }).fill("Credentials Test Admin");
+  await adminDialog.getByLabel("Password", { exact: true }).fill("admin @ 2026");
+  await adminDialog.getByLabel("Confirm password", { exact: true }).fill("admin @ 2026");
+  await adminDialog.getByRole("button", { name: "Save changes", exact: true }).click();
   await expect(popup).toBeVisible();
   await expect(popup).toContainText("Credentials Test Admin");
   const adminCredentials = await createdCredentials(page);
+  expect(adminCredentials.password).toBe("admin @ 2026");
   expect(adminCredentials.loginId).not.toBe(credentials.loginId);
   expect(adminCredentials.password).not.toBe(credentials.password);
   await expect(page.getByRole("row").filter({ hasText: "Credentials Test Admin" })).toContainText(adminCredentials.loginId);
@@ -1310,7 +1339,7 @@ test("bulk creator recovers retries, previews branches, redeems on scratch and e
   page.on("pageerror", (error) => errors.push(error.message));
   const rootLogin = await page.request.post("/api/auth/login", { data: { loginId: "platform@example.test", password: "Platform-Test-Password" } });
   const rootHeaders = { Authorization: `Bearer ${(await rootLogin.json()).token}` };
-  const created = await page.request.post("/api/portal/businesses", { headers: rootHeaders, data: { name: "Bulk Test Business", limits: { card: 75, branch: 3, account: 1 } } });
+  const created = await page.request.post("/api/portal/businesses", { headers: rootHeaders, data: { name: "Bulk Test Business", password: "BULKTESTPASS58", limits: { card: 75, branch: 3, account: 1 } } });
   expect(created.status()).toBe(201);
   const { business, credentials } = await created.json();
   const ownerLogin = await page.request.post("/api/auth/login", { data: credentials });
@@ -1415,7 +1444,7 @@ test("batch WhatsApp sharing exports every coupon and opens one chat for manual 
   const rootLogin = await page.request.post("/api/auth/login", { data: { loginId: "platform@example.test", password: "Platform-Test-Password" } });
   const rootHeaders = { Authorization: `Bearer ${(await rootLogin.json()).token}` };
   const created = await page.request.post("/api/portal/businesses", { headers: rootHeaders,
-    data: { name: "Batch Excel Share Business", limits: { card: 40, branch: 2, account: 1 } } });
+    data: { name: "Batch Excel Share Business", password: "BATCHEXCEL58", limits: { card: 40, branch: 2, account: 1 } } });
   expect(created.status()).toBe(201);
   const { business, credentials } = await created.json();
   const ownerLogin = await page.request.post("/api/auth/login", { data: credentials });
@@ -1669,7 +1698,7 @@ test("bulk branch controls continue the same draft across generations, refreshes
   const rootHeaders = { Authorization: `Bearer ${(await rootLogin.json()).token}` };
   const created = await page.request.post("/api/portal/businesses", {
     headers: rootHeaders,
-    data: { name: "Bulk Branch Controls Business", limits: { card: 75, branch: 2, account: 1 } },
+    data: { name: "Bulk Branch Controls Business", password: "BRANCHPASS58", limits: { card: 75, branch: 2, account: 1 } },
   });
   expect(created.status()).toBe(201);
   const { business, credentials } = await created.json();
