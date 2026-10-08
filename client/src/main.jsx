@@ -423,6 +423,43 @@ function imageDataUrl(file) {
   });
 }
 
+async function prepareWhatsAppPreview(shareUrl, hasImage) {
+  let share;
+  try {
+    share = new URL(shareUrl, window.location.origin);
+  } catch {
+    return;
+  }
+  // Only production share routes contain server-rendered Open Graph metadata.
+  // Fetch them before opening WhatsApp so a sleeping API and the image
+  // conversion cannot make WhatsApp cache a title-only fallback preview.
+  if (!/^\/share\/[A-Za-z0-9_-]+\/?$/.test(share.pathname)) return;
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 10000);
+  const warm = async (url) => {
+    const response = await fetch(url, {
+      cache: "reload",
+      credentials: "omit",
+      mode: url.origin === window.location.origin ? "same-origin" : "no-cors",
+      signal: controller.signal,
+    });
+    if (response.type !== "opaque" && !response.ok)
+      throw new Error("The WhatsApp preview is not ready yet.");
+    await response.arrayBuffer();
+  };
+  try {
+    const requests = [warm(share)];
+    if (hasImage) {
+      const image = new URL(`${share.pathname.replace(/\/$/, "")}/image`, share.origin);
+      image.search = share.search;
+      requests.push(warm(image));
+    }
+    await Promise.allSettled(requests);
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
 async function requestJson(url, options) {
   let response;
   try {
@@ -760,6 +797,7 @@ function Creator({
       const whatsappUrl = whatsAppCardUrl(customerPhone, cardUrl);
       const hasShareImage = Boolean(shareImage);
       setResult({ ...data, whatsappUrl, shareUrl: cardUrl, hasShareImage });
+      await prepareWhatsAppPreview(cardUrl, hasShareImage);
       if (directSend) {
         if (whatsappWindow && !whatsappWindow.closed) {
           try {

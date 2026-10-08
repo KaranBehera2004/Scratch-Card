@@ -238,12 +238,12 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
       const optimizedImage = Buffer.from(await imageResponse.arrayBuffer());
       assert.deepEqual(optimizedImage.subarray(0, 3), Buffer.from("ffd8ff", "hex"));
       assert.ok(optimizedImage.length < 300 * 1024);
-      const previewResponse = await fetch(`${base}/share/${cardSlug}?v=4`);
+      const previewResponse = await fetch(`${base}/share/${cardSlug}?v=5`);
       const previewHtml = await previewResponse.text();
       assert.equal(previewResponse.status, 200);
       assert.match(previewHtml, /property="og:image"/);
       assert.match(previewHtml, /property="og:title" content="Congratulation you got an offer"/);
-      assert.match(previewHtml, new RegExp(`scratch\\.justconnect\\.biz/share/${cardSlug}/image\\?v=4`));
+      assert.match(previewHtml, new RegExp(`scratch\\.justconnect\\.biz/share/${cardSlug}/image\\?v=5`));
       assert.match(previewHtml, new RegExp(`scratch\\.justconnect\\.biz/card/${cardSlug}`));
       assert.doesNotMatch(previewHtml, /http-equiv="refresh"/i);
       assert.match(previewHtml, /property="og:image:type" content="image\/jpeg"/);
