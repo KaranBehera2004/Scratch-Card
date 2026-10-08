@@ -82,7 +82,7 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
 
   await t.test("platform customization persists without altering existing businesses", async () => {
     const original = (await request("/api/portal/settings", admin)).settings;
-    const updated = { ...original, supportUrl: "https://example.test/help", loginMessage: "Welcome to your rewards portal", defaultLimits: { card: 500, branch: 5, account: 2 } };
+    const updated = { ...original, supportUrl: "https://example.test/help", loginMessage: "Welcome to your rewards portal", defaultLimits: { card: 500, branch: 5, department: 3, account: 2 } };
     assert.equal((await request("/api/portal/settings", owner, "PUT", updated)).status, 403);
     assert.equal((await request("/api/portal/settings", admin, "PUT", updated)).status, 200);
     assert.deepEqual((await request("/api/portal/settings", admin)).settings, updated);
@@ -90,7 +90,7 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
     assert.equal(publicSettings.supportUrl, updated.supportUrl);
     assert.equal(publicSettings.loginMessage, updated.loginMessage);
     assert.equal(publicSettings.defaultLimits, undefined);
-    assert.deepEqual((await request("/api/portal/businesses", owner)).businesses[0].limits, { card: 100, branch: 2, account: 0 });
+    assert.deepEqual((await request("/api/portal/businesses", owner)).businesses[0].limits, { card: 100, branch: 2, department: 2, account: 0 });
     const stored = JSON.parse(await fs.readFile(path.join(temporary, "server/data/control.json"), "utf8"));
     assert.deepEqual(stored.settings, updated);
     for (const supportUrl of ["javascript:alert(1)", "invalid", "https://user:password@example.test"])
@@ -106,7 +106,7 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
     async () => {
       const existing = (await request("/api/portal/businesses", owner))
         .businesses[0];
-      assert.deepEqual(existing.limits, { card: 100, branch: 2, account: 0 });
+      assert.deepEqual(existing.limits, { card: 100, branch: 2, department: 2, account: 0 });
     },
   );
 
@@ -127,6 +127,7 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
       assert.deepEqual(result.business.limits, {
         card: 100,
         branch: 2,
+        department: 2,
         account: 1,
       });
       assert.equal(
@@ -157,6 +158,26 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
         ).status,
         403,
       );
+      const updatedProfile = await request(
+        "/api/portal/businesses/impact-vibes",
+        owner,
+        "PATCH",
+        { name: "Impact Vibes Rewards", website: "https://impact.example.test" },
+      );
+      assert.equal(updatedProfile.status, 200, updatedProfile.message);
+      let ownBusiness = (await request("/api/portal/businesses", owner)).businesses[0];
+      assert.equal(ownBusiness.name, "Impact Vibes Rewards");
+      assert.equal(ownBusiness.website, "https://impact.example.test/");
+      assert.equal((await request(
+        "/api/portal/businesses/impact-vibes", owner, "PATCH",
+        { limits: { card: 1, branch: 1, department: 1, account: 1 } },
+      )).status, 403);
+      assert.equal((await request(
+        "/api/portal/businesses/impact-vibes", owner, "PATCH",
+        { name: "Impact Vibes", website: "" },
+      )).status, 200);
+      ownBusiness = (await request("/api/portal/businesses", owner)).businesses[0];
+      assert.equal(ownBusiness.name, "Impact Vibes");
     },
   );
   await t.test(
@@ -421,19 +442,19 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
       assert.equal(
         (
           await request("/api/portal/businesses/impact-vibes", admin, "PATCH", {
-            limits: { card: 1, branch: 1, account: 2 },
+            limits: { card: 1, branch: 1, department: 1, account: 2 },
           })
         ).status,
         200,
       );
       assert.deepEqual(
         (await request("/api/portal/businesses", owner)).businesses[0].limits,
-        { card: 1, branch: 1, account: 2 },
+        { card: 1, branch: 1, department: 1, account: 2 },
       );
       assert.equal(
         (
           await request("/api/portal/businesses/impact-vibes", owner, "PATCH", {
-            limits: { card: 0, branch: 0, account: 0 },
+            limits: { card: 0, branch: 0, department: 0, account: 0 },
           })
         ).status,
         403,
@@ -445,12 +466,16 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
               "/api/portal/businesses/impact-vibes",
               admin,
               "PATCH",
-              { limits: { card: invalid, branch: 2, account: 1 } },
+              { limits: { card: invalid, branch: 2, department: 2, account: 1 } },
             )
           ).status,
           400,
         );
       }
+      for (const invalid of [-1, 1.5, "", null, true])
+        assert.equal((await request("/api/portal/businesses/impact-vibes", admin, "PATCH", {
+          limits: { card: 2, branch: 2, department: invalid, account: 1 },
+        })).status, 400);
       assert.equal(
         (await request("/api/cards", owner, "POST", draft)).status,
         403,
@@ -466,6 +491,12 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
         ).status,
         403,
       );
+      const departmentBlocked = await request(
+        "/api/portal/businesses/impact-vibes/departments/branches", admin, "POST",
+        { departments: [{ name: "Over department limit", branches: [{ name: "Blocked department branch" }] }] },
+      );
+      assert.equal(departmentBlocked.status, 403);
+      assert.match(departmentBlocked.message, /department limit reached \(1\)/i);
       assert.equal(
         (
           await request("/api/portal/users", owner, "POST", {
@@ -529,7 +560,7 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
       assert.equal(
         (
           await request(`/api/portal/businesses/${otherId}`, admin, "PATCH", {
-            limits: { card: 1, branch: 2, account: 2 },
+            limits: { card: 1, branch: 2, department: 2, account: 2 },
           })
         ).status,
         200,
@@ -593,7 +624,7 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
       );
       assert.deepEqual(
         disk.find((item) => item.businessId === otherId).limits,
-        { card: 1, branch: 2, account: 2 },
+        { card: 1, branch: 2, department: 2, account: 2 },
       );
     },
   );
@@ -647,7 +678,6 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
       assert.equal(
         (
           await request("/api/portal/businesses/impact-vibes", owner, "PATCH", {
-            name: "Cannot rename",
             website: "https://example.test",
             brand: {
               pageColor: "#001122",
@@ -727,6 +757,76 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
     assert.equal((await request("/api/portal/businesses", fresh, "POST", {
       name: "Generated Test", password: "", limits: { card: 20, branch: 2, account: 2 },
     })).status, 400);
+    for (const loginId of ["ABC12", "ABCDEFGHIJKLMNOPQ1", "ONLYLETTERS", "12345678", "bad-id1"]) {
+      const invalid = await request("/api/portal/businesses", fresh, "POST", {
+        name: "Invalid Login ID Test",
+        loginId,
+        password: "manual password!",
+        limits: { card: 20, branch: 2, department: 2, account: 1 },
+        generateCredentials: true,
+      });
+      assert.equal(invalid.status, 400);
+    }
+    const customPassword = "custom password!";
+    const custom = await request("/api/portal/businesses", fresh, "POST", {
+      name: "Custom Login ID Test",
+      loginId: "CUSTOM58",
+      password: customPassword,
+      limits: { card: 20, branch: 2, department: 2, account: 1 },
+      generateCredentials: true,
+    });
+    assert.equal(custom.status, 201, custom.message);
+    assert.equal(custom.credentials.loginId, "CUSTOM58");
+    assert.equal((await request("/api/portal/businesses", fresh, "POST", {
+      name: "Duplicate Login ID Test",
+      loginId: "custom58",
+      password: "another password!",
+      limits: { card: 20, branch: 2, department: 2, account: 1 },
+      generateCredentials: true,
+    })).status, 409);
+    const customOwner = await loginById({ loginId: "custom58", password: customPassword });
+    assert.equal((await request(
+      `/api/portal/businesses/${custom.business.businessId}`,
+      customOwner.token,
+      "PATCH",
+      { loginId: "OWNERTRY9" },
+    )).status, 403);
+    const renamed = await request(
+      `/api/portal/businesses/${custom.business.businessId}`,
+      fresh,
+      "PATCH",
+      { loginId: "NEWLOGIN77" },
+    );
+    assert.equal(renamed.status, 200, renamed.message);
+    assert.equal(
+      (await request("/api/portal/businesses", fresh)).businesses
+        .find((item) => item.businessId === custom.business.businessId).loginId,
+      "NEWLOGIN77",
+    );
+    assert.equal((await request("/api/auth/me", customOwner.token)).status, 401);
+    assert.equal((await request("/api/auth/login", null, "POST", {
+      loginId: "custom58", password: customPassword,
+    })).status, 401);
+    assert.equal((await request("/api/auth/login", null, "POST", {
+      loginId: "newlogin77", password: customPassword,
+    })).status, 200);
+    const automaticallyRenamed = await request(
+      `/api/portal/businesses/${custom.business.businessId}`,
+      fresh,
+      "PATCH",
+      { loginId: "" },
+    );
+    assert.equal(automaticallyRenamed.status, 200, automaticallyRenamed.message);
+    const automaticLoginId = (await request("/api/portal/businesses", fresh)).businesses
+      .find((item) => item.businessId === custom.business.businessId).loginId;
+    assert.match(automaticLoginId, /^(?=.*[A-Z])(?=.*\d)[A-Z\d]{12}$/);
+    assert.notEqual(automaticLoginId, "NEWLOGIN77");
+    assert.equal((await request("/api/auth/login", null, "POST", {
+      loginId: "newlogin77", password: customPassword,
+    })).status, 401);
+    assert.equal((await request("/api/auth/login", null, "POST", {
+      loginId: automaticLoginId, password: customPassword,
+    })).status, 200);
     const createdPassword = "anything is ok!";
     const created = await request("/api/portal/businesses", fresh, "POST", {
       name: "Generated Test", password: createdPassword, limits: { card: 20, branch: 2, account: 2 },
@@ -774,7 +874,12 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
     assert.equal((await request(`/api/portal/super-admins/${others[0].user.id}`, fresh, "PATCH", { status: "active" })).status, 200);
     secondAdmin = await loginById(others[0].credentials);
     assert.equal((await request("/api/portal/security/password", secondAdmin.token, "POST", { currentPassword: "Wrong password", password: "Changed-Generated-Password" })).status, 400);
-    assert.equal((await request("/api/portal/security/password", secondAdmin.token, "POST", { currentPassword: others[0].credentials.password, password: "Changed-Generated-Password" })).status, 200);
+    const changedPassword = await request("/api/portal/security/password", secondAdmin.token, "POST", { currentPassword: others[0].credentials.password, password: "Changed-Generated-Password" });
+    assert.equal(changedPassword.status, 200);
+    assert.ok(changedPassword.token);
+    assert.equal(changedPassword.user.password, undefined);
+    assert.equal(changedPassword.user.passwordHash, undefined);
+    assert.equal((await request("/api/auth/me", changedPassword.token)).status, 200);
     assert.equal((await request("/api/auth/me", secondAdmin.token)).status, 401);
     assert.equal((await request("/api/auth/login", null, "POST", others[0].credentials)).status, 401);
     await loginById({ loginId: others[0].credentials.loginId, password: "Changed-Generated-Password" });
@@ -789,6 +894,7 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
       assert.ok(!readable.includes(result.credentials.password));
     }
     assert.ok(!storage.includes("Changed-Generated-Password"));
+    assert.equal((await request(`/api/portal/businesses/${custom.business.businessId}`, fresh, "DELETE", { confirmName: "Custom Login ID Test" })).status, 200);
     assert.equal((await request(`/api/portal/businesses/${created.business.businessId}`, fresh, "DELETE", { confirmName: "Generated Test" })).status, 200);
     assert.equal((await request("/api/auth/me", businessLogin.token)).status, 401);
   });

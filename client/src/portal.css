@@ -15,7 +15,6 @@
   min-height: 100vh;
 }
 
-.p-department-editor { width: min(960px, calc(100vw - 32px)); max-height: 92vh; overflow: auto; }
 .p-hierarchy-summary { display: grid; grid-template-columns: 1.4fr 1fr minmax(130px,.55fr); gap: 14px; align-items: end; margin: 18px 0; }
 .p-hierarchy-summary > div { min-height: 43px; display: flex; align-items: center; gap: 10px; padding: 8px 13px; border: 1px solid var(--border); border-radius: 8px; background: #f7f9fc; }
 .p-hierarchy-summary > div b { color: var(--brand-navy); font-size: 20px; }
@@ -838,6 +837,44 @@
 .p-settings .p-button {
   justify-self: start;
 }
+.p-business-settings {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 22px;
+  align-items: start;
+}
+.p-business-settings .p-settings { max-width: none; height: 100%; }
+.p-business-settings-wide { grid-column: 1 / -1; }
+.p-business-settings .p-protected-password,
+.p-security-grid .p-protected-password {
+  width: 100%;
+  max-width: 440px;
+  margin: 8px 0 12px;
+}
+.p-business-settings .p-protected-password input,
+.p-security-grid .p-protected-password input {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.p-business-color-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+.p-business-usage {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 22px 0;
+}
+.p-business-usage > div {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #f8fafc;
+}
+.p-business-usage dt { color: var(--muted); font-size: 12px; }
+.p-business-usage dd { margin: 5px 0 0; color: var(--ink); font-size: 18px; font-weight: 800; }
 .p-platform-settings { max-width: 980px; }
 .p-setting-group {
   min-width: 0;
@@ -856,6 +893,8 @@
 .p-support-link { display: flex; justify-content: center; align-items: center; gap: 8px; margin-top: 16px; font-size: 12px; }
 @media (max-width: 700px) {
   .p-setting-group { grid-template-columns: minmax(0, 1fr); padding: 16px; }
+  .p-business-settings, .p-business-color-grid, .p-business-usage { grid-template-columns: minmax(0, 1fr); }
+  .p-business-settings-wide { grid-column: auto; }
 }
 .p-welcome {
   display: inline-grid;
@@ -885,6 +924,17 @@
   border-radius: 16px;
   padding: 28px;
   box-shadow: 0 30px 100px #1b19382b;
+}
+.p-dialog.p-department-editor {
+  width: min(1080px, calc(100vw - 48px));
+  max-height: calc(100dvh - 48px);
+  padding: 32px 36px;
+}
+.p-department-editor > p {
+  max-width: 760px;
+  margin: 0 0 24px;
+  color: var(--muted);
+  line-height: 1.65;
 }
 .p-dialog-head {
   display: flex;
@@ -920,10 +970,59 @@
 .p-business-editor .p-editor-fields > label {
   min-width: 0;
 }
+.p-input-action {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  min-width: 0;
+}
+.p-input-action input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.p-input-action .p-button {
+  flex: 0 0 auto;
+  min-height: 0;
+  padding-inline: 16px;
+  white-space: nowrap;
+}
+@media (max-width: 430px) {
+  .p-input-action { flex-direction: column; }
+}
 @media (min-width: 700px) {
   .p-business-editor .p-editor-fields {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 22px 24px;
+  }
+}
+@media (max-width: 860px) {
+  .p-dialog.p-department-editor {
+    width: calc(100vw - 28px);
+    padding: 24px;
+  }
+  .p-department-editor .p-hierarchy-summary {
+    grid-template-columns: minmax(0, 1.25fr) minmax(150px, .8fr);
+  }
+  .p-department-editor .p-hierarchy-summary > div {
+    grid-column: 1 / -1;
+  }
+  .p-department-editor .p-hierarchy-branches > div {
+    grid-template-columns: 74px minmax(0, 1fr) minmax(0, 1.2fr);
+  }
+}
+@media (max-width: 620px) {
+  .p-dialog.p-department-editor {
+    width: calc(100vw - 20px);
+    max-height: calc(100dvh - 20px);
+    padding: 18px;
+  }
+  .p-department-editor .p-hierarchy-summary,
+  .p-department-editor .p-department-head,
+  .p-department-editor .p-hierarchy-branches > div {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .p-department-editor .p-hierarchy-summary > div {
+    grid-column: auto;
   }
 }
 .p-dialog footer {

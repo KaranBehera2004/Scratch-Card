@@ -90,6 +90,28 @@ const businessFields = [
   { key: "name", label: "Business name", required: true },
   { key: "website", label: "Website", type: "url" },
 ];
+const businessLoginIdField = {
+  key: "loginId",
+  label: "Login ID (optional)",
+  minLength: 6,
+  maxLength: 16,
+  pattern: "(?=.*[A-Za-z])(?=.*[0-9])[A-Za-z0-9]{6,16}",
+  title: "Use 6–16 letters and numbers, including at least one of each. Leave empty to generate automatically.",
+};
+const randomLoginId = () => {
+  const letters = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+  const digits = "23456789";
+  const all = `${letters}${digits}`;
+  const bytes = crypto.getRandomValues(new Uint8Array(12));
+  const result = [letters[bytes[0] % letters.length], digits[bytes[1] % digits.length]];
+  for (let index = 2; index < bytes.length; index += 1)
+    result.push(all[bytes[index] % all.length]);
+  for (let index = result.length - 1; index > 0; index -= 1) {
+    const target = bytes[index] % (index + 1);
+    [result[index], result[target]] = [result[target], result[index]];
+  }
+  return result.join("");
+};
 const branchFields = [
   { key: "name", label: "Branch name", required: true },
   { key: "address", label: "Address" },
@@ -102,6 +124,7 @@ const businessLimitFields = [
     required: true,
   },
   { key: "branchLimit", label: "Branch limit", type: "number", required: true },
+  { key: "departmentLimit", label: "Department limit", type: "number", required: true },
   {
     key: "accountLimit",
     label: "Business account limit",
@@ -112,10 +135,12 @@ const businessLimitFields = [
 const businessPayload = (values) => ({
   name: values.name,
   website: values.website,
+  loginId: values.loginId,
   status: values.status,
   limits: {
     card: Number(values.cardLimit),
     branch: Number(values.branchLimit),
+    department: Number(values.departmentLimit),
     account: Number(values.accountLimit),
   },
 });
@@ -374,6 +399,23 @@ function Editor({ editor, onClose, onSave }) {
                     <Icon name="eye" />
                   </button>
                 </div>
+              ) : field.actionLabel ? (
+                <div className="p-input-action">
+                  <input
+                    type={field.type || "text"}
+                    minLength={field.minLength}
+                    maxLength={field.maxLength}
+                    pattern={field.pattern}
+                    title={field.title}
+                    required={field.required}
+                    value={values[field.key] ?? ""}
+                    onChange={(event) => setValues({ ...values, [field.key]: event.target.value })}
+                  />
+                  <button type="button" className="p-button" disabled={busy}
+                    onClick={() => setValues({ ...values, [field.key]: field.generateValue() })}>
+                    {ui(field.actionLabel)}
+                  </button>
+                </div>
               ) : (
                 <input
                   type={field.type || "text"}
@@ -423,11 +465,34 @@ const resizeDrafts = (items, count, factory) => [
   ...Array.from({ length: Math.max(0, count - items.length) }, factory),
 ];
 
+const hasBranchCapacity = (item) => Boolean(item) && (!item.limits?.branch
+  || (item.branches?.length || 0) < item.limits.branch);
+
 function DepartmentBranchEditor({ businesses, initialBusinessId, onClose, onSave }) {
-  const [businessId, setBusinessId] = useState(initialBusinessId || businesses[0]?.businessId || "");
+  const firstAvailableBusiness = businesses.find(hasBranchCapacity);
+  const [businessId, setBusinessId] = useState(initialBusinessId || firstAvailableBusiness?.businessId || "");
   const [departments, setDepartments] = useState([newDepartmentDraft()]);
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
   const branchTotal = departments.reduce((sum, item) => sum + item.branches.length, 0);
+  const selectedBusiness = businesses.find((item) => item.businessId === businessId);
+  const departmentLimit = selectedBusiness?.limits?.department || 0;
+  const departmentRemaining = departmentLimit
+    ? Math.max(0, departmentLimit - (selectedBusiness?.departments?.length || 0))
+    : Infinity;
+  const branchLimit = selectedBusiness?.limits?.branch || 0;
+  const branchRemaining = branchLimit
+    ? Math.max(0, branchLimit - (selectedBusiness?.branches?.length || 0))
+    : Infinity;
+  const departmentLimitExceeded = departments.length > departmentRemaining;
+  const branchLimitExceeded = branchTotal > branchRemaining;
+  const maximumDepartmentsByBranchCapacity = Number.isFinite(branchRemaining)
+    ? Math.max(0, branchRemaining - (branchTotal - departments.length))
+    : 20;
+  const maximumNewDepartments = Math.min(
+    20,
+    Number.isFinite(departmentRemaining) ? departmentRemaining : 20,
+    maximumDepartmentsByBranchCapacity,
+  );
   const submit = async (event) => {
     event.preventDefault();
     setBusy(true); setError("");
@@ -447,15 +512,30 @@ function DepartmentBranchEditor({ businesses, initialBusinessId, onClose, onSave
         <label>Business<select required value={businessId} disabled={busy || Boolean(initialBusinessId)}
           onChange={(event) => setBusinessId(event.target.value)}>
           <option value="">Select business</option>
-          {businesses.map((item) => <option key={item.businessId} value={item.businessId}>{item.name}</option>)}
+          {businesses.map((item) => <option key={item.businessId} value={item.businessId}
+            disabled={!hasBranchCapacity(item)}>
+            {item.name}{hasBranchCapacity(item) ? "" : " — branch limit reached"}
+          </option>)}
         </select></label>
-        <label>Number of departments<input type="number" min="1" max="20" step="1" required
+        <label>Number of departments<input type="number" min="1"
+          max={Math.max(1, maximumNewDepartments)} step="1" required
+          disabled={busy || maximumNewDepartments < 1}
           value={departments.length} onChange={(event) => {
-            const count = Math.min(20, Math.max(1, Number(event.target.value) || 1));
+            const count = Math.min(Math.max(1, maximumNewDepartments), Math.max(1, Number(event.target.value) || 1));
             setDepartments((current) => resizeDrafts(current, count, newDepartmentDraft));
           }} /></label>
         <div><b>{branchTotal}</b><span>Total branches</span></div>
       </div>
+      {Number.isFinite(departmentRemaining) && <div className={`p-alert${departmentLimitExceeded ? " error" : ""}`} role="status">
+        {departmentRemaining
+          ? `${departmentRemaining} of ${departmentLimit} department slots remaining for this business.`
+          : `Department limit reached (${departmentLimit}). Increase it in the business workspace settings.`}
+      </div>}
+      {Number.isFinite(branchRemaining) && <div className={`p-alert${branchLimitExceeded || branchRemaining === 0 ? " error" : ""}`} role="status">
+        {branchRemaining
+          ? `${branchRemaining} of ${branchLimit} branch slots remaining for this business. The form will not allow more.`
+          : `Branch limit reached (${branchLimit}). Increase it in the business workspace settings before adding another branch.`}
+      </div>}
       <div className="p-department-list">
         {departments.map((department, departmentIndex) => <fieldset key={departmentIndex}>
           <legend>Department {departmentIndex + 1}</legend>
@@ -463,9 +543,16 @@ function DepartmentBranchEditor({ businesses, initialBusinessId, onClose, onSave
             <label>Department name<input required maxLength="60" value={department.name}
               onChange={(event) => setDepartments((current) => current.map((item, index) =>
                 index === departmentIndex ? { ...item, name: event.target.value } : item))} /></label>
-            <label>Number of branches<input type="number" min="1" max="50" step="1" required
+            <label>Number of branches<input type="number" min="1"
+              max={Math.max(1, Math.min(50, Number.isFinite(branchRemaining)
+                ? branchRemaining - (branchTotal - department.branches.length)
+                : 50))}
+              step="1" required disabled={busy || branchRemaining < 1}
               value={department.branches.length} onChange={(event) => {
-                const count = Math.min(50, Math.max(1, Number(event.target.value) || 1));
+                const availableForDepartment = Math.max(1, Math.min(50, Number.isFinite(branchRemaining)
+                  ? branchRemaining - (branchTotal - department.branches.length)
+                  : 50));
+                const count = Math.min(availableForDepartment, Math.max(1, Number(event.target.value) || 1));
                 setDepartments((current) => current.map((item, index) => index === departmentIndex
                   ? { ...item, branches: resizeDrafts(item.branches, count, newBranchDraft) } : item));
               }} /></label>
@@ -485,7 +572,7 @@ function DepartmentBranchEditor({ businesses, initialBusinessId, onClose, onSave
       </div>
       {error && <div className="p-alert error" role="alert">{error}</div>}
       <footer><button type="button" className="p-button" onClick={onClose} disabled={busy}>Cancel</button>
-        <button className="p-button primary" disabled={busy}>{busy ? "Saving…" : `Create ${departments.length} ${departments.length === 1 ? "department" : "departments"} and ${branchTotal} ${branchTotal === 1 ? "branch" : "branches"}`}</button></footer>
+        <button className="p-button primary" disabled={busy || departmentLimitExceeded || branchLimitExceeded || branchRemaining === 0}>{busy ? "Saving…" : `Create ${departments.length} ${departments.length === 1 ? "department" : "departments"} and ${branchTotal} ${branchTotal === 1 ? "branch" : "branches"}`}</button></footer>
     </form>
   </div>;
 }
@@ -644,6 +731,7 @@ function CardPreviewDialog({ card, ScratchCard, t, onClose }) {
 export default function Portal({
   session,
   onLogout,
+  onSessionChange,
   Creator,
   ScratchCard,
   cardTranslator,
@@ -688,6 +776,10 @@ export default function Portal({
     [editor, setEditor] = useState(null),
     [departmentEditor, setDepartmentEditor] = useState(false),
     [credentials, setCredentials] = useState(null),
+    [temporaryAdminPassword, setTemporaryAdminPassword] = useState(""),
+    [visibleAdminPassword, setVisibleAdminPassword] = useState(false),
+    [temporaryOwnerPasswords, setTemporaryOwnerPasswords] = useState({}),
+    [visibleOwnerPasswords, setVisibleOwnerPasswords] = useState({}),
     [previewCard, setPreviewCard] = useState(null),
     [menu, setMenu] = useState(false),
     [busy, setBusy] = useState(false);
@@ -733,6 +825,9 @@ export default function Portal({
     };
   }, [compactNavigation, menu]);
   const business = businesses.find((item) => item.businessId === workspaceId);
+  const branchCreationDisabled = global
+    ? !businesses.some(hasBranchCapacity)
+    : !hasBranchCapacity(business);
   useEffect(() => {
     setCouponFilters({ ...EMPTY_COUPON_FILTERS });
     setBusinessFilter("");
@@ -740,6 +835,8 @@ export default function Portal({
   const admin = ["super-admin", "business", "admin"].includes(
     session.user.role,
   );
+  const canManageWorkspace = ["super-admin", "business", "admin"].includes(session.user.role);
+  const canRenameWorkspace = ["super-admin", "business"].includes(session.user.role);
   const canCreate = session.user.role !== "viewer";
   const nav = global
     ? [
@@ -761,6 +858,7 @@ export default function Portal({
         ["Campaigns", "campaign"],
         ["Coupons", "cards"],
         ["Branches", "branches"],
+        ["Business settings", "settings"],
       ];
   useEffect(() => {
     if (!nav.some(([name]) => name === tab)) setTab("Overview");
@@ -897,7 +995,7 @@ export default function Portal({
     if (result?.credentials) setCredentials({ ...result.credentials, name: result.business?.name || result.user?.name });
     setNotice(savedEditor.successMessage || "Changes saved successfully.");
     savedEditor.onSaved?.(result);
-    await refresh(savedEditor.quietRefresh === true);
+    if (!savedEditor.skipRefresh) await refresh(savedEditor.quietRefresh === true);
   };
   const match = (value) =>
     `${JSON.stringify(value)} ${ui(value.status || "")} ${value.defaultName || ("campaignName" in value && !value.campaignName) ? ui("General rewards") : ""}`
@@ -974,13 +1072,15 @@ export default function Portal({
     setEditor({
       title: "Create business workspace",
       wide: true,
-      fields: [...businessFields, ...accountPasswordFields, ...businessLimitFields],
+      fields: [...businessFields, businessLoginIdField, ...accountPasswordFields, ...businessLimitFields],
       description:
-        "Enter the owner password manually. A unique 12-character login ID containing letters and numbers will be created automatically. The account limit includes the owner login; use 0 for unlimited.",
+        "Enter a 6–16 character login ID using letters and numbers, or leave it empty to generate one automatically. Enter the owner password manually. The account limit includes the owner login; use 0 for unlimited.",
       values: {
         cardLimit: config?.defaultLimits?.card ?? 100,
         branchLimit: config?.defaultLimits?.branch ?? 2,
+        departmentLimit: config?.defaultLimits?.department ?? config?.defaultLimits?.branch ?? 2,
         accountLimit: config?.defaultLimits?.account ?? 1,
+        loginId: "",
       },
       save: (values) => {
         const payload = manualPasswordPayload(values);
@@ -1003,11 +1103,15 @@ export default function Portal({
       title: `Manage ${item.name}`,
       wide: true,
       description:
-        "Limits apply to this business only. The account limit includes its owner. Use 0 for unlimited. Lowering a limit keeps existing records and prevents additional creation when the limit is reached.",
+        "Enter a custom owner login ID, click Generate new to preview one, or leave it empty to generate one automatically when you save. Limits apply to this business only; use 0 for unlimited.",
       fields: [
         businessFields[0],
         businessFields[1],
-        { key: "loginId", label: "Owner login ID", readOnly: true },
+        { ...businessLoginIdField,
+          label: item.loginId ? "Owner login ID" : "New owner login ID (optional)",
+          required: false,
+          actionLabel: "Generate new",
+          generateValue: randomLoginId },
         ...businessLimitFields,
         {
           key: "status",
@@ -1021,22 +1125,22 @@ export default function Portal({
       ],
       values: {
         ...item,
-        loginId: item.loginId || item.loginEmail,
+        loginId: item.loginId || "",
         cardLimit: item.limits.card,
         branchLimit: item.limits.branch,
+        departmentLimit: item.limits.department,
         accountLimit: item.limits.account,
       },
-      save: (values) =>
-        api(
-          `/api/portal/businesses/${item.businessId}`,
-          "PATCH",
-          businessPayload(values),
-        ),
+      save: (values) => {
+        const payload = businessPayload(values);
+        return api(`/api/portal/businesses/${item.businessId}`, "PATCH", payload);
+      },
     });
   const createBranch = (inline = false, onSaved) =>
     setEditor({
       title: "Add branch",
-      fields: [...(global ? [businessSelect] : []), ...branchFields,
+      fields: [...(global ? [{ ...businessSelect, options: options.filter((option) =>
+        hasBranchCapacity(businesses.find((item) => item.businessId === option.value)))}] : []), ...branchFields,
         ...(!global && business?.departments?.length ? [{ key: "departmentId", label: "Department", type: "select",
           options: [{ value: "", label: "Unassigned" }, ...business.departments.map((item) => ({ value: item.departmentId, label: item.name }))] }] : [])],
       values: { businessId: workspaceId },
@@ -1578,6 +1682,7 @@ export default function Portal({
                 <td>
                   <small>{item.limits.card || "Unlimited"} scratch cards</small>
                   <small>{item.limits.branch || "Unlimited"} branches</small>
+                  <small>{item.limits.department || "Unlimited"} departments</small>
                   <small>
                     {item.limits.account || "Unlimited"} business accounts
                   </small>
@@ -1930,7 +2035,30 @@ export default function Portal({
         </article>
       );
     }
-    if (tab === "Security")
+    if (tab === "Security") {
+      const openAccountPasswordEditor = () => setEditor({
+        title: "Change your password",
+        description: "Your existing password cannot be recovered. Enter it to verify your identity, then choose a new password.",
+        successMessage: "Password changed. Your new password can be revealed until this page is refreshed.",
+        skipRefresh: true,
+        fields: [
+          { key: "currentPassword", label: "Current password", type: "password", required: true },
+          { key: "password", label: "New password", type: "password", minLength: 10, required: true },
+          { key: "confirmPassword", label: "Confirm new password", type: "password", minLength: 10, required: true },
+        ],
+        save: (values) => {
+          if (values.password !== values.confirmPassword) throw new Error("Passwords do not match.");
+          return api("/api/portal/security/password", "POST", {
+            currentPassword: values.currentPassword,
+            password: values.password,
+          }).then((result) => {
+            setTemporaryAdminPassword(values.password);
+            setVisibleAdminPassword(false);
+            onSessionChange?.({ token: result.token, user: result.user });
+            return result;
+          });
+        },
+      });
       return (
         <div className="p-security-grid">
           <article className="p-card">
@@ -1945,29 +2073,30 @@ export default function Portal({
               <dt>Session</dt>
               <dd>Signed and expiry-checked on the server</dd>
             </dl>
+            <label>Password</label>
+            <div className="p-password p-protected-password">
+              <input aria-label="Password" type={visibleAdminPassword ? "text" : "password"}
+                value={temporaryAdminPassword || "protected-password"} readOnly
+                autoComplete="off" spellCheck={false} />
+              <button type="button"
+                aria-label={temporaryAdminPassword
+                  ? `${visibleAdminPassword ? "Hide" : "Show"} password`
+                  : "Change password to set a new value"}
+                title={temporaryAdminPassword
+                  ? `${visibleAdminPassword ? "Hide" : "Show"} the newly set password`
+                  : "The existing password cannot be recovered. Change it to set a new password."}
+                onClick={() => temporaryAdminPassword
+                  ? setVisibleAdminPassword((value) => !value)
+                  : openAccountPasswordEditor()}>
+                <Icon name="eye" />
+              </button>
+            </div>
+            <p>{temporaryAdminPassword
+              ? "The newly set password is available only in this page's memory and disappears after refresh."
+              : "The existing password cannot be recovered because it is protected with one-way hashing. Change it to set a new visible value."}</p>
             <button
               className="p-button"
-              onClick={() =>
-                setEditor({
-                  title: "Change your password",
-                  fields: [
-                    {
-                      key: "currentPassword",
-                      label: "Current password",
-                      type: "password",
-                      required: true,
-                    },
-                    {
-                      key: "password",
-                      label: "New password (10+ characters)",
-                      type: "password",
-                      required: true,
-                    },
-                  ],
-                  save: (values) =>
-                    api("/api/portal/security/password", "POST", values),
-                })
-              }
+              onClick={openAccountPasswordEditor}
             >
               Change password
             </button>
@@ -1976,8 +2105,8 @@ export default function Portal({
             <article className="p-card">
               <h2>Session control</h2>
               <p>
-                Force other {global ? "business and super-admin" : "workspace"} accounts to sign
-                in again. Your current account remains signed in.
+                Signs out every other {global ? "business owner, staff member, and super admin" : "workspace account"}
+                on their next request. Your current account remains signed in.
               </p>
               <button
                 className="p-button danger"
@@ -1991,11 +2120,12 @@ export default function Portal({
               >
                 Revoke other sessions
               </button>
-              <p>Account suspension takes effect on their next API request.</p>
+              <p>This does not delete accounts, change passwords, or remove business data.</p>
             </article>
           )}
         </div>
       );
+    }
     if (tab === "Platform settings")
       return (
         <article className="p-card p-settings p-platform-settings">
@@ -2047,7 +2177,7 @@ export default function Portal({
               <fieldset className="p-setting-group">
                 <legend>New business defaults</legend>
                 <p className="p-setting-wide">Prefills the Create business form. Existing businesses are not changed. Use 0 for unlimited; accounts include the owner login.</p>
-                {[["card", "Default scratch-card limit"], ["branch", "Default branch limit"], ["account", "Default business account limit"]].map(([key, label]) => (
+                {[["card", "Default scratch-card limit"], ["branch", "Default branch limit"], ["department", "Default department limit"], ["account", "Default business account limit"]].map(([key, label]) => (
                   <label key={key}>{label}
                     <input type="number" min="0" max="1000000000" step="1" required
                       value={config.defaultLimits?.[key] ?? ""}
@@ -2101,63 +2231,172 @@ export default function Portal({
           )}
         </article>
       );
-    if (tab === "Brand settings")
+    if (tab === "Business settings") {
+      const accountLoginId = platformAdmin
+        ? business?.loginId || business?.loginEmail
+        : session.user.loginId || session.user.email;
+      const passwordFields = [
+        ...(!platformAdmin ? [{ key: "currentPassword", label: "Current password", type: "password", required: true }] : []),
+        { key: "password", label: "New password", type: "password", minLength: 10, required: true },
+        { key: "confirmPassword", label: "Confirm new password", type: "password", minLength: 10, required: true },
+      ];
+      const openPasswordEditor = () => setEditor({
+        title: platformAdmin ? `Reset ${business?.name} owner password` : "Change your password",
+        submitLabel: platformAdmin ? "Reset password" : "Change password",
+        description: platformAdmin
+          ? "Set a new password for this business owner. Their existing sessions will be signed out."
+          : "Enter your current password and choose a new password. You will need to sign in again after it changes.",
+        successMessage: platformAdmin
+          ? "Business password reset. Existing owner sessions were signed out."
+          : "Password changed. Sign in again with your new password.",
+        fields: passwordFields,
+        save: (values) => {
+          if (values.password !== values.confirmPassword) throw new Error("Passwords do not match.");
+          if (platformAdmin)
+            return api(`/api/portal/businesses/${workspaceId}`, "PATCH", { password: values.password })
+              .then((result) => {
+                setTemporaryOwnerPasswords((current) => ({ ...current, [workspaceId]: values.password }));
+                setVisibleOwnerPasswords((current) => ({ ...current, [workspaceId]: false }));
+                return result;
+              });
+          return api("/api/portal/security/password", "POST", {
+            currentPassword: values.currentPassword,
+            password: values.password,
+          });
+        },
+      });
       return (
-        <article className="p-card p-settings">
-          <h2>{business?.name} brand defaults</h2>
-          <p>
-            Your business name is managed by the super admin and locked on
-            scratch cards.
-          </p>
-          <form
-            onSubmit={(event) => {
+        <div className="p-business-settings">
+          <article className="p-card p-settings p-business-settings-wide">
+            <div className="p-card-title">
+              <div><span className="p-eyebrow">WORKSPACE PROFILE</span><h2>Business information</h2></div>
+            </div>
+            <p>Manage the business identity used throughout the dashboard and on newly created scratch cards.</p>
+            <form onSubmit={(event) => {
               event.preventDefault();
               const form = new FormData(event.currentTarget);
-              mutate(() =>
-                api(`/api/portal/businesses/${workspaceId}`, "PATCH", {
-                  website: form.get("website"),
-                  brand: {
-                    pageColor: form.get("pageColor"),
-                    textColor: form.get("textColor"),
-                    accentColor: form.get("accentColor"),
-                  },
-                }),
-              );
-            }}
-          >
-            <label>
-              Business name
-              <input value={business?.name || ""} disabled />
-            </label>
-            <label>
-              Website
-              <input
-                key={business?.website}
-                name="website"
-                type="url"
-                defaultValue={business?.website || ""}
-              />
-            </label>
-            {[
-              ["pageColor", "Page background", "#002b5c"],
-              ["textColor", "Message text", "#ffffff"],
-              ["accentColor", "Scratch card", "#f6a800"],
-            ].map(([key, label, fallback]) => (
-              <label key={`${key}:${business?.brand?.[key]}`}>
-                {label}
-                <input
-                  name={key}
-                  type="color"
-                  defaultValue={business?.brand?.[key] || fallback}
-                />
-              </label>
-            ))}
-            <button className="p-button primary" disabled={busy}>
-              Save brand settings
+              mutate(() => api(`/api/portal/businesses/${workspaceId}`, "PATCH", {
+                ...(canRenameWorkspace ? { name: form.get("name") } : {}),
+                ...(canManageWorkspace ? { website: form.get("website") } : {}),
+              }));
+            }}>
+              <fieldset className="p-setting-group">
+                <legend>Business profile</legend>
+                <label>Business name
+                  <input key={business?.name} name="name" maxLength="60" required
+                    defaultValue={business?.name || ""} disabled={!canRenameWorkspace} />
+                </label>
+                <label>Website
+                  <input key={business?.website} name="website" type="url" maxLength="500"
+                    placeholder="https://example.com" defaultValue={business?.website || ""}
+                    disabled={!canManageWorkspace} />
+                </label>
+                <label>Login ID
+                  <input key={accountLoginId} name={undefined}
+                    defaultValue={accountLoginId || ""} readOnly
+                    disabled
+                    required={Boolean(business?.loginId)} minLength={business?.loginId ? 6 : undefined}
+                    maxLength={business?.loginId ? 16 : undefined}
+                    pattern={business?.loginId ? "(?=.*[A-Za-z])(?=.*[0-9])[A-Za-z0-9]{6,16}" : undefined}
+                    title={business?.loginId ? "Use 6–16 letters and numbers, including at least one of each." : undefined} />
+                </label>
+                {false && platformAdmin && !business?.loginId && <label>New login ID (optional)
+                  <input name="loginId" minLength="6" maxLength="16"
+                    pattern="(?=.*[A-Za-z])(?=.*[0-9])[A-Za-z0-9]{6,16}"
+                    title="Use 6–16 letters and numbers, including at least one of each." />
+                </label>}
+                <label>Account role
+                  <input value={platformAdmin ? "Business owner" : session.user.role} readOnly />
+                </label>
+                <p className="p-setting-wide">{platformAdmin
+                  ? "Changing the owner login ID signs out existing owner sessions. Login IDs must contain 6–16 letters and numbers."
+                  : "The login ID can be viewed, but only a super administrator can change it. The current password cannot be recovered because it is protected with one-way hashing."}</p>
+              </fieldset>
+              {canManageWorkspace && <button className="p-button primary" disabled={busy}>Save business information</button>}
+            </form>
+          </article>
+
+          <article className="p-card p-settings">
+            <h2>Brand appearance</h2>
+            <p>Set the default colors used when this business creates a scratch card.</p>
+            <form onSubmit={(event) => {
+              event.preventDefault();
+              const form = new FormData(event.currentTarget);
+              mutate(() => api(`/api/portal/businesses/${workspaceId}`, "PATCH", {
+                brand: {
+                  pageColor: form.get("pageColor"),
+                  textColor: form.get("textColor"),
+                  accentColor: form.get("accentColor"),
+                },
+              }));
+            }}>
+              <div className="p-business-color-grid">
+                {[
+                  ["pageColor", "Page background", "#002b5c"],
+                  ["textColor", "Message text", "#ffffff"],
+                  ["accentColor", "Scratch card", "#f6a800"],
+                ].map(([key, label, fallback]) => (
+                  <label key={`${key}:${business?.brand?.[key]}`}>{label}
+                    <input name={key} type="color" defaultValue={business?.brand?.[key] || fallback}
+                      disabled={!canManageWorkspace} />
+                  </label>
+                ))}
+              </div>
+              {canManageWorkspace && <button className="p-button primary" disabled={busy}>Save appearance</button>}
+            </form>
+          </article>
+
+          <article className="p-card p-settings">
+            <h2>Login & password</h2>
+            <p><b>{accountLoginId || "No login ID"}</b></p>
+            <label>Password</label>
+            <div className="p-password p-protected-password">
+              <input aria-label="Password" readOnly autoComplete="off" spellCheck={false}
+                type={visibleOwnerPasswords[workspaceId] ? "text" : "password"}
+                value={temporaryOwnerPasswords[workspaceId] || "protected-password"} />
+              <button type="button"
+                aria-label={temporaryOwnerPasswords[workspaceId]
+                  ? `${visibleOwnerPasswords[workspaceId] ? "Hide" : "Show"} password`
+                  : `Reset password to reveal a new value`}
+                title={temporaryOwnerPasswords[workspaceId]
+                  ? `${visibleOwnerPasswords[workspaceId] ? "Hide" : "Show"} password`
+                  : "The existing password cannot be recovered. Reset it to view a new password."}
+                onClick={() => temporaryOwnerPasswords[workspaceId]
+                  ? setVisibleOwnerPasswords((current) => ({ ...current, [workspaceId]: !current[workspaceId] }))
+                  : openPasswordEditor()}>
+                <Icon name="eye" />
+              </button>
+            </div>
+            <p>{temporaryOwnerPasswords[workspaceId]
+              ? "The newly reset password can be shown with the eye button until this page is refreshed."
+              : `The existing password cannot be recovered because it is protected with one-way hashing. ${platformAdmin ? "Reset it" : "Change it"} to set a new password.`}</p>
+            <button type="button" className="p-button" onClick={openPasswordEditor}>
+              <Icon name="security" /> {platformAdmin ? "Reset owner password" : "Change password"}
             </button>
-          </form>
-        </article>
+          </article>
+
+          <article className="p-card p-settings">
+            <h2>Workspace usage & limits</h2>
+            <dl className="p-business-usage">
+              <div><dt>Scratch cards</dt><dd>{cards.length} / {business?.limits?.card || "Unlimited"}</dd></div>
+              <div><dt>Branches</dt><dd>{business?.branches?.length || 0} / {business?.limits?.branch || "Unlimited"}</dd></div>
+              <div><dt>Departments</dt><dd>{business?.departments?.length || 0} / {business?.limits?.department || "Unlimited"}</dd></div>
+              <div><dt>Business accounts</dt><dd>{accounts.length} / {business?.limits?.account || "Unlimited"}</dd></div>
+            </dl>
+            <p>Only a super administrator can change workspace limits.</p>
+          </article>
+
+          {admin && <article className="p-card p-settings p-business-settings-wide">
+            <h2>Session control</h2>
+            <p>Sign out other accounts in this workspace. Your current account remains active.</p>
+            <button type="button" className="p-button danger" disabled={busy} onClick={() => {
+              if (window.confirm("Revoke other workspace sessions?"))
+                mutate(() => api(scoped("/api/portal/security/revoke"), "POST", {}));
+            }}>Revoke other sessions</button>
+          </article>}
+        </div>
       );
+    }
   };
   const add =
     tab === "Businesses"
@@ -2309,13 +2548,17 @@ export default function Portal({
                 </button>
               )}
               {platformAdmin && tab === "Branches" && (
-                <button className="p-button" onClick={createDepartmentHierarchy}>
+                <button className="p-button" onClick={createDepartmentHierarchy}
+                  disabled={branchCreationDisabled}
+                  title={branchCreationDisabled ? "Branch limit reached" : undefined}>
                   <Icon name="plus" />
                   {ui("Add departments & branches")}
                 </button>
               )}
               {add && (
-                <button className="p-button primary" onClick={add}>
+                <button className="p-button primary" onClick={add}
+                  disabled={tab === "Branches" && branchCreationDisabled}
+                  title={tab === "Branches" && branchCreationDisabled ? "Branch limit reached" : undefined}>
                   <Icon name="plus" />
                   {ui(tab === "Businesses"
                     ? "Create business"
