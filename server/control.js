@@ -20,7 +20,7 @@ const equal = (a, b) => {
   return x.length === y.length && crypto.timingSafeEqual(x, y);
 };
 const defaults = {
-  platformName: "Lucky Drop",
+  platformName: "JustConnect Rewards",
   supportEmail: "",
   supportUrl: "",
   loginMessage: "Sign in to manage your scratch-card workspace.",
@@ -175,17 +175,33 @@ export function installControls(app, context) {
   }
   const users = async () => (await readMeta()).users || [];
   const primaryLogin = () => String(process.env.SUPER_ADMIN_LOGIN_ID || process.env.SUPER_ADMIN_EMAIL || "admin@luckydrop.local").trim().toLowerCase();
-  // Reserve IDs atomically across server instances. Only password hashes are
-  // stored; plaintext credentials are returned once to the creating admin.
-  async function issueCredentials(prefix) {
+  // Reserve login IDs atomically across server instances. Passwords are
+  // supplied by the creating administrator and only their hashes are stored.
+  async function issueLoginId() {
     let loginId;
     await changeMeta("loginIds", (ids = []) => {
-      do { loginId = `${prefix}-${crypto.randomBytes(10).toString("hex")}`; }
+      const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ", digits = "0123456789",
+        characters = `${letters}${digits}`,
+        pick = (source) => source[crypto.randomInt(source.length)];
+      do {
+        const parts = [pick(letters), pick(digits), ...Array.from({ length: 10 }, () => pick(characters))];
+        for (let index = parts.length - 1; index > 0; index--) {
+          const other = crypto.randomInt(index + 1);
+          [parts[index], parts[other]] = [parts[other], parts[index]];
+        }
+        loginId = parts.join("");
+      }
       while (ids.includes(loginId));
       return [...ids, loginId];
     });
-    return { loginId, password: `A9!a${crypto.randomBytes(18).toString("base64url")}` };
+    return loginId;
   }
+  const accountPassword = (value) => {
+    const password = typeof value === "string" ? value : "";
+    if (!password.length || password.length > 200)
+      throw fail("Enter a password of up to 200 characters.");
+    return password;
+  };
   const secret = () =>
     process.env.AUTH_SECRET ||
     process.env.SUPER_ADMIN_PASSWORD ||
@@ -435,12 +451,13 @@ export function installControls(app, context) {
           email,
         };
       if (!user) {
-        const account = (meta.superAdmins || []).find((item) => item.loginId === email && item.status === "active");
+        const account = (meta.superAdmins || []).find((item) =>
+          String(item.loginId || "").toLowerCase() === email && item.status === "active");
         if (account && verifyPassword(password, account.passwordHash)) user = safe(account);
       }
       if (!user) {
         const business = (await listBusinesses()).find(
-          (item) => (item.loginId || item.loginEmail) === email,
+          (item) => String(item.loginId || item.loginEmail || "").toLowerCase() === email,
         );
         if (business && verifyPassword(password, business.passwordHash))
           user = {
@@ -454,7 +471,7 @@ export function installControls(app, context) {
           };
         else {
           const account = (meta.users || []).find(
-            (item) => (item.loginId || item.email) === email && item.status === "active",
+            (item) => String(item.loginId || item.email || "").toLowerCase() === email && item.status === "active",
           );
           if (account && verifyPassword(password, account.passwordHash))
             user = safe(account);
@@ -518,9 +535,10 @@ export function installControls(app, context) {
     route(async (req, res) => {
       const name = text(req.body.name, 60);
       if (!name) throw fail("Full name is required.");
-      const credentials = await issueCredentials("sa");
+      const password = accountPassword(req.body.password),
+        credentials = { loginId: await issueLoginId(), password };
       const user = { id: crypto.randomUUID(), name, loginId: credentials.loginId,
-        passwordHash: hashPassword(credentials.password), role: "super-admin",
+        passwordHash: hashPassword(password), role: "super-admin",
         status: "active", createdAt: new Date().toISOString() };
       await changeMeta("superAdmins", (records = []) => [...records, user]);
       await audit(req, "Super-admin account created", "", user.loginId);
@@ -575,16 +593,17 @@ export function installControls(app, context) {
     superOnly,
     route(async (req, res) => {
       const name = text(req.body.name, 60),
-        generated = req.body.generateCredentials === true || (!req.body.loginEmail && !req.body.password);
+        generated = req.body.generateCredentials === true || !req.body.loginEmail;
       if (!name) throw fail("Business name is required.");
       const limits = validateLimits(req.body.limits);
-      const credentials = generated ? await issueCredentials("biz") : null;
+      const password = generated ? accountPassword(req.body.password) : String(req.body.password || ""),
+        credentials = generated ? { loginId: await issueLoginId(), password } : null;
       const email = text(req.body.loginEmail).toLowerCase(),
-        password = credentials?.password || String(req.body.password || "");
+        normalizedPassword = credentials?.password || password;
       if (
         (!generated && !/^\S+@\S+\.\S+$/.test(email)) ||
-        password.length < 10 ||
-        password.length > 200
+        (!generated && normalizedPassword.length < 10) ||
+        normalizedPassword.length > 200
       )
         throw fail(
           "Business name, valid email and a password of at least 10 characters are required.",
@@ -599,9 +618,10 @@ export function installControls(app, context) {
         businessId: `biz_${crypto.randomBytes(6).toString("hex")}`,
         name,
         ...(generated ? { loginId: credentials.loginId } : { loginEmail: email }),
-        passwordHash: hashPassword(password),
+        passwordHash: hashPassword(normalizedPassword),
         website: safeUrl(req.body.website),
         status: "active",
+        departments: [],
         branches: [],
         limits,
         brand: {},
@@ -744,6 +764,59 @@ export function installControls(app, context) {
     }),
   );
   app.post(
+    "/api/portal/businesses/:businessId/departments/branches",
+    auth,
+    superOnly,
+    route(async (req, res) => {
+      const id = scope(req);
+      const business = await getBusiness(id),
+        currentDepartments = business.departments || [],
+        currentBranches = business.branches || [],
+        input = req.body?.departments;
+      if (!Array.isArray(input) || input.length < 1 || input.length > 20)
+        throw fail("Add between 1 and 20 departments.");
+      const departmentNames = new Set(currentDepartments.map((item) => item.name.toLowerCase()));
+      const branchNames = new Set(currentBranches.map((item) => item.name.toLowerCase()));
+      let totalBranches = 0;
+      const createdDepartments = [], createdBranches = [];
+      for (const row of input) {
+        const name = text(row?.name, 60);
+        if (!name) throw fail("Every department needs a name.");
+        const departmentKey = name.toLowerCase();
+        if (departmentNames.has(departmentKey))
+          throw fail(`Department name already exists: ${name}`);
+        departmentNames.add(departmentKey);
+        if (!Array.isArray(row.branches) || row.branches.length < 1 || row.branches.length > 50)
+          throw fail(`Add between 1 and 50 branches under ${name}.`);
+        const department = { departmentId: crypto.randomUUID(), name, status: "active" };
+        createdDepartments.push(department);
+        for (const item of row.branches) {
+          const branchName = text(item?.name, 60);
+          if (!branchName) throw fail(`Every branch under ${name} needs a name.`);
+          const branchKey = branchName.toLowerCase();
+          if (branchNames.has(branchKey)) throw fail(`Branch name already exists: ${branchName}`);
+          branchNames.add(branchKey);
+          createdBranches.push({
+            branchId: crypto.randomUUID(), departmentId: department.departmentId,
+            name: branchName, address: text(item?.address, 140), status: "active",
+          });
+          totalBranches++;
+        }
+      }
+      if (totalBranches > 200) throw fail("A single hierarchy can contain at most 200 branches.");
+      const maximum = (await businessLimits(business)).branch;
+      if (maximum > 0 && currentBranches.length + totalBranches > maximum)
+        throw fail(`branch limit reached (${maximum}). Contact your administrator.`, 403);
+      await updateBusiness(id, {
+        departments: [...currentDepartments, ...createdDepartments],
+        branches: [...currentBranches, ...createdBranches],
+      });
+      await audit(req, "Departments and branches created", id,
+        `${createdDepartments.length} departments, ${createdBranches.length} branches`);
+      res.status(201).json({ departments: createdDepartments, branches: createdBranches });
+    }),
+  );
+  app.post(
     "/api/portal/businesses/:businessId/branches",
     auth,
     route(async (req, res) => {
@@ -754,8 +827,13 @@ export function installControls(app, context) {
       await limit(business, "branch", branches.length);
       const name = text(req.body.name, 60);
       if (!name) throw fail("Branch name is required.");
+      const departmentId = text(req.body.departmentId, 60);
+      if (departmentId && !(business.departments || []).some((item) =>
+        item.departmentId === departmentId && item.status !== "paused"))
+        throw fail("Choose an active department for this business.");
       const branch = {
         branchId: crypto.randomUUID(),
+        departmentId,
         name,
         address: text(req.body.address, 140),
         status: "active",
@@ -774,6 +852,7 @@ export function installControls(app, context) {
       const business = await getBusiness(id),
         branches = (business.branches || []).map((item) => ({
           branchId: item.branchId,
+          departmentId: item.departmentId || "",
           name: item.name,
           address: item.address,
           status: item.status,
@@ -788,6 +867,13 @@ export function installControls(app, context) {
       }
       if (req.body.address !== undefined)
         branch.address = text(req.body.address, 140);
+      if (req.body.departmentId !== undefined) {
+        const departmentId = text(req.body.departmentId, 60);
+        if (departmentId && !(business.departments || []).some((item) =>
+          item.departmentId === departmentId && item.status !== "paused"))
+          throw fail("Choose an active department for this business.");
+        branch.departmentId = departmentId;
+      }
       if (req.body.status !== undefined) {
         if (!["active", "paused"].includes(req.body.status))
           throw fail("Invalid branch status.");
@@ -828,13 +914,14 @@ export function installControls(app, context) {
       const name = text(req.body.name, 60);
       if (!name) throw fail("Full name is required.");
       if (!["admin", "editor", "viewer"].includes(req.body.role)) throw fail("Choose a valid role.");
-      const generated = req.body.generateCredentials === true || (!req.body.email && !req.body.password);
-      const credentials = generated ? await issueCredentials("user") : null;
+      const generated = req.body.generateCredentials === true || !req.body.email;
+      const suppliedPassword = generated ? accountPassword(req.body.password) : String(req.body.password || ""),
+        credentials = generated ? { loginId: await issueLoginId(), password: suppliedPassword } : null;
       const email = text(req.body.email).toLowerCase(),
-        password = credentials?.password || String(req.body.password || "");
+        password = credentials?.password || suppliedPassword;
       if (
         (!generated && !/^\S+@\S+\.\S+$/.test(email)) ||
-        password.length < 10 ||
+        (!generated && password.length < 10) ||
         password.length > 200
       )
         throw fail(

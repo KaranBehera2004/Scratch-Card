@@ -52,6 +52,38 @@
 .p-shell[data-theme="dark"] .p-row-actions button.danger { background: #422632; color: #ffbbc4; border-color: #704251; }
 .p-shell[data-theme="dark"] .p-row-actions button.danger:hover { background: #583040; }
 
+/* JustConnect brand system: deep navy structure with energetic orange accents. */
+.p-shell, .p-login {
+  --purple: #06366b;
+  --brand-navy: #002b5c;
+  --brand-blue: #075a9c;
+  --brand-orange: #f6a800;
+}
+.p-button.primary { background: var(--brand-navy); border-color: var(--brand-navy); box-shadow: 0 8px 20px #002b5c24; }
+.p-button.primary:hover { background: #06447d; border-color: #06447d; }
+.p-eyebrow, .p-metrics article > div, .p-bars b, .p-quick > div { color: var(--brand-blue); }
+.p-sidebar nav button:hover { color: var(--brand-blue); background: #edf5fb; }
+.p-sidebar nav button.active { color: var(--brand-navy); background: #e7f2fa; box-shadow: inset 3px 0 var(--brand-orange); }
+.p-workspace-chip { color: var(--brand-blue); background: #f1f7fb; border-color: #d6e4ef; }
+.p-avatar, .p-business-name > span { color: var(--brand-navy); background: #e6f1f8; }
+.p-bars span { background: linear-gradient(var(--brand-orange), #ffd46d); }
+.p-quick button, .p-row-actions button, .p-row-actions a { color: var(--brand-blue); background: #f0f7fb; border-color: #d7e7f1; }
+.p-quick button:hover, .p-row-actions :is(button,a):hover { color: var(--brand-navy); background: #e2f0f8; }
+.p-workspace-banner { color: var(--brand-navy); background: #eaf4fa; }
+.p-workspace-banner button { color: var(--brand-blue); }
+.p-login-story { background: radial-gradient(circle at 90% 85%, #f6a80030, transparent 36%), linear-gradient(145deg, #001c3e, #002b5c 58%, #063f75); }
+.p-login-ticket { background: linear-gradient(135deg, #fff4cf, #ffd36a); color: #002b5c; }
+.p-login-ticket small, .p-login-ticket strong, .p-login-ticket span { color: #002b5c; }
+.p-login-form input:focus, .p-shell input:focus, .p-shell select:focus { border-color: var(--brand-blue); box-shadow: 0 0 0 3px #075a9c20; }
+.p-shell[data-theme="dark"] { --purple: #f6a800; }
+.p-shell[data-theme="dark"] .p-button.primary { background: #f6a800; color: #002b5c; border-color: #ffc342; }
+.p-shell[data-theme="dark"] .p-button.primary:hover { background: #ffbb2e; }
+.p-shell[data-theme="dark"] :is(.p-sidebar nav button.active, .p-sidebar nav button:hover, .p-avatar, .p-business-name > span, .p-row-actions button, .p-row-actions a, .p-quick button) { background: #0b365d; color: #ffd36a; border-color: #18517f; }
+.p-shell[data-theme="dark"] :is(.p-eyebrow, .p-bars b, .p-metrics article > div, .p-security-grid dt) { color: #ffc342; }
+.p-shell[data-theme="dark"] .p-department-list fieldset,
+.p-shell[data-theme="dark"] .p-hierarchy-summary > div { background: #15283b; border-color: var(--border); }
+.p-shell[data-theme="dark"] .p-hierarchy-branches > div { background: #101e2d; border-color: var(--border); }
+
 .p-shell[data-theme="dark"] .modal { background: #1b2332; color: var(--ink); border: 1px solid var(--border); }
 .p-shell[data-theme="dark"] .modal > p,
 .p-shell[data-theme="dark"] .modal .again { color: #b9c2d3; }

@@ -1,6 +1,6 @@
-# Lucky Drop scratch-card platform
+# JustConnect Rewards scratch-card platform
 
-Manage multiple businesses, branches, business login accounts and one-time scratch-card rewards from one portal. WABA and JustConnect are design references; this project has its own implementation and data.
+Manage multiple businesses, departments, branches, business login accounts and one-time scratch-card rewards from one JustConnect-branded portal.
 
 ## Project structure
 

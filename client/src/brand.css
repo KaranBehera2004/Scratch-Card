@@ -1,0 +1,107 @@
+/* Final brand layer. It loads after every feature stylesheet so legacy screens
+   use the same JustConnect navy, blue, and orange system as the current portal. */
+:root {
+  --jc-navy: #002b5c;
+  --jc-blue: #075a9c;
+  --jc-orange: #f6a800;
+  --jc-pale-blue: #eaf4fa;
+}
+
+.creator-page {
+  background: #f4f7fa;
+}
+
+.creator-page h1,
+.builder label {
+  color: #102a43;
+}
+
+.logo span,
+.recipient-brand span {
+  color: var(--jc-orange);
+}
+
+.kicker,
+.admin-link,
+.admin-back,
+.saas-topbar a,
+.saas-table a {
+  color: var(--jc-blue);
+}
+
+.creator-page input:focus,
+.creator-page select:focus {
+  border-color: var(--jc-blue);
+  box-shadow: 0 0 0 3px #075a9c20;
+}
+
+.creator-page .primary,
+.super-control-trigger,
+.control-link,
+.saas-primary,
+.saas-table article button,
+.business-metrics a {
+  background: var(--jc-navy);
+  color: #fff;
+  box-shadow: 0 12px 28px #002b5c26;
+}
+
+.creator-page .primary:hover,
+.super-control-trigger:hover,
+.control-link:hover,
+.saas-primary:hover {
+  background: #06447d;
+}
+
+.phone {
+  background: radial-gradient(circle at 50% 18%, #f6a80035, transparent 32%),
+    linear-gradient(145deg, #063f75, var(--jc-navy) 58%, #00172f);
+  border-color: #001b3a;
+}
+
+.recipient {
+  background: radial-gradient(circle at 50% 18%, color-mix(in srgb, var(--accent, var(--jc-orange)) 24%, transparent), transparent 32%),
+    linear-gradient(145deg, color-mix(in srgb, var(--page-color, var(--jc-navy)) 80%, #075a9c), var(--page-color, var(--jc-navy)) 58%, #00152d);
+}
+
+.recipient-topbar {
+  background: color-mix(in srgb, var(--page-color, var(--jc-navy)) 82%, transparent);
+}
+
+.mini svg,
+.eyebrow svg {
+  stroke: var(--jc-orange);
+}
+
+.loader {
+  border-top-color: var(--jc-orange);
+}
+
+.broken {
+  border-color: var(--jc-orange);
+  color: var(--jc-orange);
+}
+
+.saas-sidebar {
+  background: var(--jc-navy);
+}
+
+.saas-sidebar nav button:hover,
+.saas-sidebar nav button.active {
+  background: #075a9c45;
+}
+
+.saas-sidebar nav button.active {
+  box-shadow: inset 3px 0 var(--jc-orange);
+}
+
+.saas-hero {
+  background: radial-gradient(circle at 90% 0, #f6a80045, transparent 37%), var(--jc-navy);
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline-color: var(--jc-orange);
+}

@@ -169,7 +169,19 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
         { name: "Hyderabad", address: "City center" },
       );
       assert.equal(result.status, 201);
-      branchId = result.branch.branchId;
+      assert.equal((await request(
+        "/api/portal/businesses/impact-vibes/departments/branches", owner, "POST",
+        { departments: [{ name: "Sales", branches: [{ name: "Secunderabad", address: "Showroom" }] }] },
+      )).status, 403);
+      const hierarchy = await request(
+        "/api/portal/businesses/impact-vibes/departments/branches", admin, "POST",
+        { departments: [{ name: "Sales", branches: [{ name: "Secunderabad", address: "Showroom" }] }] },
+      );
+      assert.equal(hierarchy.status, 201, hierarchy.message);
+      assert.equal(hierarchy.departments.length, 1);
+      assert.equal(hierarchy.branches.length, 1);
+      assert.equal(hierarchy.branches[0].departmentId, hierarchy.departments[0].departmentId);
+      branchId = hierarchy.branches[0].branchId;
       assert.equal(
         (
           await request("/api/cards", owner, "POST", {
@@ -195,6 +207,7 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
         language: "hi",
         couponCode: "TEST-UNIQUE",
         customerPhone: "+91 (98765) 43210",
+        shareTitle: "Congratulations, you got an offer",
         shareImage: `data:image/png;base64,${previewImageBase64}`,
       });
       assert.equal(created.status, 201, created.message);
@@ -203,7 +216,8 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
       assert.equal(cards[0].senderName, "Impact Vibes");
       assert.equal(cards[0].campaignName, "Diwali");
       assert.equal(cards[0].branchId, branchId);
-      assert.equal(cards[0].branchName, "Hyderabad");
+      assert.equal(cards[0].branchName, "Secunderabad");
+      assert.equal(cards[0].shareTitle, "Congratulations, you got an offer");
       assert.equal(cards[0].language, "hi");
       assert.equal(cards[0].customerPhone, "+919876543210");
       assert.equal(cards[0].hasShareImage, true);
@@ -213,6 +227,7 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
       assert.equal(publicResult.customerPhone, undefined);
       assert.ok(!JSON.stringify(publicResult).includes("9876543210"));
       assert.equal(publicResult.hasShareImage, true);
+      assert.equal(publicResult.shareTitle, "Congratulations, you got an offer");
       assert.equal(publicResult.shareImageBase64, undefined);
       const savedCards = JSON.parse(await fs.readFile(path.join(temporary, "server/data/cards.json"), "utf8"));
       assert.equal(savedCards.find((card) => card.slug === cardSlug).customerPhone, "+919876543210");
@@ -227,6 +242,7 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
       const previewHtml = await previewResponse.text();
       assert.equal(previewResponse.status, 200);
       assert.match(previewHtml, /property="og:image"/);
+      assert.match(previewHtml, /property="og:title" content="Congratulations, you got an offer"/);
       assert.match(previewHtml, new RegExp(`scratch\\.justconnect\\.biz/share/${cardSlug}/image\\?v=3`));
       assert.match(previewHtml, new RegExp(`scratch\\.justconnect\\.biz/card/${cardSlug}`));
       assert.doesNotMatch(previewHtml, /http-equiv="refresh"/i);
@@ -240,7 +256,7 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
       assert.equal((await request("/api/cards", owner, "POST", { ...draft, language: "invalid" })).status, 400);
       assert.equal(
         (await request(`/api/cards/${cardSlug}`)).branchName,
-        "Hyderabad",
+        "Secunderabad",
       );
       assert.ok(cards[0].expiresAt);
       assert.equal(
@@ -692,7 +708,7 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
       assert.ok(stored.audit.length > events.length);
     },
   );
-  await t.test("generated business and super-admin credentials are unique, scoped and never stored in plaintext", async () => {
+  await t.test("manual account passwords and generated login IDs are scoped and never stored in plaintext", async () => {
     const fresh = await login("platform@example.test", "Changed-Platform-Password");
     const loginById = async (credentials) => {
       const result = await request("/api/auth/login", null, "POST", credentials);
@@ -706,10 +722,16 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
     assert.equal((await request("/api/portal/super-admins", owner, "POST", { name: "Forbidden admin" })).status, 403);
     assert.equal((await request("/api/portal/super-admins", null, "POST", { name: "Anonymous admin" })).status, 401);
     assert.equal((await request("/api/portal/businesses", fresh, "POST", { name: "Generated Test", limits: { card: "", branch: 2, account: 2 } })).status, 400);
-    const created = await request("/api/portal/businesses", fresh, "POST", { name: "Generated Test", limits: { card: 20, branch: 2, account: 2 } });
+    assert.equal((await request("/api/portal/businesses", fresh, "POST", {
+      name: "Generated Test", password: "", limits: { card: 20, branch: 2, account: 2 },
+    })).status, 400);
+    const createdPassword = "anything is ok!";
+    const created = await request("/api/portal/businesses", fresh, "POST", {
+      name: "Generated Test", password: createdPassword, limits: { card: 20, branch: 2, account: 2 },
+    });
     assert.equal(created.status, 201, created.message);
-    assert.match(created.credentials.loginId, /^biz-[a-f0-9]{20}$/);
-    assert.ok(created.credentials.password.length >= 24);
+    assert.match(created.credentials.loginId, /^(?=.*[A-Z])(?=.*\d)[A-Z\d]{12}$/);
+    assert.equal(created.credentials.password, createdPassword);
     assert.equal(created.business.loginId, created.credentials.loginId);
     assert.equal(created.business.loginEmail, undefined);
     assert.equal(created.business.passwordHash, undefined);
@@ -718,14 +740,18 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
     assert.equal((await request("/api/portal/businesses", businessLogin.token)).businesses.length, 1);
     assert.equal((await request("/api/portal/cards?business=impact-vibes", businessLogin.token)).status, 403);
     assert.equal((await request("/api/portal/super-admins", businessLogin.token)).status, 403);
-    const member = await request("/api/portal/users", fresh, "POST", { businessId: created.business.businessId, name: "Generated editor", role: "editor" });
+    const member = await request("/api/portal/users", fresh, "POST", {
+      businessId: created.business.businessId, name: "Generated editor", role: "editor", password: "editor!",
+    });
     assert.equal(member.status, 201, member.message);
-    assert.match(member.credentials.loginId, /^user-[a-f0-9]{20}$/);
+    assert.match(member.credentials.loginId, /^(?=.*[A-Z])(?=.*\d)[A-Z\d]{12}$/);
     assert.equal((await loginById(member.credentials)).user.role, "editor");
-    const others = await Promise.all(["Generated admin 1", "Generated admin 2"].map((name) => request("/api/portal/super-admins", fresh, "POST", { name })));
+    const others = await Promise.all([
+      ["Generated admin 1", "admin one!"], ["Generated admin 2", "admin two!"],
+    ].map(([name, password]) => request("/api/portal/super-admins", fresh, "POST", { name, password })));
     for (const result of others) {
       assert.equal(result.status, 201, result.message);
-      assert.match(result.credentials.loginId, /^sa-[a-f0-9]{20}$/);
+      assert.match(result.credentials.loginId, /^(?=.*[A-Z])(?=.*\d)[A-Z\d]{12}$/);
       assert.equal(result.user.passwordHash, undefined);
     }
     const all = [created, member, ...others];
@@ -770,7 +796,9 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
       const created = await request("/api/portal/businesses", rootToken, "POST", {
         name: legacy ? "Legacy reset test" : "Generated reset test",
         limits: { card: 10, branch: 1, account: 1 },
-        ...(legacy ? { loginEmail: "legacy-reset@example.test", password: "Original-Reset-Password" } : {}),
+        ...(legacy
+          ? { loginEmail: "legacy-reset@example.test", password: "Original-Reset-Password" }
+          : { password: "RESETORIGIN58" }),
       });
       assert.equal(created.status, 201);
       const id = created.business.businessId;

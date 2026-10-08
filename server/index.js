@@ -31,14 +31,15 @@ const schema = new mongoose.Schema(
   {
     slug: { type: String, unique: true, index: true, required: true },
     senderName: { type: String, required: true, maxlength: 50 },
+    shareTitle: { type: String, maxlength: 100, default: "Congratulations, you got an offer" },
     headline: { type: String, required: true, maxlength: 80 },
     offerTitle: { type: String, required: true, maxlength: 30 },
     description: { type: String, required: true, maxlength: 80 },
     couponCode: { type: String, required: true, maxlength: 24 },
     customerPhone: { type: String, maxlength: 16, default: "" },
     claimUrl: { type: String, maxlength: 500, default: "" },
-    accentColor: { type: String, default: "#ffb33f" },
-    pageColor: { type: String, default: "#0b0c1c" },
+    accentColor: { type: String, default: "#f6a800" },
+    pageColor: { type: String, default: "#002b5c" },
     textColor: { type: String, default: "#ffffff" },
     businessId: { type: String, default: "impact-vibes", index: true },
     branchId: { type: String, default: "" },
@@ -75,9 +76,13 @@ const Business = mongoose.model(
       status: { type: String, default: "active" },
       generationRevision: { type: Number, default: 0 },
       deletedAt: Date,
+      departments: {
+        type: [{ departmentId: String, name: String, status: String }],
+        default: [],
+      },
       branches: {
         type: [
-          { branchId: String, name: String, address: String, status: String },
+          { branchId: String, departmentId: String, name: String, address: String, status: String },
         ],
         default: [],
       },
@@ -387,7 +392,7 @@ async function claimCard(slug) {
 }
 function publicCard(card) {
   // Explicitly allow presentation fields only. Customer contact details are private.
-  const fields = ["slug", "senderName", "headline", "offerTitle", "description",
+  const fields = ["slug", "senderName", "shareTitle", "headline", "offerTitle", "description",
     "claimUrl", "accentColor", "pageColor", "textColor", "businessId",
     "branchId", "branchName", "language", "campaignName", "expiresAt", "createdAt"];
   return {
@@ -461,14 +466,16 @@ function buildCard(body, business, bulk = false, allowExpired = false) {
     throw bad("Choose an expiry date in the future.");
   const card = {
     senderName: clean(business.name, 50), businessId: business.businessId,
-    language: body.language || "en", headline: clean(body.headline, 80),
+    language: body.language || "en",
+    shareTitle: clean(body.shareTitle, 100) || "Congratulations, you got an offer",
+    headline: clean(body.headline, 80),
     offerTitle: clean(body.offerTitle, 30), description: clean(body.description, 80),
     customerPhone: bulk && (body.customerPhone == null || (typeof body.customerPhone === "string" && !body.customerPhone.trim()))
       ? "" : normalizeWhatsAppNumber(body.customerPhone),
     claimUrl: safeUrl(body.claimUrl), campaignName: clean(body.campaignName, 80), expiresAt,
     disabled: false, redeemedAt: null, scratchedAt: null,
     ...safeShareImage(body.shareImage),
-    ...Object.fromEntries([["accentColor", "#ffb33f"], ["pageColor", "#0b0c1c"], ["textColor", "#ffffff"]]
+    ...Object.fromEntries([["accentColor", "#f6a800"], ["pageColor", "#002b5c"], ["textColor", "#ffffff"]]
       .map(([key, fallback]) => [key, /^#[0-9a-f]{6}$/i.test(body[key]) ? body[key] : fallback])),
   };
   if (!card.senderName || !card.headline || !card.offerTitle || !card.description)
@@ -716,8 +723,8 @@ app.get("/share/:slug", async (req, res, next) => {
     const imageUrl = card.shareImageBase64
       ? `${PRODUCTION_APP_URL}/share/${slug}/image?v=${encodeURIComponent(version)}`
       : "";
-    const title = `${card.offerTitle} · ${card.senderName}`;
-    const description = `${card.headline} — ${card.description}`;
+    const title = card.shareTitle || "Congratulations, you got an offer";
+    const description = `${card.offerTitle} · ${card.senderName} — ${card.headline}`;
     const imageMeta = imageUrl ? `
     <meta property="og:image" content="${html(imageUrl)}">
     <meta property="og:image:secure_url" content="${html(imageUrl)}">
@@ -840,7 +847,7 @@ if (isLocalServer) {
   connectDatabase()
     .then(() =>
       app.listen(port, () =>
-        console.log(`Lucky Drop API: http://localhost:${port}`),
+        console.log(`JustConnect Rewards API: http://localhost:${port}`),
       ),
     )
     .catch((error) => {

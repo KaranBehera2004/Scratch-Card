@@ -127,7 +127,7 @@ export function PortalLogin({ onLogin }) {
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const [platform, setPlatform] = useState({
-    platformName: "Lucky Drop",
+    platformName: "JustConnect Rewards",
     supportEmail: "",
   });
   useEffect(() => {
@@ -260,7 +260,8 @@ function Editor({ editor, onClose, onSave }) {
   const ui = useWorkspaceText();
   const [values, setValues] = useState(editor.values || {}),
     [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
+    [error, setError] = useState(""),
+    [visiblePasswords, setVisiblePasswords] = useState({});
   const formRef = useRef(null);
   useEffect(() => {
     const previous = document.activeElement;
@@ -353,19 +354,34 @@ function Editor({ editor, onClose, onSave }) {
                     setValues({ ...values, [field.key]: event.target.checked })
                   }
                 />
+              ) : field.type === "password" ? (
+                <div className="p-password">
+                  <input
+                    type={visiblePasswords[field.key] ? "text" : "password"}
+                    minLength={field.minLength}
+                    maxLength={field.maxLength ?? 200}
+                    pattern={field.pattern}
+                    title={field.title}
+                    autoComplete="new-password"
+                    required={field.required}
+                    readOnly={field.readOnly}
+                    value={values[field.key] ?? ""}
+                    onChange={(event) => setValues({ ...values, [field.key]: event.target.value })}
+                  />
+                  <button type="button" disabled={busy}
+                    aria-label={`${visiblePasswords[field.key] ? "Hide" : "Show"} ${ui(field.label)}`}
+                    onClick={() => setVisiblePasswords((current) => ({ ...current, [field.key]: !current[field.key] }))}>
+                    <Icon name="eye" />
+                  </button>
+                </div>
               ) : (
                 <input
                   type={field.type || "text"}
                   min={field.type === "number" ? 0 : undefined}
-                  minLength={
-                    field.type === "password" && field.key !== "currentPassword"
-                      ? 10
-                      : undefined
-                  }
-                  maxLength={field.type === "password" ? 200 : undefined}
-                  autoComplete={
-                    field.type === "password" ? "new-password" : undefined
-                  }
+                  minLength={field.minLength}
+                  maxLength={field.maxLength}
+                  pattern={field.pattern}
+                  title={field.title}
                   required={field.required}
                   readOnly={field.readOnly}
                   value={values[field.key] ?? ""}
@@ -398,6 +414,80 @@ function Editor({ editor, onClose, onSave }) {
       </form>
     </div>
   );
+}
+
+const newBranchDraft = () => ({ name: "", address: "" });
+const newDepartmentDraft = () => ({ name: "", branches: [newBranchDraft()] });
+const resizeDrafts = (items, count, factory) => [
+  ...items.slice(0, count),
+  ...Array.from({ length: Math.max(0, count - items.length) }, factory),
+];
+
+function DepartmentBranchEditor({ businesses, initialBusinessId, onClose, onSave }) {
+  const [businessId, setBusinessId] = useState(initialBusinessId || businesses[0]?.businessId || "");
+  const [departments, setDepartments] = useState([newDepartmentDraft()]);
+  const [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const branchTotal = departments.reduce((sum, item) => sum + item.branches.length, 0);
+  const submit = async (event) => {
+    event.preventDefault();
+    setBusy(true); setError("");
+    try { await onSave({ businessId, departments }); }
+    catch (reason) { setError(reason.message); }
+    finally { setBusy(false); }
+  };
+  return <div className="p-backdrop">
+    <form className="p-dialog p-department-editor" role="dialog" aria-modal="true"
+      aria-label="Add departments and branches" onSubmit={submit}>
+      <div className="p-dialog-head">
+        <div><span className="p-eyebrow">PLATFORM STRUCTURE</span><h2>Add departments and branches</h2></div>
+        <button type="button" className="p-icon-button" onClick={onClose} disabled={busy} aria-label="Close dialog"><Icon name="close" /></button>
+      </div>
+      <p>Choose how many departments this business needs, then add the branches belonging to each department. Everything is validated and saved together.</p>
+      <div className="p-hierarchy-summary">
+        <label>Business<select required value={businessId} disabled={busy || Boolean(initialBusinessId)}
+          onChange={(event) => setBusinessId(event.target.value)}>
+          <option value="">Select business</option>
+          {businesses.map((item) => <option key={item.businessId} value={item.businessId}>{item.name}</option>)}
+        </select></label>
+        <label>Number of departments<input type="number" min="1" max="20" step="1" required
+          value={departments.length} onChange={(event) => {
+            const count = Math.min(20, Math.max(1, Number(event.target.value) || 1));
+            setDepartments((current) => resizeDrafts(current, count, newDepartmentDraft));
+          }} /></label>
+        <div><b>{branchTotal}</b><span>Total branches</span></div>
+      </div>
+      <div className="p-department-list">
+        {departments.map((department, departmentIndex) => <fieldset key={departmentIndex}>
+          <legend>Department {departmentIndex + 1}</legend>
+          <div className="p-department-head">
+            <label>Department name<input required maxLength="60" value={department.name}
+              onChange={(event) => setDepartments((current) => current.map((item, index) =>
+                index === departmentIndex ? { ...item, name: event.target.value } : item))} /></label>
+            <label>Number of branches<input type="number" min="1" max="50" step="1" required
+              value={department.branches.length} onChange={(event) => {
+                const count = Math.min(50, Math.max(1, Number(event.target.value) || 1));
+                setDepartments((current) => current.map((item, index) => index === departmentIndex
+                  ? { ...item, branches: resizeDrafts(item.branches, count, newBranchDraft) } : item));
+              }} /></label>
+          </div>
+          <div className="p-hierarchy-branches">
+            {department.branches.map((branch, branchIndex) => <div key={branchIndex}>
+              <span>Branch {branchIndex + 1}</span>
+              <label>Branch name<input required maxLength="60" value={branch.name}
+                onChange={(event) => setDepartments((current) => current.map((item, index) => index === departmentIndex
+                  ? { ...item, branches: item.branches.map((value, position) => position === branchIndex ? { ...value, name: event.target.value } : value) } : item))} /></label>
+              <label>Address <em>optional</em><input maxLength="140" value={branch.address}
+                onChange={(event) => setDepartments((current) => current.map((item, index) => index === departmentIndex
+                  ? { ...item, branches: item.branches.map((value, position) => position === branchIndex ? { ...value, address: event.target.value } : value) } : item))} /></label>
+            </div>)}
+          </div>
+        </fieldset>)}
+      </div>
+      {error && <div className="p-alert error" role="alert">{error}</div>}
+      <footer><button type="button" className="p-button" onClick={onClose} disabled={busy}>Cancel</button>
+        <button className="p-button primary" disabled={busy}>{busy ? "Saving…" : `Create ${departments.length} ${departments.length === 1 ? "department" : "departments"} and ${branchTotal} ${branchTotal === 1 ? "branch" : "branches"}`}</button></footer>
+    </form>
+  </div>;
 }
 function CredentialsDialog({ credentials, onClose }) {
   const ref = useRef(null);
@@ -526,9 +616,9 @@ function CardPreviewDialog({ card, ScratchCard, t, onClose }) {
         className="p-reward-preview"
         lang={card.language || "en"}
         style={{
-          "--page-color": card.pageColor || "#0b0c1c",
+          "--page-color": card.pageColor || "#002b5c",
           "--text-color": card.textColor || "#ffffff",
-          "--accent": card.accentColor || "#ffb33f",
+          "--accent": card.accentColor || "#f6a800",
         }}
       >
         <div className="p-preview-brand">✦ {card.senderName}</div>
@@ -596,6 +686,7 @@ export default function Portal({
     [businessFilter, setBusinessFilter] = useState(""),
     [couponFilters, setCouponFilters] = useState(() => ({ ...EMPTY_COUPON_FILTERS })),
     [editor, setEditor] = useState(null),
+    [departmentEditor, setDepartmentEditor] = useState(false),
     [credentials, setCredentials] = useState(null),
     [previewCard, setPreviewCard] = useState(null),
     [menu, setMenu] = useState(false),
@@ -829,6 +920,7 @@ export default function Portal({
     .flatMap((item) =>
       (item.branches || []).map((branch) => ({
         ...branch,
+        departmentName: item.departments?.find((department) => department.departmentId === branch.departmentId)?.name || "Unassigned",
         businessId: item.businessId,
         businessName: item.name,
       })),
@@ -860,20 +952,40 @@ export default function Portal({
     required: true,
     options,
   };
+  const accountPasswordFields = [
+    {
+      key: "password", label: "Password", type: "password", required: true,
+      minLength: 1, maxLength: 200,
+    },
+    {
+      key: "confirmPassword", label: "Confirm password", type: "password", required: true,
+      minLength: 1, maxLength: 200,
+      title: "Enter the same password again.",
+    },
+  ];
+  const manualPasswordPayload = (values) => {
+    if (values.password !== values.confirmPassword) throw new Error("Passwords do not match.");
+    if (!values.password || values.password.length > 200)
+      throw new Error("Enter a password of up to 200 characters.");
+    const { confirmPassword, ...payload } = values;
+    return payload;
+  };
   const createBusiness = () =>
     setEditor({
       title: "Create business workspace",
       wide: true,
-      fields: [...businessFields, ...businessLimitFields],
+      fields: [...businessFields, ...accountPasswordFields, ...businessLimitFields],
       description:
-        "Choose the total scratch cards, branches and login accounts allowed for this business. The account limit includes the owner login. Use 0 for unlimited. A random login ID and password will be generated automatically and shown after creation.",
+        "Enter the owner password manually. A unique 12-character login ID containing letters and numbers will be created automatically. The account limit includes the owner login; use 0 for unlimited.",
       values: {
         cardLimit: config?.defaultLimits?.card ?? 100,
         branchLimit: config?.defaultLimits?.branch ?? 2,
         accountLimit: config?.defaultLimits?.account ?? 1,
       },
-      save: (values) =>
-        api("/api/portal/businesses", "POST", { ...businessPayload(values), generateCredentials: true }),
+      save: (values) => {
+        const payload = manualPasswordPayload(values);
+        return api("/api/portal/businesses", "POST", { ...businessPayload(payload), password: payload.password, generateCredentials: true });
+      },
     });
   const deleteAllBusinesses = () => setEditor({
     title: "Delete all businesses",
@@ -924,7 +1036,9 @@ export default function Portal({
   const createBranch = (inline = false, onSaved) =>
     setEditor({
       title: "Add branch",
-      fields: [...(global ? [businessSelect] : []), ...branchFields],
+      fields: [...(global ? [businessSelect] : []), ...branchFields,
+        ...(!global && business?.departments?.length ? [{ key: "departmentId", label: "Department", type: "select",
+          options: [{ value: "", label: "Unassigned" }, ...business.departments.map((item) => ({ value: item.departmentId, label: item.name }))] }] : [])],
       values: { businessId: workspaceId },
       quietRefresh: inline === true,
       onSaved: typeof onSaved === "function" ? onSaved : undefined,
@@ -943,6 +1057,15 @@ export default function Portal({
         return result;
       },
     });
+  const createDepartmentHierarchy = () => setDepartmentEditor(true);
+  const saveDepartmentHierarchy = async ({ businessId, departments }) => {
+    const result = await api(`/api/portal/businesses/${businessId}/departments/branches`, "POST", { departments });
+    setDepartmentEditor(false);
+    const departmentLabel = result.departments.length === 1 ? "department" : "departments";
+    const branchLabel = result.branches.length === 1 ? "branch" : "branches";
+    setNotice(`${result.departments.length} ${departmentLabel} and ${result.branches.length} ${branchLabel} created successfully.`);
+    await refresh();
+  };
   const createAccount = () =>
     setEditor({
       title: "Add business account",
@@ -963,16 +1086,17 @@ export default function Portal({
             { value: "viewer", label: "Viewer — read and export only" },
           ],
         },
+        ...accountPasswordFields,
       ],
       values: { businessId: workspaceId, role: "editor" },
-      description: "A random login ID and password will be generated automatically and shown after creation.",
-      save: (values) => api("/api/portal/users", "POST", { ...values, generateCredentials: true }),
+      description: "Enter any password manually. A unique 12-character login ID containing letters and numbers will be created automatically.",
+      save: (values) => api("/api/portal/users", "POST", { ...manualPasswordPayload(values), generateCredentials: true }),
     });
   const createSuperAdmin = () => setEditor({
     title: "Create super-admin account",
-    fields: [{ key: "name", label: "Full name", required: true }],
-    description: "This account will have full platform access. A random login ID and password will be generated and shown after creation.",
-    save: (values) => api("/api/portal/super-admins", "POST", values),
+    fields: [{ key: "name", label: "Full name", required: true }, ...accountPasswordFields],
+    description: "This account will have full platform access. Enter any password manually; a unique 12-character login ID containing letters and numbers is created automatically.",
+    save: (values) => api("/api/portal/super-admins", "POST", manualPasswordPayload(values)),
   });
   const editAccount = (item) =>
     setEditor({
@@ -1128,10 +1252,11 @@ export default function Portal({
     setError("");
     try {
       const { default: write } = await import("write-excel-file/universal");
-      const labels = ["Branch", ...(global ? ["Business"] : []), "Scratch cards", "Redeemed", "Conversion", "Address", "Access"].map((label) => ui(label));
+      const labels = ["Department", "Branch", ...(global ? ["Business"] : []), "Scratch cards", "Redeemed", "Conversion", "Address", "Access"].map((label) => ui(label));
       const rows = visibleBranches.map((branch) => {
         const activity = branchActivity(branch);
         return [
+          { value: branch.departmentName || "Unassigned" },
           { value: branch.name },
           ...(global ? [{ value: branch.businessName }] : []),
           { value: activity.total, type: Number },
@@ -1537,6 +1662,7 @@ export default function Portal({
           </div>}
           <Table
             columns={[
+              "Department",
               "Branch",
               ...(global ? ["Business"] : []),
               "Scratch cards",
@@ -1550,6 +1676,7 @@ export default function Portal({
             {rows.map((item) => {
               const activity = branchActivity(item);
               return <tr key={`${item.businessId}:${item.branchId}`}>
+                <td><b>{item.departmentName || "Unassigned"}</b></td>
                 <td>
                   <b>{item.name}</b>
                 </td>
@@ -1567,7 +1694,9 @@ export default function Portal({
                         onClick={() =>
                           setEditor({
                             title: "Edit branch",
-                            fields: branchFields,
+                            fields: [...branchFields, { key: "departmentId", label: "Department", type: "select",
+                              options: [{ value: "", label: "Unassigned" }, ...(businesses.find((value) => value.businessId === item.businessId)?.departments || [])
+                                .map((department) => ({ value: department.departmentId, label: department.name }))] }],
                             values: item,
                             save: (values) =>
                               api(
@@ -2010,9 +2139,9 @@ export default function Portal({
               />
             </label>
             {[
-              ["pageColor", "Page background", "#0b0c1c"],
+              ["pageColor", "Page background", "#002b5c"],
               ["textColor", "Message text", "#ffffff"],
-              ["accentColor", "Scratch card", "#ffb33f"],
+              ["accentColor", "Scratch card", "#f6a800"],
             ].map(([key, label, fallback]) => (
               <label key={`${key}:${business?.brand?.[key]}`}>
                 {label}
@@ -2177,6 +2306,12 @@ export default function Portal({
               {global && tab === "Businesses" && (
                 <button className="p-button danger" disabled={busy || loading || !businesses.length} onClick={deleteAllBusinesses}>
                   Delete all businesses
+                </button>
+              )}
+              {platformAdmin && tab === "Branches" && (
+                <button className="p-button" onClick={createDepartmentHierarchy}>
+                  <Icon name="plus" />
+                  {ui("Add departments & branches")}
                 </button>
               )}
               {add && (
@@ -2371,6 +2506,8 @@ export default function Portal({
           onSave={saved}
         />
       )}
+      {departmentEditor && <DepartmentBranchEditor businesses={businesses}
+        initialBusinessId={workspaceId} onClose={() => setDepartmentEditor(false)} onSave={saveDepartmentHierarchy} />}
       {previewCard && (
         <CardPreviewDialog
           card={previewCard}

@@ -138,11 +138,11 @@ test("persistent branch batches are atomic, unique, retry-safe, scoped and autom
   assert.equal((await request(`/api/cards/${card.slug}/claim`, null, {})).httpStatus, 409);
   assert.equal((await request(`/api/cards/${card.slug}`)).used, true);
   // Viewer and another tenant cannot create or redeem someone else's batch.
-  const viewer = await request("/api/portal/users", root, { businessId: "impact-vibes", name: "Viewer", role: "viewer" });
+  const viewer = await request("/api/portal/users", root, { businessId: "impact-vibes", name: "Viewer", role: "viewer", password: "VIEWERPASS58" });
   const viewerToken = (await request("/api/auth/login", null, viewer.credentials)).token;
   assert.equal((await request("/api/cards/bulk", viewerToken, draft)).httpStatus, 403);
   assert.equal((await request(`/api/portal/cards/${batch.coupons[1].slug}/redeem`, viewerToken, { branchId })).httpStatus, 403);
-  const other = await request("/api/portal/businesses", root, { name: "Other tenant", limits: { card: 10, branch: 2, account: 1 } });
+  const other = await request("/api/portal/businesses", root, { name: "Other tenant", password: "OTHERBIZPASS58", limits: { card: 10, branch: 2, account: 1 } });
   const otherToken = (await request("/api/auth/login", null, other.credentials)).token;
   assert.equal((await request("/api/cards/bulk", otherToken, draft)).httpStatus, 403);
   assert.equal((await request(`/api/portal/cards/${batch.coupons[1].slug}/redeem`, otherToken, { branchId })).httpStatus, 404);

@@ -150,6 +150,9 @@ export function useBulkGeneration({ form, setForm, business, token, user, onCrea
 }
 export function BranchQuantities({ bulk, business, onCreateBranch, onManageBranches }) {
   const ui = useWorkspaceText();
+  const departmentNames = new Map((business?.departments || []).map((item) => [item.departmentId, item.name]));
+  const branchLabel = (branch) => branch?.departmentId && departmentNames.has(branch.departmentId)
+    ? `${departmentNames.get(branch.departmentId)} · ${branch.name}` : branch?.name;
   const unused = unusedBulkBranches(bulk.rows, bulk.active);
   const emptyRow = bulk.rows.some((row) => !row.branchId);
   const branchLimit = Number(business?.limits?.branch || 0);
@@ -164,7 +167,7 @@ export function BranchQuantities({ bulk, business, onCreateBranch, onManageBranc
         onChange={(event) => { const branchId = event.target.value; bulk.setRows((rows) => rows.map((item, i) => i === index ? { ...item, branchId } : item)); bulk.setPreviewId(branchId); }}>
         <option value="">{ui("Select branch")}</option>
         {bulk.active.map((branch) => <option key={branch.branchId} value={branch.branchId}
-          disabled={bulk.rows.some((item, i) => i !== index && item.branchId === branch.branchId)}>{branch.name}</option>)}
+          disabled={bulk.rows.some((item, i) => i !== index && item.branchId === branch.branchId)}>{branchLabel(branch)}</option>)}
       </select></label>
       <label>{ui("Number of coupons")}<input aria-label={`Coupon quantity ${index + 1}`} type="number" min={Math.max(1, generated.get(row.branchId) || 0)} step="1" required value={row.quantity}
         onChange={(event) => bulk.setRows((rows) => rows.map((item, i) => i === index ? { ...item, quantity: event.target.value } : item))} /></label>
@@ -194,7 +197,7 @@ export function BranchQuantities({ bulk, business, onCreateBranch, onManageBranc
     {onCreateBranch && limitReached && <p className="p-builder-note">{ui("Branch limit reached ({limit}). Contact your administrator to increase it.", { limit: branchLimit })}</p>}
     {!bulk.active.length && <p role="alert">Create an active branch before generating bulk coupons.</p>}
     <div className="bulk-summary" aria-live="polite">
-      {bulk.rows.map((row, index) => <span key={index}>{ui("{name}: {count} coupons", { name: bulk.active.find((branch) => branch.branchId === row.branchId)?.name || ui("Select branch"), count: row.quantity || 0 })}</span>)}
+      {bulk.rows.map((row, index) => <span key={index}>{ui("{name}: {count} coupons", { name: branchLabel(bulk.active.find((branch) => branch.branchId === row.branchId)) || ui("Select branch"), count: row.quantity || 0 })}</span>)}
       <strong>{ui("Total: {count} coupons", { count: bulk.targetTotal })}</strong>
       {bulk.result && <span>{ui("Saved in this draft: {count} coupons", { count: bulk.result.savedCount })}</span>}
       <span>{ui("Remaining to generate: {count} coupons", { count: bulk.total })}</span>
