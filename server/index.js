@@ -415,7 +415,7 @@ const safeUrl = (value) => {
   return parsed.toString();
 };
 const MAX_SHARE_IMAGE_BYTES = 5 * 1024 * 1024;
-const SHARE_PREVIEW_VERSION = "3";
+const SHARE_PREVIEW_VERSION = "5";
 const SHARE_PREVIEW_WIDTH = 1200;
 const SHARE_PREVIEW_HEIGHT = 630;
 function safeShareImage(value) {
@@ -699,7 +699,7 @@ app.get("/api/cards/:slug/share-image", async (req, res, next) => {
       .jpeg({ quality: 72, chromaSubsampling: "4:2:0", progressive: true })
       .toBuffer();
     res.set({
-      "Cache-Control": "public, max-age=3600",
+      "Cache-Control": "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400",
       "Content-Type": "image/jpeg",
       "Content-Length": String(image.length),
       "X-Content-Type-Options": "nosniff",
@@ -735,7 +735,7 @@ app.get("/share/:slug", async (req, res, next) => {
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:image" content="${html(imageUrl)}">` : "";
     res.status(200).set({
-      "Cache-Control": "public, max-age=60, s-maxage=60",
+      "Cache-Control": "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400",
       "Content-Type": "text/html; charset=utf-8",
       "X-Content-Type-Options": "nosniff",
     }).send(`<!doctype html>
