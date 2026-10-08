@@ -724,14 +724,16 @@ app.get("/share/:slug", async (req, res, next) => {
       ? `${PRODUCTION_APP_URL}/share/${slug}/image?v=${encodeURIComponent(version)}`
       : "";
     const title = card.shareTitle || "Congratulation you got an offer";
-    const description = `${card.offerTitle} · ${card.senderName} — ${card.headline}`;
+    // Never reveal the reward in a social preview; the recipient must open and
+    // scratch the card before seeing the offer.
+    const description = "A surprise is waiting for you. Open the scratch card to reveal your offer.";
     const imageMeta = imageUrl ? `
     <meta property="og:image" content="${html(imageUrl)}">
     <meta property="og:image:secure_url" content="${html(imageUrl)}">
     <meta property="og:image:type" content="image/jpeg">
     <meta property="og:image:width" content="${SHARE_PREVIEW_WIDTH}">
     <meta property="og:image:height" content="${SHARE_PREVIEW_HEIGHT}">
-    <meta property="og:image:alt" content="${html(`${card.offerTitle} scratch-card preview`)}">
+    <meta property="og:image:alt" content="Scratch-card surprise preview">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:image" content="${html(imageUrl)}">` : "";
     res.status(200).set({

@@ -243,6 +243,8 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
       assert.equal(previewResponse.status, 200);
       assert.match(previewHtml, /property="og:image"/);
       assert.match(previewHtml, /property="og:title" content="Congratulation you got an offer"/);
+      assert.match(previewHtml, /property="og:description" content="A surprise is waiting for you\. Open the scratch card to reveal your offer\."/);
+      assert.doesNotMatch(previewHtml, /25% OFF/);
       assert.match(previewHtml, new RegExp(`scratch\\.justconnect\\.biz/share/${cardSlug}/image\\?v=5`));
       assert.match(previewHtml, new RegExp(`scratch\\.justconnect\\.biz/card/${cardSlug}`));
       assert.doesNotMatch(previewHtml, /http-equiv="refresh"/i);
