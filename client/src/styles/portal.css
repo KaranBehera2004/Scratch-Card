@@ -570,6 +570,48 @@
 .p-row-actions a:hover {
   background: #eee9fd;
 }
+.p-department-controls {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 18px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #f7f9fc;
+}
+.p-department-controls > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+.p-department-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: #fff;
+}
+.p-department-control small {
+  display: block;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.p-department-control button {
+  border: 1px solid #f0c6cc;
+  border-radius: 6px;
+  background: #fff4f5;
+  color: #bd4051;
+  padding: 5px 8px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.p-department-control button.restore {
+  border-color: #b8ddca;
+  background: #eef9f3;
+  color: #287a55;
+}
 .p-badge {
   display: inline-flex;
   border-radius: 5px;
@@ -594,6 +636,10 @@
 .p-badge.disabled {
   background: #fcecee;
   color: #c6727f;
+}
+.p-badge.deleted {
+  background: #f2f3f6;
+  color: #737985;
 }
 .p-badge.expired {
   background: #eeedf5;

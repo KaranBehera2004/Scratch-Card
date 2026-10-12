@@ -465,11 +465,15 @@ const resizeDrafts = (items, count, factory) => [
   ...Array.from({ length: Math.max(0, count - items.length) }, factory),
 ];
 
+const activeCount = (items) => (items || []).filter((item) => item.status !== "deleted").length;
 const hasBranchCapacity = (item) => Boolean(item) && (!item.limits?.branch
-  || (item.branches?.length || 0) < item.limits.branch);
+  || activeCount(item.branches) < item.limits.branch);
+const hasDepartmentCapacity = (item) => Boolean(item) && (!item.limits?.department
+  || activeCount(item.departments) < item.limits.department);
+const hasHierarchyCapacity = (item) => hasBranchCapacity(item) && hasDepartmentCapacity(item);
 
 function DepartmentBranchEditor({ businesses, initialBusinessId, onClose, onSave }) {
-  const firstAvailableBusiness = businesses.find(hasBranchCapacity);
+  const firstAvailableBusiness = businesses.find(hasHierarchyCapacity);
   const [businessId, setBusinessId] = useState(initialBusinessId || firstAvailableBusiness?.businessId || "");
   const [departments, setDepartments] = useState([newDepartmentDraft()]);
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
@@ -477,11 +481,11 @@ function DepartmentBranchEditor({ businesses, initialBusinessId, onClose, onSave
   const selectedBusiness = businesses.find((item) => item.businessId === businessId);
   const departmentLimit = selectedBusiness?.limits?.department || 0;
   const departmentRemaining = departmentLimit
-    ? Math.max(0, departmentLimit - (selectedBusiness?.departments?.length || 0))
+    ? Math.max(0, departmentLimit - activeCount(selectedBusiness?.departments))
     : Infinity;
   const branchLimit = selectedBusiness?.limits?.branch || 0;
   const branchRemaining = branchLimit
-    ? Math.max(0, branchLimit - (selectedBusiness?.branches?.length || 0))
+    ? Math.max(0, branchLimit - activeCount(selectedBusiness?.branches))
     : Infinity;
   const departmentLimitExceeded = departments.length > departmentRemaining;
   const branchLimitExceeded = branchTotal > branchRemaining;
@@ -513,8 +517,8 @@ function DepartmentBranchEditor({ businesses, initialBusinessId, onClose, onSave
           onChange={(event) => setBusinessId(event.target.value)}>
           <option value="">Select business</option>
           {businesses.map((item) => <option key={item.businessId} value={item.businessId}
-            disabled={!hasBranchCapacity(item)}>
-            {item.name}{hasBranchCapacity(item) ? "" : " — branch limit reached"}
+            disabled={!hasHierarchyCapacity(item)}>
+            {item.name}{hasHierarchyCapacity(item) ? "" : " — workspace limit reached"}
           </option>)}
         </select></label>
         <label>Number of departments<input type="number" min="1"
@@ -828,6 +832,9 @@ export default function Portal({
   const branchCreationDisabled = global
     ? !businesses.some(hasBranchCapacity)
     : !hasBranchCapacity(business);
+  const hierarchyCreationDisabled = global
+    ? !businesses.some(hasHierarchyCapacity)
+    : !hasHierarchyCapacity(business);
   useEffect(() => {
     setCouponFilters({ ...EMPTY_COUPON_FILTERS });
     setBusinessFilter("");
@@ -1023,11 +1030,21 @@ export default function Portal({
         businessName: item.name,
       })),
     );
+  const departments = businesses
+    .filter((item) => global || item.businessId === workspaceId)
+    .flatMap((item) => (item.departments || []).map((department) => ({
+      ...department,
+      businessId: item.businessId,
+      businessName: item.name,
+    })));
   const options = businesses.map((item) => ({
     value: item.businessId,
     label: item.name,
   }));
-  const visibleBranches = branches.filter((branch) => inSelectedBusiness(branch) && match(branch));
+  const visibleBranches = branches.filter((branch) =>
+    (platformAdmin || branch.status !== "deleted") && inSelectedBusiness(branch) && match(branch));
+  const visibleDepartments = departments.filter((department) =>
+    (platformAdmin || department.status !== "deleted") && inSelectedBusiness(department));
   const couponBranchOptions = new Map(branches.filter(inSelectedBusiness).map((branch) => [couponBranchKey(branch), {
     key: couponBranchKey(branch),
     name: global ? `${branch.businessName} · ${branch.name}` : branch.name,
@@ -1141,8 +1158,11 @@ export default function Portal({
       title: "Add branch",
       fields: [...(global ? [{ ...businessSelect, options: options.filter((option) =>
         hasBranchCapacity(businesses.find((item) => item.businessId === option.value)))}] : []), ...branchFields,
-        ...(!global && business?.departments?.length ? [{ key: "departmentId", label: "Department", type: "select",
-          options: [{ value: "", label: "Unassigned" }, ...business.departments.map((item) => ({ value: item.departmentId, label: item.name }))] }] : [])],
+        ...(!global && business?.departments?.some((item) => (item.status || "active") === "active")
+          ? [{ key: "departmentId", label: "Department", type: "select",
+            options: [{ value: "", label: "Unassigned" }, ...business.departments
+              .filter((item) => (item.status || "active") === "active")
+              .map((item) => ({ value: item.departmentId, label: item.name }))] }] : [])],
       values: { businessId: workspaceId },
       quietRefresh: inline === true,
       onSaved: typeof onSaved === "function" ? onSaved : undefined,
@@ -1765,6 +1785,22 @@ export default function Portal({
           {global && <div className="p-info">
             Platform control shows branches across every business. Filter by business, review coupon performance, change access, or open the business workspace directly.
           </div>}
+          {admin && visibleDepartments.length > 0 && <section className="p-department-controls" aria-label="Department controls">
+            <strong>Departments</strong>
+            <div>
+              {visibleDepartments.map((department) => <span className="p-department-control" key={`${department.businessId}:${department.departmentId}`}>
+                <span><b>{department.name}</b>{global && <small>{department.businessName}</small>}</span>
+                <Badge status={department.status || "active"} />
+                {department.status !== "deleted" && <button className="danger" disabled={busy} onClick={() => {
+                  if (window.confirm(`Delete department "${department.name}" and all branches under it? They will disappear from the business workspace but remain archived for super administrators.`))
+                    mutate(() => api(`/api/portal/businesses/${department.businessId}/departments/${department.departmentId}`, "DELETE"));
+                }}>{ui("Delete department")}</button>}
+                {department.status === "deleted" && platformAdmin && <button className="restore" disabled={busy} onClick={() =>
+                  mutate(() => api(`/api/portal/businesses/${department.businessId}/departments/${department.departmentId}/restore`, "POST", {}))
+                }>{ui("Restore department")}</button>}
+              </span>)}
+            </div>
+          </section>}
           <Table
             columns={[
               "Department",
@@ -1780,6 +1816,10 @@ export default function Portal({
           >
             {rows.map((item) => {
               const activity = branchActivity(item);
+              const deleted = item.status === "deleted";
+              const branchDepartment = businesses.find((value) => value.businessId === item.businessId)
+                ?.departments?.find((department) => department.departmentId === item.departmentId);
+              const canRestoreBranch = !item.departmentId || (branchDepartment?.status || "active") === "active";
               return <tr key={`${item.businessId}:${item.branchId}`}>
                 <td><b>{item.departmentName || "Unassigned"}</b></td>
                 <td>
@@ -1795,12 +1835,13 @@ export default function Portal({
                 <td>
                   {admin && (
                     <div className="p-row-actions">
-                      <button
+                      {!deleted && <button
                         onClick={() =>
                           setEditor({
                             title: "Edit branch",
                             fields: [...branchFields, { key: "departmentId", label: "Department", type: "select",
                               options: [{ value: "", label: "Unassigned" }, ...(businesses.find((value) => value.businessId === item.businessId)?.departments || [])
+                                .filter((department) => (department.status || "active") === "active")
                                 .map((department) => ({ value: department.departmentId, label: department.name }))] }],
                             values: item,
                             save: (values) =>
@@ -1813,8 +1854,8 @@ export default function Portal({
                         }
                       >
                         {ui("Edit")}
-                      </button>
-                      <button
+                      </button>}
+                      {!deleted && <button
                         disabled={busy}
                         onClick={() =>
                           mutate(() =>
@@ -1832,7 +1873,16 @@ export default function Portal({
                         }
                       >
                         {ui(item.status === "active" ? "Pause" : "Activate")}
-                      </button>
+                      </button>}
+                      {!deleted && <button className="danger" disabled={busy} onClick={() => {
+                        if (window.confirm(`Delete branch "${item.name}"? It will disappear from the business workspace but remain archived for super administrators.`))
+                          mutate(() => api(`/api/portal/businesses/${item.businessId}/branches/${item.branchId}`, "DELETE"));
+                      }}>{ui("Delete branch")}</button>}
+                      {deleted && platformAdmin && <button disabled={busy || !canRestoreBranch}
+                        title={!canRestoreBranch ? "Restore this branch's department first" : undefined}
+                        onClick={() => mutate(() => api(
+                          `/api/portal/businesses/${item.businessId}/branches/${item.branchId}/restore`, "POST", {},
+                        ))}>{ui("Restore branch")}</button>}
                       {global && <button onClick={() => openWorkspace(item.businessId, "Branches")}>
                         Manage business
                       </button>}
@@ -2379,8 +2429,8 @@ export default function Portal({
             <h2>Workspace usage & limits</h2>
             <dl className="p-business-usage">
               <div><dt>Scratch cards</dt><dd>{cards.length} / {business?.limits?.card || "Unlimited"}</dd></div>
-              <div><dt>Branches</dt><dd>{business?.branches?.length || 0} / {business?.limits?.branch || "Unlimited"}</dd></div>
-              <div><dt>Departments</dt><dd>{business?.departments?.length || 0} / {business?.limits?.department || "Unlimited"}</dd></div>
+              <div><dt>Branches</dt><dd>{activeCount(business?.branches)} / {business?.limits?.branch || "Unlimited"}</dd></div>
+              <div><dt>Departments</dt><dd>{activeCount(business?.departments)} / {business?.limits?.department || "Unlimited"}</dd></div>
               <div><dt>Business accounts</dt><dd>{accounts.length} / {business?.limits?.account || "Unlimited"}</dd></div>
             </dl>
             <p>Only a super administrator can change workspace limits.</p>
@@ -2547,10 +2597,10 @@ export default function Portal({
                   Delete all businesses
                 </button>
               )}
-              {platformAdmin && tab === "Branches" && (
+              {admin && tab === "Branches" && (
                 <button className="p-button" onClick={createDepartmentHierarchy}
-                  disabled={branchCreationDisabled}
-                  title={branchCreationDisabled ? "Branch limit reached" : undefined}>
+                  disabled={hierarchyCreationDisabled}
+                  title={hierarchyCreationDisabled ? "Department or branch limit reached" : undefined}>
                   <Icon name="plus" />
                   {ui("Add departments & branches")}
                 </button>

@@ -19,11 +19,11 @@ Object.assign(process.env, {
 });
 for (const key of ["NETLIFY", "VERCEL", "AWS_LAMBDA_FUNCTION_NAME"])
   delete process.env[key];
-const { app, connectDatabase } = await import("../server/src/app/index.js");
+const { app, connectDatabase } = await import("../../src/app/index.js");
 await connectDatabase();
-app.use(express.static(path.resolve("client/dist")));
+app.use(express.static(path.resolve("../client/dist")));
 app.get("/*splat", (_req, res) =>
-  res.sendFile(path.resolve("client/dist/index.html")),
+  res.sendFile(path.resolve("../client/dist/index.html")),
 );
 const server = app.listen(5099, "127.0.0.1");
 export const ready = new Promise((resolve, reject) => {

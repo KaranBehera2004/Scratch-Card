@@ -636,10 +636,14 @@ export function installControls(app, context) {
       const legacy = await legacyPlans();
       res.json({
         businesses: await Promise.all(
-          items.map(async (item) => ({
-            ...safe(item),
-            limits: await businessLimits(item, legacy),
-          })),
+          items.map(async (item) => {
+            const result = safe(item);
+            if (req.user.role !== "super-admin") {
+              result.departments = (result.departments || []).filter((value) => value.status !== "deleted");
+              result.branches = (result.branches || []).filter((value) => value.status !== "deleted");
+            }
+            return { ...result, limits: await businessLimits(item, legacy) };
+          }),
         ),
       });
     }),
@@ -850,20 +854,22 @@ export function installControls(app, context) {
   app.post(
     "/api/portal/businesses/:businessId/departments/branches",
     auth,
-    superOnly,
     route(async (req, res) => {
       const id = scope(req);
+      owner(req);
       const business = await getBusiness(id),
         currentDepartments = business.departments || [],
         currentBranches = business.branches || [],
+        activeDepartments = currentDepartments.filter((item) => item.status !== "deleted"),
+        activeBranches = currentBranches.filter((item) => item.status !== "deleted"),
         input = req.body?.departments;
       if (!Array.isArray(input) || input.length < 1 || input.length > 20)
         throw fail("Add between 1 and 20 departments.");
       const limits = await businessLimits(business);
-      if (limits.department > 0 && currentDepartments.length + input.length > limits.department)
+      if (limits.department > 0 && activeDepartments.length + input.length > limits.department)
         throw fail(`department limit reached (${limits.department}). Contact your administrator.`, 403);
-      const departmentNames = new Set(currentDepartments.map((item) => item.name.toLowerCase()));
-      const branchNames = new Set(currentBranches.map((item) => item.name.toLowerCase()));
+      const departmentNames = new Set(activeDepartments.map((item) => item.name.toLowerCase()));
+      const branchNames = new Set(activeBranches.map((item) => item.name.toLowerCase()));
       let totalBranches = 0;
       const createdDepartments = [], createdBranches = [];
       for (const row of input) {
@@ -891,7 +897,7 @@ export function installControls(app, context) {
         }
       }
       if (totalBranches > 200) throw fail("A single hierarchy can contain at most 200 branches.");
-      if (limits.branch > 0 && currentBranches.length + totalBranches > limits.branch)
+      if (limits.branch > 0 && activeBranches.length + totalBranches > limits.branch)
         throw fail(`branch limit reached (${limits.branch}). Contact your administrator.`, 403);
       await updateBusiness(id, {
         departments: [...currentDepartments, ...createdDepartments],
@@ -910,12 +916,14 @@ export function installControls(app, context) {
       owner(req);
       const business = await getBusiness(id),
         branches = business.branches || [];
-      await limit(business, "branch", branches.length);
+      await limit(business, "branch", branches.filter((item) => item.status !== "deleted").length);
       const name = text(req.body.name, 60);
       if (!name) throw fail("Branch name is required.");
+      if (branches.some((item) => item.status !== "deleted" && item.name.toLowerCase() === name.toLowerCase()))
+        throw fail(`Branch name already exists: ${name}`);
       const departmentId = text(req.body.departmentId, 60);
       if (departmentId && !(business.departments || []).some((item) =>
-        item.departmentId === departmentId && item.status !== "paused"))
+        item.departmentId === departmentId && (item.status || "active") === "active"))
         throw fail("Choose an active department for this business.");
       const branch = {
         branchId: crypto.randomUUID(),
@@ -942,11 +950,13 @@ export function installControls(app, context) {
           name: item.name,
           address: item.address,
           status: item.status,
+          deletedAt: item.deletedAt,
         }));
       const branch = branches.find(
         (item) => item.branchId === req.params.branchId,
       );
       if (!branch) throw fail("Branch not found.", 404);
+      if (branch.status === "deleted") throw fail("Deleted branches cannot be edited.", 410);
       if (req.body.name !== undefined) {
         branch.name = text(req.body.name, 60);
         if (!branch.name) throw fail("Branch name is required.");
@@ -956,7 +966,7 @@ export function installControls(app, context) {
       if (req.body.departmentId !== undefined) {
         const departmentId = text(req.body.departmentId, 60);
         if (departmentId && !(business.departments || []).some((item) =>
-          item.departmentId === departmentId && item.status !== "paused"))
+          item.departmentId === departmentId && (item.status || "active") === "active"))
           throw fail("Choose an active department for this business.");
         branch.departmentId = departmentId;
       }
@@ -968,6 +978,111 @@ export function installControls(app, context) {
       await updateBusiness(id, { branches });
       await audit(req, "Branch updated", id, branch.name);
       res.json({ branch });
+    }),
+  );
+  app.delete(
+    "/api/portal/businesses/:businessId/branches/:branchId",
+    auth,
+    route(async (req, res) => {
+      const id = scope(req);
+      owner(req);
+      const business = await getBusiness(id), branches = business.branches || [];
+      const branch = branches.find((item) => item.branchId === req.params.branchId);
+      if (!branch) throw fail("Branch not found.", 404);
+      if (branch.status === "deleted") throw fail("Branch is already deleted.", 410);
+      const deletedAt = new Date().toISOString();
+      const archived = { ...branch, status: "deleted", deletedAt };
+      await updateBusiness(id, { branches: branches.map((item) =>
+        item.branchId === branch.branchId ? archived : item) });
+      await audit(req, "Branch deleted", id, `${branch.name} (archived for super-admin visibility)`);
+      res.json({ ok: true, archived: true, branch: archived });
+    }),
+  );
+  app.post(
+    "/api/portal/businesses/:businessId/branches/:branchId/restore",
+    auth,
+    superOnly,
+    route(async (req, res) => {
+      const id = scope(req);
+      const business = await getBusiness(id), branches = business.branches || [];
+      const branch = branches.find((item) => item.branchId === req.params.branchId);
+      if (!branch) throw fail("Branch not found.", 404);
+      if (branch.status !== "deleted") throw fail("Branch is not deleted.", 409);
+      await limit(business, "branch", branches.filter((item) => item.status !== "deleted").length);
+      if (branch.departmentId && !(business.departments || []).some((item) =>
+        item.departmentId === branch.departmentId && (item.status || "active") === "active"))
+        throw fail("Restore the branch's department first.", 409);
+      const { deletedAt: _deletedAt, ...savedBranch } = branch;
+      const restored = { ...savedBranch, status: "active" };
+      await updateBusiness(id, { branches: branches.map((item) =>
+        item.branchId === branch.branchId ? restored : item) });
+      await audit(req, "Branch restored", id, branch.name);
+      res.json({ ok: true, restored: true, branch: restored });
+    }),
+  );
+  app.delete(
+    "/api/portal/businesses/:businessId/departments/:departmentId",
+    auth,
+    route(async (req, res) => {
+      const id = scope(req);
+      owner(req);
+      const business = await getBusiness(id),
+        departments = business.departments || [], branches = business.branches || [];
+      const department = departments.find((item) => item.departmentId === req.params.departmentId);
+      if (!department) throw fail("Department not found.", 404);
+      if (department.status === "deleted") throw fail("Department is already deleted.", 410);
+      const deletedAt = new Date().toISOString();
+      const archivedDepartment = { ...department, status: "deleted", deletedAt };
+      let archivedBranches = 0;
+      const nextBranches = branches.map((item) => {
+        if (item.departmentId !== department.departmentId || item.status === "deleted") return item;
+        archivedBranches++;
+        return { ...item, status: "deleted", deletedAt };
+      });
+      await updateBusiness(id, {
+        departments: departments.map((item) => item.departmentId === department.departmentId ? archivedDepartment : item),
+        branches: nextBranches,
+      });
+      await audit(req, "Department deleted", id,
+        `${department.name} (${archivedBranches} branches archived for super-admin visibility)`);
+      res.json({ ok: true, archived: true, department: archivedDepartment, archivedBranches });
+    }),
+  );
+  app.post(
+    "/api/portal/businesses/:businessId/departments/:departmentId/restore",
+    auth,
+    superOnly,
+    route(async (req, res) => {
+      const id = scope(req);
+      const business = await getBusiness(id),
+        departments = business.departments || [], branches = business.branches || [];
+      const department = departments.find((item) => item.departmentId === req.params.departmentId);
+      if (!department) throw fail("Department not found.", 404);
+      if (department.status !== "deleted") throw fail("Department is not deleted.", 409);
+      await limit(business, "department", departments.filter((item) => item.status !== "deleted").length);
+      const deletionTime = department.deletedAt ? new Date(department.deletedAt).getTime() : null;
+      const branchesToRestore = branches.filter((item) => item.departmentId === department.departmentId
+        && item.status === "deleted" && deletionTime !== null
+        && new Date(item.deletedAt).getTime() === deletionTime);
+      const limits = await businessLimits(business);
+      const activeBranchCount = branches.filter((item) => item.status !== "deleted").length;
+      if (limits.branch > 0 && activeBranchCount + branchesToRestore.length > limits.branch)
+        throw fail(`branch limit reached (${limits.branch}). Increase the limit or delete another branch before restoring this department.`, 403);
+      const { deletedAt: _deletedAt, ...savedDepartment } = department;
+      const restoredDepartment = { ...savedDepartment, status: "active" };
+      const restoreIds = new Set(branchesToRestore.map((item) => item.branchId));
+      const restoredBranches = branchesToRestore.map((item) => {
+        const { deletedAt: _branchDeletedAt, ...savedBranch } = item;
+        return { ...savedBranch, status: "active" };
+      });
+      const restoredById = new Map(restoredBranches.map((item) => [item.branchId, item]));
+      await updateBusiness(id, {
+        departments: departments.map((item) => item.departmentId === department.departmentId ? restoredDepartment : item),
+        branches: branches.map((item) => restoreIds.has(item.branchId) ? restoredById.get(item.branchId) : item),
+      });
+      await audit(req, "Department restored", id,
+        `${department.name} (${restoredBranches.length} branches restored)`);
+      res.json({ ok: true, restored: true, department: restoredDepartment, branches: restoredBranches });
     }),
   );
   app.get(

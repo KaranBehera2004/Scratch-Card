@@ -190,12 +190,8 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
         { name: "Hyderabad", address: "City center" },
       );
       assert.equal(result.status, 201);
-      assert.equal((await request(
-        "/api/portal/businesses/impact-vibes/departments/branches", owner, "POST",
-        { departments: [{ name: "Sales", branches: [{ name: "Secunderabad", address: "Showroom" }] }] },
-      )).status, 403);
       const hierarchy = await request(
-        "/api/portal/businesses/impact-vibes/departments/branches", admin, "POST",
+        "/api/portal/businesses/impact-vibes/departments/branches", owner, "POST",
         { departments: [{ name: "Sales", branches: [{ name: "Secunderabad", address: "Showroom" }] }] },
       );
       assert.equal(hierarchy.status, 201, hierarchy.message);
@@ -309,6 +305,61 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
         ).status,
         404,
       );
+      assert.equal((await request(
+        `/api/portal/businesses/impact-vibes/branches/${result.branch.branchId}`,
+        owner, "DELETE",
+      )).status, 200);
+      let ownerBusiness = (await request("/api/portal/businesses", owner)).businesses[0];
+      assert.equal(ownerBusiness.branches.some((item) => item.branchId === result.branch.branchId), false);
+      let adminBusiness = (await request("/api/portal/businesses", admin)).businesses
+        .find((item) => item.businessId === "impact-vibes");
+      assert.equal(adminBusiness.branches.find((item) => item.branchId === result.branch.branchId).status, "deleted");
+
+      const disposable = await request(
+        "/api/portal/businesses/impact-vibes/departments/branches", owner, "POST",
+        { departments: [{ name: "Temporary operations", branches: [{ name: "Temporary branch" }] }] },
+      );
+      assert.equal(disposable.status, 201, disposable.message);
+      assert.equal((await request(
+        `/api/portal/businesses/impact-vibes/departments/${disposable.departments[0].departmentId}`,
+        owner, "DELETE",
+      )).status, 200);
+      ownerBusiness = (await request("/api/portal/businesses", owner)).businesses[0];
+      assert.equal(ownerBusiness.departments.some((item) => item.departmentId === disposable.departments[0].departmentId), false);
+      assert.equal(ownerBusiness.branches.some((item) => item.branchId === disposable.branches[0].branchId), false);
+      adminBusiness = (await request("/api/portal/businesses", admin)).businesses
+        .find((item) => item.businessId === "impact-vibes");
+      assert.equal(adminBusiness.departments.find((item) => item.departmentId === disposable.departments[0].departmentId).status, "deleted");
+      assert.equal(adminBusiness.branches.find((item) => item.branchId === disposable.branches[0].branchId).status, "deleted");
+      assert.equal((await request(
+        `/api/portal/businesses/impact-vibes/departments/${disposable.departments[0].departmentId}/restore`,
+        owner, "POST", {},
+      )).status, 403);
+      const restoredDepartment = await request(
+        `/api/portal/businesses/impact-vibes/departments/${disposable.departments[0].departmentId}/restore`,
+        admin, "POST", {},
+      );
+      assert.equal(restoredDepartment.status, 200, restoredDepartment.message);
+      assert.equal(restoredDepartment.branches.length, 1);
+      ownerBusiness = (await request("/api/portal/businesses", owner)).businesses[0];
+      assert.equal(ownerBusiness.departments.some((item) => item.departmentId === disposable.departments[0].departmentId), true);
+      assert.equal(ownerBusiness.branches.some((item) => item.branchId === disposable.branches[0].branchId), true);
+      assert.equal((await request(
+        `/api/portal/businesses/impact-vibes/departments/${disposable.departments[0].departmentId}`,
+        owner, "DELETE",
+      )).status, 200);
+
+      const restoredBranch = await request(
+        `/api/portal/businesses/impact-vibes/branches/${result.branch.branchId}/restore`,
+        admin, "POST", {},
+      );
+      assert.equal(restoredBranch.status, 200, restoredBranch.message);
+      ownerBusiness = (await request("/api/portal/businesses", owner)).businesses[0];
+      assert.equal(ownerBusiness.branches.some((item) => item.branchId === result.branch.branchId), true);
+      assert.equal((await request(
+        `/api/portal/businesses/impact-vibes/branches/${result.branch.branchId}`,
+        owner, "DELETE",
+      )).status, 200);
     },
   );
   await t.test("WhatsApp numbers are mandatory and invalid values never save cards", async () => {
