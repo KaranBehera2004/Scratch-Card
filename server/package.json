@@ -1,0 +1,28 @@
+{
+  "name": "scratch-card-server",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/control.test.js tests/indexes.test.js tests/bulk.test.js ../client/src/features/bulk/bulk-coupons.test.js ../client/src/features/portal/campaigns.test.js ../client/src/features/portal/coupon-filters.test.js shared/whatsapp.test.js shared/urls.test.js",
+    "test:ui": "npm run build && playwright test --config tests/playwright.config.js",
+    "dev": "concurrently -k -n API,WEB -c magenta,cyan \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:client": "npm --prefix ../client run dev",
+    "dev:server": "node --watch src/app/index.js",
+    "build": "npm --prefix ../client run build",
+    "preview": "npm --prefix ../client run preview",
+    "start": "node src/app/index.js"
+  },
+  "dependencies": {
+    "concurrently": "^9.2.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^5.1.0",
+    "mongoose": "^8.19.1",
+    "serverless-http": "^4.0.0",
+    "sharp": "^0.35.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
+  }
+}
