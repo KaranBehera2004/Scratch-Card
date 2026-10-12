@@ -79,12 +79,12 @@ const Business = mongoose.model(
       generationRevision: { type: Number, default: 0 },
       deletedAt: Date,
       departments: {
-        type: [{ departmentId: String, name: String, status: String }],
+        type: [{ departmentId: String, name: String, status: String, deletedAt: Date }],
         default: [],
       },
       branches: {
         type: [
-          { branchId: String, departmentId: String, name: String, address: String, status: String },
+          { branchId: String, departmentId: String, name: String, address: String, status: String, deletedAt: Date },
         ],
         default: [],
       },
