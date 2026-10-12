@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.sites-runtime
+*.log
+.npm-cache/
+test-results/
+playwright-report/
+data/*.tmp
+.env
+data/*.json
