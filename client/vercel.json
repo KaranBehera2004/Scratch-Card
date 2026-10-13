@@ -11,10 +11,6 @@
       "destination": "https://api-scratch.justconnect.biz/share/:slug"
     },
     {
-      "source": "/api/:path*",
-      "destination": "https://api-scratch.justconnect.biz/api/:path*"
-    },
-    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

@@ -3,7 +3,7 @@ import "../../styles/portal.css";
 import "../../styles/portal-theme.css";
 import { WorkspaceLocale, useWorkspaceText, workspaceTranslator } from "../../i18n/workspace-i18n.js";
 import { summarizeCampaigns } from "./campaigns.js";
-import { scratchCardUrl } from "../../../../server/shared/urls.js";
+import { PRODUCTION_API_URL, scratchCardUrl } from "../../../../server/shared/urls.js";
 import { EMPTY_COUPON_FILTERS, couponBranchKey, couponCampaignKey, couponDateBounds, filterCouponCards } from "./coupon-filters.js";
 
 function JustConnectLogo({ theme = "light", className = "" }) {
@@ -18,22 +18,42 @@ function JustConnectLogo({ theme = "light", className = "" }) {
   );
 }
 
+// Production requests go directly to Render. Local development keeps Vite's
+// relative /api proxy, so developers do not need a separate API URL setting.
+const apiOrigin = import.meta.env.VITE_API_URL ||
+  (import.meta.env.PROD ? PRODUCTION_API_URL : "");
+
+function apiUrl(url) {
+  return apiOrigin ? new URL(url, apiOrigin).toString() : url;
+}
+
 export async function portalApi(url, token, method = "GET", body) {
-  const response = await fetch(url, {
+  let response;
+  try {
+    response = await fetch(apiUrl(url), {
     method,
     headers: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(body ? { "Content-Type": "application/json" } : {}),
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
-  });
+    });
+  } catch {
+    throw new Error(
+      import.meta.env.PROD
+        ? "The Scratch-card API could not be reached. Please try again shortly."
+        : "The Scratch-card API did not respond. Restart npm run dev and open the URL printed in the terminal.",
+    );
+  }
   const content = await response.text();
   let result;
   try {
     result = JSON.parse(content);
   } catch {
     throw new Error(
-      "The Scratch-card API did not respond. Restart npm run dev and open the URL printed in the terminal.",
+      import.meta.env.PROD
+        ? "The Scratch-card API is temporarily unavailable. Please try again shortly."
+        : "The Scratch-card API did not respond. Restart npm run dev and open the URL printed in the terminal.",
     );
   }
   if (!response.ok) {
