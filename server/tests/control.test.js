@@ -728,6 +728,30 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
     assert.equal((await request("/api/portal/cards", owner)).status, 200);
     assert.ok((await request("/api/portal/audit", admin)).events.some((event) => event.action === "Business deleted" && event.businessId === id));
   });
+  await t.test("only super admins can permanently delete every coupon for one business", async () => {
+    const created = await request("/api/portal/businesses", admin, "POST", {
+      name: "Coupon Delete Test", loginEmail: "coupon-delete@example.test", password: "Coupon-Delete-Test-Password",
+      limits: { card: 10, branch: 2, department: 2, account: 1 },
+    });
+    assert.equal(created.status, 201);
+    const id = created.business.businessId;
+    const ownerToken = await login("coupon-delete@example.test", "Coupon-Delete-Test-Password");
+    const first = await request("/api/cards", ownerToken, "POST", { ...draft, businessId: id, couponCode: "DELETE-ONE" });
+    const second = await request("/api/cards", ownerToken, "POST", { ...draft, businessId: id, couponCode: "DELETE-TWO" });
+    assert.equal(first.status, 201);
+    assert.equal(second.status, 201);
+    assert.equal((await request(`/api/portal/businesses/${id}/cards`, ownerToken, "DELETE", { confirmName: "Coupon Delete Test" })).status, 403);
+    assert.equal((await request(`/api/portal/businesses/${id}/cards`, admin, "DELETE", { confirmName: "wrong" })).status, 400);
+    const removed = await request(`/api/portal/businesses/${id}/cards`, admin, "DELETE", { confirmName: "Coupon Delete Test" });
+    assert.equal(removed.status, 200);
+    assert.equal(removed.deletedCount, 2);
+    assert.equal((await request(`/api/cards/${first.slug}`)).status, 404);
+    assert.equal((await request(`/api/cards/${second.slug}`)).status, 404);
+    assert.equal((await request("/api/portal/cards", ownerToken)).cards.length, 0);
+    assert.ok((await request("/api/portal/businesses", admin)).businesses.some((business) => business.businessId === id));
+    assert.ok((await request("/api/portal/audit", admin)).events.some((event) => event.action === "All business coupons deleted" && event.businessId === id));
+    assert.equal((await request(`/api/portal/businesses/${id}`, admin, "DELETE", { confirmName: "Coupon Delete Test" })).status, 200);
+  });
   await t.test(
     "branding, audit history, revocation, and password changes persist",
     async () => {

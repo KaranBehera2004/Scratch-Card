@@ -101,3 +101,5 @@
 .p-shell[data-theme="dark"] .share-image-field input[type="file"]::file-selector-button { background: #293349; color: #ded7ff; border-color: #46536a; }
 .p-shell[data-theme="dark"] .share-image-preview { background: #151b28; border-color: #3a465b; }
 .p-shell[data-theme="dark"] .modal .copied { color: #9be1be !important; }
+.p-shell[data-theme="dark"] .modal .modal-close { background: #252f42; color: #f5f7fb; border-color: #52617c; box-shadow: 0 6px 18px #0005; }
+.p-shell[data-theme="dark"] .modal .modal-close:hover { background: #303c52; border-color: #71809b; }

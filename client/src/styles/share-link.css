@@ -43,6 +43,29 @@
   color: color-mix(in srgb, var(--text-color, #fff) 82%, transparent);
 }
 
+.public-card-back {
+  position: fixed;
+  z-index: 21;
+  top: 14px;
+  left: max(20px, calc((100vw - 1220px) / 2));
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
+  border: 1px solid color-mix(in srgb, var(--text-color, #fff) 24%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--page-color, #0b0c1c) 70%, white 8%);
+  color: var(--text-color, #fff);
+  font-weight: 800;
+  cursor: pointer;
+  backdrop-filter: blur(12px);
+}
+
+.public-card-back:hover {
+  background: color-mix(in srgb, var(--page-color, #0b0c1c) 58%, white 14%);
+}
+
 .recipient-topbar .language-select {
   grid-column: 3;
   justify-self: end;
@@ -585,6 +608,21 @@
     height: 64px;
     grid-template-columns: minmax(0, 1fr) auto;
     padding: 0 14px;
+  }
+  .public-card-back {
+    top: 10px;
+    left: 10px;
+    min-height: 44px;
+    padding: 0 12px;
+  }
+  .recipient-topbar:has(+ .public-card-back) {
+    grid-template-columns: minmax(0, 1fr);
+    padding-inline: 70px;
+  }
+  .recipient-topbar:has(+ .public-card-back) .recipient-brand {
+    grid-column: 1;
+    justify-self: center;
+    max-width: calc(100vw - 148px);
   }
   .recipient-topbar .recipient-brand {
     grid-column: 1;
