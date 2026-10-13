@@ -166,12 +166,12 @@ The generated share link will automatically use your Netlify domain, such as `ht
 | API health check | `https://api-scratch.justconnect.biz/api/health` |
 | Frontend proxy health check | `https://scratch.justconnect.biz/api/health` |
 
-The frontend calls relative `/api/*` paths. `client/vercel.json` forwards those requests to `https://api-scratch.justconnect.biz/api/*`, keeping login and card requests on the frontend's origin in the browser. The legacy serverless adapter is in `server/deploy/vercel/`. Both disable caching of API responses and retain the SPA fallback for `/card/:slug`. Do not remove the `/api` prefix from the destination or replace the local Vite proxy with the production database/API.
+On the production and Vercel domains, the frontend resolves `/api/*` calls to `https://api-scratch.justconnect.biz/api/*`. `client/vercel.json` also forwards `/api/*` before the SPA fallback as a deployment-level safety net. Localhost, LAN and test deployments keep their own API origin. The legacy serverless adapter is in `server/deploy/vercel/`. API responses disable caching and the SPA fallback retains `/card/:slug`. Deployment-contract tests fail if the API rewrite is removed or placed after the SPA fallback.
 
 ### Render backend
 
 1. Connect the repository's production branch. Set **Root Directory** to `server`, then use **Build Command** `npm ci` and **Start Command** `npm start`.
-2. Set the environment variables listed in `config/env/.env.production.example` in Render's **Environment** settings. In particular, set `CLIENT_ORIGIN=https://scratch.justconnect.biz`, `NODE_ENV=production`, and `NODE_VERSION=24.x`. Render supplies `PORT`.
+2. Set the environment variables listed in `config/env/.env.production.example` in Render's **Environment** settings. In particular, set `CLIENT_ORIGIN=https://scratch.justconnect.biz`, `NODE_ENV=production`, `NODE_VERSION=24.x`, `MONGODB_URI`, and an `AUTH_SECRET` of at least 32 characters. Render supplies `PORT`. Production startup intentionally fails if durable MongoDB storage or these security settings are missing; it never falls back to Render's temporary filesystem.
 3. Keep your existing MongoDB URI/database, auth secret and super-admin credentials. A domain change does not require creating a database or resetting users. An account password already changed in the portal still takes precedence over its bootstrap environment password.
 4. Under **Settings → Custom Domains**, add `api-scratch.justconnect.biz` and configure the DNS record requested by Render. Wait for domain verification and HTTPS. Keep MongoDB Atlas Network Access configured to allow the Render service.
 5. Set **Health Check Path** to `/api/health`, then deploy. The API root `/` does not host the frontend; use the health-check URL above to verify the backend. The JSON must show `"ok":true` and `"storage":"mongodb-atlas"`.
