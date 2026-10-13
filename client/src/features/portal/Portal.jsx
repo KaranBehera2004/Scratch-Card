@@ -847,6 +847,13 @@ export default function Portal({
     };
   }, [compactNavigation, menu]);
   const business = businesses.find((item) => item.businessId === workspaceId);
+  useEffect(() => {
+    try {
+      sessionStorage.setItem("scratch-card-dashboard-return", location.href);
+    } catch {
+      // Navigation still works through browser history when storage is unavailable.
+    }
+  }, [tab, workspaceId]);
   const branchCreationDisabled = global
     ? !businesses.some(hasBranchCapacity)
     : !hasBranchCapacity(business);
@@ -1773,6 +1780,21 @@ export default function Portal({
                       }
                     >
                       {item.status === "active" ? "Pause" : "Activate"}
+                    </button>
+                    <button className="danger" disabled={busy || !cards.some((card) => card.businessId === item.businessId)}
+                      onClick={() => {
+                        const couponCount = cards.filter((card) => card.businessId === item.businessId).length;
+                        setEditor({
+                          title: `Delete all coupons for ${item.name}`,
+                          danger: true,
+                          submitLabel: "Delete all coupons",
+                          successMessage: `All coupons for ${item.name} were permanently deleted. Their shared links no longer work.`,
+                          description: `Permanently delete all ${couponCount} coupons belonging to ${item.name}. This cannot be undone. Type the exact business name to confirm.`,
+                          fields: [{ key: "confirmName", label: `Type ${item.name} to confirm`, required: true }],
+                          save: (values) => api(`/api/portal/businesses/${item.businessId}/cards`, "DELETE", values),
+                        });
+                      }}>
+                      Delete all coupons
                     </button>
                     <button className="danger" disabled={busy}
                       onClick={() => setEditor({

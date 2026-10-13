@@ -74,6 +74,8 @@ const TRANSLATIONS = {
     shareWhatsApp: "Open WhatsApp Web",
     openCard: "Open card",
     createAnother: "Create another card",
+    close: "Close",
+    goBack: "Go back",
     reward: "YOUR REWARD",
     useCode: "USE CODE",
     scratchHere: "SCRATCH HERE",
@@ -166,6 +168,8 @@ const TRANSLATIONS = {
     shareWhatsApp: "WhatsApp Web खोलें",
     openCard: "कार्ड खोलें",
     createAnother: "दूसरा कार्ड बनाएँ",
+    close: "बंद करें",
+    goBack: "वापस जाएँ",
     reward: "आपका इनाम",
     useCode: "कोड इस्तेमाल करें",
     scratchHere: "यहाँ स्क्रैच करें",
@@ -257,6 +261,8 @@ const TRANSLATIONS = {
     shareWhatsApp: "WhatsApp Web తెరవండి",
     openCard: "కార్డ్ తెరవండి",
     createAnother: "మరొక కార్డ్ సృష్టించండి",
+    close: "మూసివేయండి",
+    goBack: "వెనక్కి వెళ్లండి",
     reward: "మీ బహుమతి",
     useCode: "కోడ్ ఉపయోగించండి",
     scratchHere: "ఇక్కడ స్క్రాచ్ చేయండి",
@@ -1093,6 +1099,20 @@ function Creator({
           aria-label={t("cardLive")}
         >
           <div className="modal">
+            <button
+              type="button"
+              className="modal-close"
+              aria-label={t("close")}
+              title={t("close")}
+              onClick={() => {
+                setResult(null);
+                setMessage("");
+              }}
+            >
+              <svg aria-hidden="true" viewBox="0 0 24 24">
+                <path d="M6 6l12 12M18 6 6 18" />
+              </svg>
+            </button>
             <div className="success">✓</div>
             <div className="kicker">{t("readyShare")}</div>
             <h2>{t("cardLive")}</h2>
@@ -1143,6 +1163,35 @@ function PublicCard({ slug, language: dashboardLanguage }) {
   const [revealed, setRevealed] = useState(false);
   const [copied, setCopied] = useState(false);
   const [claimError, setClaimError] = useState("");
+  const goBack = () => {
+    try {
+      const saved = sessionStorage.getItem("scratch-card-dashboard-return");
+      if (saved) {
+        const destination = new URL(saved, window.location.origin);
+        if (destination.origin === window.location.origin && !destination.pathname.startsWith("/card/")) {
+          window.location.assign(`${destination.pathname}${destination.search}${destination.hash}`);
+          return;
+        }
+      }
+    } catch {
+      // Continue with browser navigation when storage is unavailable.
+    }
+    let sameOriginReferrer = false;
+    try {
+      sameOriginReferrer = Boolean(document.referrer)
+        && new URL(document.referrer).origin === window.location.origin;
+    } catch {
+      sameOriginReferrer = false;
+    }
+    if (sameOriginReferrer && window.history.length > 1) {
+      window.history.back();
+      return;
+    }
+    window.close();
+    window.setTimeout(() => {
+      if (!window.closed) window.location.assign("/");
+    }, 150);
+  };
   useEffect(() => {
     requestJson(`/api/cards/${encodeURIComponent(slug)}`)
       .then((data) => {
@@ -1186,7 +1235,12 @@ function PublicCard({ slug, language: dashboardLanguage }) {
         <div className="used-icon">✓</div>
         <h1>{t("alreadyUsed")}</h1>
         <p>{t("oneReveal")}</p>
-        <a href="/">{t("createNew")}</a>
+        <div className="used-card-actions">
+          <button type="button" className="used-card-back" onClick={goBack}>
+            <span aria-hidden="true">←</span> {t("goBack")}
+          </button>
+          <a href="/">{t("createNew")}</a>
+        </div>
       </main>
     );
   const share = () =>
@@ -1239,6 +1293,9 @@ function PublicCard({ slug, language: dashboardLanguage }) {
       <RecipientTopbar
         brand={card.senderName}
       />
+      <button type="button" className="public-card-back" onClick={goBack}>
+        <span aria-hidden="true">←</span> {t("goBack")}
+      </button>
       <div className="glow one" />
       <div className="glow two" />
       <section className="experience">

@@ -462,6 +462,7 @@ const { authenticate, audit, validateCreate, getBusiness, businessLimits, cardRo
   {
     Business,
     Card,
+    CouponBatch,
     listBusinesses,
     readBusinesses,
     writeBusinesses,

@@ -74,6 +74,7 @@ export function installControls(app, context) {
   const {
     Business,
     Card,
+    CouponBatch,
     listBusinesses,
     readBusinesses,
     writeBusinesses,
@@ -834,6 +835,38 @@ export function installControls(app, context) {
       }
       await audit(req, "All businesses deleted", "", text(businesses.map((business) => business.name).join(", "), 1000));
       res.json({ ok: true, archived: true, deletedCount: businesses.length });
+    }),
+  );
+  app.delete(
+    "/api/portal/businesses/:businessId/cards",
+    auth,
+    superOnly,
+    route(async (req, res) => {
+      const id = scope(req);
+      const business = await getBusiness(id);
+      if (req.body?.confirmName !== business.name)
+        throw fail("Type the exact business name to confirm coupon deletion.");
+      const query = id === "impact-vibes"
+        ? { $or: [{ businessId: id }, { businessId: { $exists: false } }] }
+        : { businessId: id };
+      let deletedCount = 0;
+      if (isMongo()) {
+        deletedCount = (await Card.deleteMany(query)).deletedCount;
+        if (CouponBatch) await CouponBatch.deleteMany({ businessId: id });
+      } else {
+        deletedCount = await mutateLocalCards((items) => {
+          let removed = 0;
+          for (let index = items.length - 1; index >= 0; index -= 1) {
+            if ((items[index].businessId || "impact-vibes") === id) {
+              items.splice(index, 1);
+              removed += 1;
+            }
+          }
+          return removed;
+        });
+      }
+      await audit(req, "All business coupons deleted", id, `${business.name}: ${deletedCount} coupons permanently deleted`);
+      res.json({ ok: true, deletedCount });
     }),
   );
   app.delete(

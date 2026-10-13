@@ -14,6 +14,78 @@
 /* Compact body text without scaling the layout or browser zoom. */
 body { font-size: 14px; }
 
+.modal { position: relative; }
+.modal .modal-close {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  z-index: 2;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #d8dce5;
+  border-radius: 12px;
+  background: #fff;
+  color: #17233a;
+  box-shadow: 0 4px 12px #17233a14;
+  cursor: pointer;
+  transition: background .18s ease, border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+}
+.modal .modal-close svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+.modal .modal-close:hover {
+  border-color: #aeb9ca;
+  background: #f3f6fa;
+  box-shadow: 0 6px 16px #17233a20;
+  transform: translateY(-1px);
+}
+.modal .modal-close:active { transform: translateY(0); }
+.used-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 24px;
+}
+.used-card-actions a,
+.used-card-back {
+  min-height: 46px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 20px;
+  border-radius: 12px;
+  font-weight: 800;
+  text-decoration: none;
+}
+.used-card-back {
+  border: 1px solid color-mix(in srgb, var(--accent, #ffb33f) 70%, white);
+  background: var(--accent, #ffb33f);
+  color: #10233c;
+  cursor: pointer;
+}
+.used-card-actions a {
+  border: 1px solid #ffffff40;
+  color: #fff;
+}
+.recipient::before { pointer-events: none; }
+
+@media (max-width: 600px) {
+  .modal .modal-close { top: 12px; right: 12px; }
+  .used-card-actions { flex-direction: column; }
+  .used-card-actions > * { width: min(100%, 300px); }
+}
+
 /* JustConnect customer experience colors. */
 .kicker { color: #075a9c; }
 input:focus, select:focus { border-color: #075a9c; box-shadow: 0 0 0 3px #075a9c20; }

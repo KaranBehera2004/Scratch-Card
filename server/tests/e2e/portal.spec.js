@@ -214,6 +214,7 @@ test("super admin can manage workspaces, create rewards, and export English work
   await capacityDialog.getByRole("button", { name: "Cancel" }).click();
   await nav(page, "Businesses");
   const impactBusinessRow = page.getByRole("row").filter({ hasText: "Impact Vibes" });
+  await expect(impactBusinessRow.getByRole("button", { name: "Delete all coupons", exact: true })).toBeVisible();
   await impactBusinessRow.getByRole("button", { name: "Open workspace" }).click();
   await expect(page.locator(".p-workspace-banner")).toContainText(
     "Impact Vibes",
@@ -400,6 +401,7 @@ test("super admin can manage workspaces, create rewards, and export English work
   await expect(page.locator(".recipient-brand")).toHaveText("✦ Impact Vibes");
   await expect(page.locator(".scratch-card .offer-branch")).toHaveText("Hyderabad");
   await expect(page.locator(".scratch-card canvas")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Go back", exact: true })).toBeVisible();
   const box = await page.locator(".scratch-card canvas").boundingBox();
   await page.mouse.move(box.x + 10, box.y + 10);
   await page.mouse.down();
@@ -409,6 +411,7 @@ test("super admin can manage workspaces, create rewards, and export English work
   }
   await page.mouse.up();
   await expect(page.getByText("Offer unlocked!")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Go back", exact: true })).toBeVisible();
   await expect(page.locator(".scratch-card .offer-branch")).toHaveText("Hyderabad");
   await page.reload();
   await expect(page.locator(".scratch-card canvas")).toHaveCount(0);
@@ -1206,7 +1209,8 @@ test("mandatory WhatsApp creation, direct send, popup recovery and coupon expiry
   await page.getByRole("button", { name: "Direct send", exact: true }).click();
   await expect(shareLink).toBeVisible();
   await expect(page.locator(".modal .copied")).toContainText("WhatsApp Web could not open");
-  await page.getByRole("button", { name: "Create another" }).click();
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(shareLink).toHaveCount(0);
   await nav(page, "Coupons");
   const expiringRow = page.getByRole("row").filter({ hasText: "+447700900123" });
   await expect(expiringRow.locator('[data-label="Expiry date"]')).not.toHaveText("No expiry");
@@ -1526,6 +1530,8 @@ test("bulk creator recovers retries, previews branches, redeems on scratch and e
   expect(cards.find((item) => item.slug === card.slug).redeemedBranchId).toBe(branches[0].branchId);
   await page.goto(`/card/${card.slug}`);
   await expect(page.getByRole("heading", { name: "This coupon has already been used." })).toBeVisible();
+  await page.getByRole("button", { name: "Go back", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Coupons", exact: true })).toBeVisible();
   expect(errors).toEqual([]);
   expect((await page.request.delete(`/api/portal/businesses/${business.businessId}`, { headers: rootHeaders, data: { confirmName: "Bulk Test Business" } })).status()).toBe(200);
 });
@@ -2012,6 +2018,44 @@ test("bulk branch controls continue the same draft across generations, refreshes
   expect(savedCards).toHaveLength(7);
   expect(savedCards.every(card => card.offerTitle === "30% OFF" && card.campaignName === "Branch draft remains intact")).toBe(true);
   expect(errors).toEqual([]);
+  expect((await page.request.delete(`/api/portal/businesses/${business.businessId}`, {
+    headers: rootHeaders, data: { confirmName: business.name },
+  })).status()).toBe(200);
+});
+
+test("super admin can delete all coupons for one verified business only", async ({ page }) => {
+  const rootLogin = await page.request.post("/api/auth/login", { data: { loginId: "platform@example.test", password: "Platform-Test-Password" } });
+  const rootHeaders = { Authorization: `Bearer ${(await rootLogin.json()).token}` };
+  const createdResponse = await page.request.post("/api/portal/businesses", { headers: rootHeaders, data: {
+    name: "Coupon Cleanup Retail", loginId: "CLEANUP58", password: "Coupon-Cleanup-Password",
+    limits: { card: 10, branch: 2, department: 2, account: 1 }, generateCredentials: true,
+  } });
+  expect(createdResponse.status()).toBe(201);
+  const business = (await createdResponse.json()).business;
+  const ownerLogin = await page.request.post("/api/auth/login", { data: { loginId: "CLEANUP58", password: "Coupon-Cleanup-Password" } });
+  const ownerHeaders = { Authorization: `Bearer ${(await ownerLogin.json()).token}` };
+  const cardResponse = await page.request.post("/api/cards", { headers: ownerHeaders, data: {
+    businessId: business.businessId, headline: "Cleanup reward", offerTitle: "20% OFF",
+    description: "Cleanup test", campaignName: "Cleanup", customerPhone: "9876543210",
+  } });
+  expect(cardResponse.status()).toBe(201);
+  const card = await cardResponse.json();
+
+  await login(page, "platform@example.test", "Platform-Test-Password");
+  await nav(page, "Businesses");
+  const row = page.getByRole("row").filter({ hasText: business.name });
+  await row.getByRole("button", { name: "Delete all coupons", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: `Delete all coupons for ${business.name}`, exact: true });
+  await dialog.getByLabel(`Type ${business.name} to confirm`).fill("wrong");
+  await dialog.getByRole("button", { name: "Delete all coupons", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toContainText("Type the exact business name");
+  await dialog.getByLabel(`Type ${business.name} to confirm`).fill(business.name);
+  await dialog.getByRole("button", { name: "Delete all coupons", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(page.getByRole("status")).toContainText("All coupons");
+  await expect(row).toBeVisible();
+  await expect(row.getByRole("button", { name: "Delete all coupons", exact: true })).toBeDisabled();
+  expect((await page.request.get(`/api/cards/${card.slug}`)).status()).toBe(404);
   expect((await page.request.delete(`/api/portal/businesses/${business.businessId}`, {
     headers: rootHeaders, data: { confirmName: business.name },
   })).status()).toBe(200);
