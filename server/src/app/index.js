@@ -9,6 +9,7 @@ import mongoose from "mongoose";
 import sharp from "sharp";
 import { installControls } from "../routes/control.js";
 import { ensureUniqueIndex } from "../services/indexes.js";
+import { isProductionRuntime, parseClientOrigins, validateRuntimeConfiguration } from "../services/runtime-config.js";
 import { normalizeWhatsAppNumber } from "../../shared/whatsapp.js";
 import { PRODUCTION_APP_URL } from "../../shared/urls.js";
 import { installBulkRoutes, bad, couponStatus, checkCapacity } from "../routes/bulk.js";
@@ -18,12 +19,20 @@ const rootDir = process.env.SCRATCH_DATA_ROOT || projectRoot;
 const dataDir = path.join(rootDir, "server", "data");
 const dataFile = path.join(dataDir, "cards.json");
 const businessesFile = path.join(dataDir, "businesses.json");
+validateRuntimeConfiguration();
 export const app = express();
 const port = Number(process.env.PORT) || 5051;
 
 app.disable("x-powered-by");
-app.use(cors({ origin: process.env.CLIENT_ORIGIN ||
-  (process.env.NODE_ENV === "production" ? PRODUCTION_APP_URL : true) }));
+const permittedOrigins = new Set([
+  PRODUCTION_APP_URL,
+  ...parseClientOrigins(process.env.CLIENT_ORIGIN || ""),
+]);
+app.use(cors({ origin(origin, callback) {
+  if (!origin || !isProductionRuntime() || permittedOrigins.has(origin))
+    return callback(null, true);
+  return callback(Object.assign(new Error("This website origin is not allowed by CLIENT_ORIGIN."), { status: 403 }));
+} }));
 // API state must always be read from the database. Ignore browser/CDN
 // validators so a newly created or claimed card can never receive a stale 304.
 app.use("/api", (req, res, next) => {
@@ -188,28 +197,21 @@ async function listBusinesses() {
 }
 
 export function connectDatabase() {
-  if (atlasConnected) return Promise.resolve();
+  if (atlasConnected && mongoose.connection.readyState === 1) return Promise.resolve();
   if (databasePromise) return databasePromise;
 
-  databasePromise = initializeDatabase().catch((error) => {
-    databasePromise = null;
-    atlasConnected = false;
-    throw error;
-  });
+  databasePromise = initializeDatabase()
+    .then(() => { databasePromise = null; })
+    .catch((error) => {
+      databasePromise = null;
+      atlasConnected = false;
+      throw error;
+    });
   return databasePromise;
 }
 
 async function initializeDatabase() {
-  if (
-    !process.env.MONGODB_URI &&
-    (process.env.NETLIFY ||
-      process.env.VERCEL ||
-      process.env.AWS_LAMBDA_FUNCTION_NAME)
-  ) {
-    throw new Error(
-      "MongoDB Atlas is not configured. Add MONGODB_URI in your hosting environment variables and redeploy.",
-    );
-  }
+  validateRuntimeConfiguration();
   if (!process.env.MONGODB_URI) {
     await fs.mkdir(dataDir, { recursive: true });
     await normalizeLocalCoupons();
@@ -219,6 +221,7 @@ async function initializeDatabase() {
   }
   await mongoose.connect(process.env.MONGODB_URI, {
     dbName: process.env.MONGODB_DB || "scratch_cards",
+    serverSelectionTimeoutMS: 15000,
   });
   await normalizeMongoCoupons();
   await ensureUniqueIndex(Card.collection, "couponCode", "unique_coupon_code");
@@ -602,13 +605,16 @@ app.post("/api/portal/cards/:slug/redeem", authenticate, async (req, res, next) 
   } catch (error) { next(error); }
 });
 
-app.get("/api/health", (_req, res) =>
-  res.json({
-    ok: true,
+app.get("/api/health", (_req, res) => {
+  const mongoReady = atlasConnected && mongoose.connection.readyState === 1;
+  const ready = !isProductionRuntime() || mongoReady;
+  res.status(ready ? 200 : 503).json({
+    ok: ready,
     service: "scratch-card",
-    storage: atlasConnected ? "mongodb-atlas" : "local-json",
-  }),
-);
+    storage: mongoReady ? "mongodb-atlas" : "local-json",
+    database: mongoReady ? "connected" : isProductionRuntime() ? "unavailable" : "local-development",
+  });
+});
 app.get("/api/admin/coupons", authenticate, async (req, res, next) => {
   try {
     const id =
