@@ -1,6 +1,19 @@
 export const PRODUCTION_APP_URL = "https://scratch.justconnect.biz";
 export const PRODUCTION_API_URL = "https://api-scratch.justconnect.biz";
 
+export function scratchApiUrl(pathname, currentOrigin = globalThis.location?.origin) {
+  if (!currentOrigin) return new URL(pathname, PRODUCTION_API_URL).toString();
+  const current = new URL(currentOrigin);
+  const productionHost = new URL(PRODUCTION_APP_URL).hostname;
+  const apiHost = new URL(PRODUCTION_API_URL).hostname;
+  const origin = current.hostname.endsWith(".vercel.app")
+    || current.hostname === productionHost
+    || current.hostname === apiHost
+    ? PRODUCTION_API_URL
+    : current.origin;
+  return new URL(pathname, origin).toString();
+}
+
 export function appOrigin(currentOrigin = globalThis.location?.origin) {
   if (!currentOrigin) return PRODUCTION_APP_URL;
   const url = new URL(currentOrigin);

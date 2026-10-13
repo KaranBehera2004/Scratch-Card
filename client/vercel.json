@@ -3,6 +3,10 @@
   "outputDirectory": "dist",
   "rewrites": [
     {
+      "source": "/api/:path*",
+      "destination": "https://api-scratch.justconnect.biz/api/:path*"
+    },
+    {
       "source": "/share/:slug/image",
       "destination": "https://api-scratch.justconnect.biz/api/cards/:slug/share-image"
     },

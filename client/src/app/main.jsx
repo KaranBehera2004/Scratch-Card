@@ -10,7 +10,7 @@ import "../assets/favicon.js";
 import Portal, { PortalLogin, portalApi } from "../features/portal/Portal.jsx";
 import { workspaceTranslator } from "../i18n/workspace-i18n.js";
 import { normalizeWhatsAppNumber, whatsAppCardUrl } from "../../../server/shared/whatsapp.js";
-import { scratchCardUrl, scratchShareUrl } from "../../../server/shared/urls.js";
+import { scratchApiUrl, scratchCardUrl, scratchShareUrl } from "../../../server/shared/urls.js";
 import { pendingBulk, completedBulk, savedBulkDraft, useBulkGeneration, BranchQuantities, BulkResults } from "../features/bulk/BulkGenerate.jsx";
 import "../styles/bulk.css";
 import "../styles/styles.css";
@@ -463,7 +463,7 @@ async function prepareWhatsAppPreview(shareUrl, hasImage) {
 async function requestJson(url, options) {
   let response;
   try {
-    response = await fetch(url, options);
+    response = await fetch(scratchApiUrl(url), { cache: "no-store", ...options });
   } catch {
     throw new Error(
       import.meta.env.PROD

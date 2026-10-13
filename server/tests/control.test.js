@@ -67,6 +67,11 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
   };
   const admin = await login("platform@example.test", "Platform-Test-Password"),
     owner = await login("owner@example.test", "Owner-Test-Password");
+  const health = await fetch(`${base}/api/health`, {
+    headers: { "If-None-Match": "W/\"stale-production-response\"" },
+  });
+  assert.equal(health.status, 200);
+  assert.match(health.headers.get("cache-control"), /no-store/);
   const draft = {
     businessId: "impact-vibes",
     senderName: "Forged sender",

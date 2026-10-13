@@ -3,7 +3,7 @@ import "../../styles/portal.css";
 import "../../styles/portal-theme.css";
 import { WorkspaceLocale, useWorkspaceText, workspaceTranslator } from "../../i18n/workspace-i18n.js";
 import { summarizeCampaigns } from "./campaigns.js";
-import { PRODUCTION_API_URL, scratchCardUrl } from "../../../../server/shared/urls.js";
+import { scratchApiUrl, scratchCardUrl } from "../../../../server/shared/urls.js";
 import { EMPTY_COUPON_FILTERS, couponBranchKey, couponCampaignKey, couponDateBounds, filterCouponCards } from "./coupon-filters.js";
 
 function JustConnectLogo({ theme = "light", className = "" }) {
@@ -18,19 +18,17 @@ function JustConnectLogo({ theme = "light", className = "" }) {
   );
 }
 
-// Production requests go directly to Render. Local development keeps Vite's
-// relative /api proxy, so developers do not need a separate API URL setting.
-const apiOrigin = import.meta.env.VITE_API_URL ||
-  (import.meta.env.PROD ? PRODUCTION_API_URL : "");
-
 function apiUrl(url) {
-  return apiOrigin ? new URL(url, apiOrigin).toString() : url;
+  return import.meta.env.VITE_API_URL
+    ? new URL(url, import.meta.env.VITE_API_URL).toString()
+    : scratchApiUrl(url);
 }
 
 export async function portalApi(url, token, method = "GET", body) {
   let response;
   try {
     response = await fetch(apiUrl(url), {
+    cache: "no-store",
     method,
     headers: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
