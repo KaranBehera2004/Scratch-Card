@@ -24,6 +24,19 @@ const port = Number(process.env.PORT) || 5051;
 app.disable("x-powered-by");
 app.use(cors({ origin: process.env.CLIENT_ORIGIN ||
   (process.env.NODE_ENV === "production" ? PRODUCTION_APP_URL : true) }));
+// API state must always be read from the database. Ignore browser/CDN
+// validators so a newly created or claimed card can never receive a stale 304.
+app.use("/api", (req, res, next) => {
+  delete req.headers["if-none-match"];
+  delete req.headers["if-modified-since"];
+  res.set({
+    "Cache-Control": "private, no-store, no-cache, must-revalidate, proxy-revalidate",
+    Pragma: "no-cache",
+    Expires: "0",
+    "Surrogate-Control": "no-store",
+  });
+  next();
+});
 // Single-card requests may contain one bounded image used by WhatsApp's link
 // preview. Other API requests retain the smaller default parsing limit.
 app.use("/api/cards", express.json({ limit: "8mb" }));
