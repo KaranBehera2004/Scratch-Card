@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
+    "jsqr": "^1.4.0",
+    "qrcode": "^1.5.4",
     "react": "latest",
     "react-dom": "latest",
     "vite": "latest",

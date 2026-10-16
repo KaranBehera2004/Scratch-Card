@@ -24,6 +24,10 @@ export const app = express();
 const port = Number(process.env.PORT) || 5051;
 
 app.disable("x-powered-by");
+app.use((_req, res, next) => {
+  res.setHeader("Permissions-Policy", "camera=(self)");
+  next();
+});
 const permittedOrigins = new Set([
   PRODUCTION_APP_URL,
   ...parseClientOrigins(process.env.CLIENT_ORIGIN || ""),
@@ -72,8 +76,14 @@ const schema = new mongoose.Schema(
     campaignName: { type: String, default: "" },
     expiresAt: { type: Date, default: null },
     disabled: { type: Boolean, default: false },
+    openedAt: { type: Date, default: null },
     redeemedAt: { type: Date, default: null },
     scratchedAt: { type: Date, default: null },
+    staffRedeemedAt: { type: Date, default: null },
+    staffRedeemedBranchId: { type: String, default: "" },
+    staffRedeemedDepartmentId: { type: String, default: "" },
+    staffRedeemedBy: { type: String, default: "" },
+    staffRedeemedByName: { type: String, default: "" },
     redeemedBranchId: { type: String, default: "" },
     batchKey: { type: String, index: true },
     batchFingerprint: String,
@@ -190,10 +200,14 @@ async function ensureImpactVibes() {
     await writeBusinesses(businesses);
   }
 }
+let businessesReadPromise = null;
 async function listBusinesses() {
-  return atlasConnected
+  if (businessesReadPromise) return businessesReadPromise;
+  businessesReadPromise = Promise.resolve(atlasConnected
     ? Business.find({ status: { $ne: "deleted" } }).sort({ createdAt: -1 }).lean()
-    : (await readBusinesses()).filter((business) => business.status !== "deleted");
+    : readBusinesses().then((items) => items.filter((business) => business.status !== "deleted")))
+    .finally(() => { businessesReadPromise = null; });
+  return businessesReadPromise;
 }
 
 export function connectDatabase() {
@@ -221,27 +235,35 @@ async function initializeDatabase() {
   }
   await mongoose.connect(process.env.MONGODB_URI, {
     dbName: process.env.MONGODB_DB || "scratch_cards",
-    serverSelectionTimeoutMS: 15000,
+    // Prefer IPv4 because several local/hosting networks expose an unusable
+    // IPv6 route first, making every cold connection wait for a timeout.
+    family: 4,
+    serverSelectionTimeoutMS: 5000,
+    connectTimeoutMS: 5000,
+    socketTimeoutMS: 15000,
+    maxPoolSize: 20,
+    minPoolSize: isProductionRuntime() ? 1 : 0,
+    maxIdleTimeMS: 60000,
   });
   await normalizeMongoCoupons();
-  await ensureUniqueIndex(Card.collection, "couponCode", "unique_coupon_code");
-  await ensureUniqueIndex(Card.collection, "slug", "unique_scratch_slug");
-  await Card.collection.createIndex({ batchKey: 1 });
-  await CouponBatch.init();
-  await ensureUniqueIndex(CouponBatch.collection, "key", "unique_coupon_batch_key");
-  await Card.updateMany({ redeemedAt: { $ne: null }, scratchedAt: null }, [
-    { $set: { scratchedAt: "$redeemedAt" } },
-  ]);
-  // Scratching is now redemption. Preserve the original reveal time and branch.
-  await Card.updateMany({ scratchedAt: { $ne: null }, redeemedAt: null }, [
-    { $set: { redeemedAt: "$scratchedAt", redeemedBranchId: { $ifNull: ["$branchId", ""] } } },
-  ]);
   const ControlRecord = mongoose.model("ControlRecord");
-  await ControlRecord.init();
-  await Business.init();
-  await ensureUniqueIndex(ControlRecord.collection, "key", "unique_control_key");
-  await ensureUniqueIndex(Business.collection, "businessId", "unique_business_id");
-  await ensureUniqueIndex(Business.collection, "loginId", "unique_business_login_id", { sparse: true });
+  await Promise.all([
+    ensureUniqueIndex(Card.collection, "couponCode", "unique_coupon_code"),
+    ensureUniqueIndex(Card.collection, "slug", "unique_scratch_slug"),
+    Card.collection.createIndex({ batchKey: 1 }),
+    CouponBatch.init(),
+    ControlRecord.init(),
+    Business.init(),
+  ]);
+  await Promise.all([
+    ensureUniqueIndex(CouponBatch.collection, "key", "unique_coupon_batch_key"),
+    ensureUniqueIndex(ControlRecord.collection, "key", "unique_control_key"),
+    ensureUniqueIndex(Business.collection, "businessId", "unique_business_id"),
+    ensureUniqueIndex(Business.collection, "loginId", "unique_business_login_id", { sparse: true }),
+    Card.updateMany({ redeemedAt: { $ne: null }, scratchedAt: null }, [
+      { $set: { scratchedAt: "$redeemedAt" } },
+    ]),
+  ]);
   atlasConnected = true;
   await ensureImpactVibes();
   console.log("Storage: MongoDB Atlas");
@@ -272,14 +294,9 @@ async function normalizeLocalCoupons() {
   const usedCodes = new Set();
   let changed = false;
   for (const card of cards) {
-    // Keep historical timestamps; never reactivate a previously revealed coupon.
+    // A historically redeemed coupon must remain revealed as well.
     if (card.redeemedAt && !card.scratchedAt) {
       card.scratchedAt = card.redeemedAt;
-      changed = true;
-    }
-    if (card.scratchedAt && !card.redeemedAt) {
-      card.redeemedAt = card.scratchedAt;
-      card.redeemedBranchId = card.branchId || "";
       changed = true;
     }
     let code = clean(card.couponCode, 24).toUpperCase();
@@ -296,7 +313,12 @@ async function normalizeLocalCoupons() {
   if (changed) await fs.writeFile(dataFile, JSON.stringify(cards, null, 2));
 }
 async function normalizeMongoCoupons() {
-  const cards = await Card.find().sort({ createdAt: 1, _id: 1 }).lean();
+  // Startup only needs identifiers and coupon codes. Some cards contain large
+  // WhatsApp preview images, so loading complete documents here made every
+  // local restart download the entire card collection before the API listened.
+  const cards = await Card.find({}, { couponCode: 1 })
+    .sort({ createdAt: 1, _id: 1 })
+    .lean();
   const usedCodes = new Set();
   for (const card of cards) {
     let code = clean(card.couponCode, 24).toUpperCase();
@@ -306,26 +328,46 @@ async function normalizeMongoCoupons() {
     usedCodes.add(code);
   }
 }
-async function findCard(slug) {
+async function findCard(slug, { includeImage = false } = {}) {
   return atlasConnected
-    ? Card.findOne({ slug }).lean()
+    ? Card.findOne({ slug }).select(includeImage ? "+shareImageBase64" : "-shareImageBase64").lean()
     : (await readLocalCards()).find((card) => card.slug === slug);
+}
+async function markCardOpened(card) {
+  if (card.openedAt) return card;
+  const openedAt = new Date();
+  if (atlasConnected) {
+    const updated = await Card.findOneAndUpdate(
+      { slug: card.slug, openedAt: null },
+      { $set: { openedAt } },
+      { new: true },
+    ).select("-shareImageBase64").lean();
+    return updated || { ...card, openedAt };
+  }
+  return mutateLocalCards((cards) => {
+    const current = cards.find((item) => item.slug === card.slug);
+    if (!current) return card;
+    if (!current.openedAt) current.openedAt = openedAt.toISOString();
+    return { ...current };
+  });
 }
 async function findRedeemedCoupons() {
   if (atlasConnected) {
     return Card.find({ redeemedAt: { $ne: null } })
-      .select("slug couponCode offerTitle senderName redeemedAt")
+      .select("slug couponCode offerTitle senderName businessId branchId redeemedAt")
       .sort({ redeemedAt: -1 })
       .lean();
   }
   return (await readLocalCards())
     .filter((card) => card.redeemedAt)
     .sort((a, b) => new Date(b.redeemedAt) - new Date(a.redeemedAt))
-    .map(({ slug, couponCode, offerTitle, senderName, redeemedAt }) => ({
+    .map(({ slug, couponCode, offerTitle, senderName, businessId, branchId, redeemedAt }) => ({
       slug,
       couponCode,
       offerTitle,
       senderName,
+      businessId: businessId || "impact-vibes",
+      branchId: branchId || "",
       redeemedAt,
     }));
 }
@@ -334,7 +376,7 @@ async function findAllCoupons() {
   const cards = atlasConnected
     ? await Card.find()
         .select(
-          "slug couponCode offerTitle senderName businessId customerPhone expiresAt createdAt redeemedAt",
+          "slug couponCode offerTitle senderName businessId branchId customerPhone expiresAt createdAt redeemedAt staffRedeemedAt",
         )
         .sort({ createdAt: -1 })
         .lean()
@@ -348,21 +390,25 @@ async function findAllCoupons() {
       offerTitle,
       senderName,
       businessId,
+      branchId,
       customerPhone,
       expiresAt,
       createdAt,
       redeemedAt,
+      staffRedeemedAt,
     }) => ({
       slug,
       couponCode,
       offerTitle,
       senderName,
       businessId: businessId || "impact-vibes",
+      branchId: branchId || "",
       customerPhone: customerPhone || "",
       expiresAt: expiresAt || null,
       createdAt,
       redeemedAt: redeemedAt || null,
-      used: Boolean(redeemedAt),
+      staffRedeemedAt: staffRedeemedAt || null,
+      used: Boolean(staffRedeemedAt),
     }),
   );
 }
@@ -376,26 +422,23 @@ async function claimLocalCard(slug) {
       (cards[index].expiresAt && new Date(cards[index].expiresAt) <= new Date())
     )
       return { status: "unavailable" };
-    const redeemedAt = new Date().toISOString();
-    cards[index].scratchedAt = redeemedAt;
-    cards[index].redeemedAt = redeemedAt;
-    cards[index].redeemedBranchId = cards[index].branchId || "";
+    const scratchedAt = new Date().toISOString();
+    cards[index].scratchedAt = scratchedAt;
     return { status: "claimed", card: cards[index] };
   });
 }
 async function claimCard(slug) {
   if (!atlasConnected) return claimLocalCard(slug);
-  const redeemedAt = new Date();
+  const scratchedAt = new Date();
   const card = await Card.findOneAndUpdate(
     {
       slug,
       disabled: { $ne: true },
       redeemedAt: null,
       scratchedAt: null,
-      $or: [{ expiresAt: null }, { expiresAt: { $gt: redeemedAt } }],
+      $or: [{ expiresAt: null }, { expiresAt: { $gt: scratchedAt } }],
     },
-    [{ $set: { scratchedAt: redeemedAt, redeemedAt,
-      redeemedBranchId: { $ifNull: ["$branchId", ""] } } }],
+    { $set: { scratchedAt } },
     { new: true },
   ).lean();
   if (card) return { status: "claimed", card };
@@ -413,10 +456,16 @@ function publicCard(card) {
   const fields = ["slug", "senderName", "shareTitle", "headline", "offerTitle", "description",
     "claimUrl", "accentColor", "pageColor", "textColor", "businessId",
     "branchId", "branchName", "language", "campaignName", "expiresAt", "createdAt"];
+  const revealed = Boolean(card.redeemedAt || card.scratchedAt);
   return {
     ...Object.fromEntries(fields.map((key) => [key, card[key]])),
-    used: Boolean(card.redeemedAt || card.scratchedAt),
+    used: revealed,
+    openedAt: card.openedAt || null,
     scratchedAt: card.scratchedAt || null,
+    redeemed: Boolean(card.staffRedeemedAt),
+    // Reveal the code after scratching, but remove it permanently from the
+    // public response once branch staff has redeemed the coupon.
+    ...(revealed && !card.staffRedeemedAt ? { couponCode: card.couponCode } : {}),
     hasShareImage: Boolean(card.shareImageBase64),
   };
 }
@@ -457,7 +506,7 @@ function safeShareImage(value) {
 const html = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
 })[character]);
-const { authenticate, audit, validateCreate, getBusiness, businessLimits, cardRows, scope } = installControls(
+const { authenticate, audit, validateCreate, getBusiness, businessLimits, cardRows, scope, resolveRedemptionRecord } = installControls(
   app,
   {
     Business,
@@ -492,7 +541,9 @@ function buildCard(body, business, bulk = false, allowExpired = false) {
     customerPhone: bulk && (body.customerPhone == null || (typeof body.customerPhone === "string" && !body.customerPhone.trim()))
       ? "" : normalizeWhatsAppNumber(body.customerPhone),
     claimUrl: safeUrl(body.claimUrl), campaignName: clean(body.campaignName, 80), expiresAt,
-    disabled: false, redeemedAt: null, scratchedAt: null,
+    disabled: false, openedAt: null, redeemedAt: null, scratchedAt: null,
+    staffRedeemedAt: null, staffRedeemedBranchId: "",
+    staffRedeemedDepartmentId: "", staffRedeemedBy: "", staffRedeemedByName: "",
     ...safeShareImage(body.shareImage),
     ...Object.fromEntries([["accentColor", "#f6a800"], ["pageColor", "#002b5c"], ["textColor", "#ffffff"]]
       .map(([key, fallback]) => [key, /^#[0-9a-f]{6}$/i.test(body[key]) ? body[key] : fallback])),
@@ -503,7 +554,8 @@ function buildCard(body, business, bulk = false, allowExpired = false) {
 }
 const batchCard = (card) => Object.fromEntries([
   "slug", "branchId", "branchName", "couponCode", "offerTitle", "description",
-  "campaignName", "expiresAt", "createdAt", "scratchedAt", "redeemedAt", "customerPhone",
+  "campaignName", "expiresAt", "createdAt", "openedAt", "scratchedAt", "redeemedAt", "staffRedeemedAt",
+  "staffRedeemedBranchId", "staffRedeemedDepartmentId", "customerPhone",
 ].map((key) => [key, card[key] ?? null]));
 function batchResult(key, fingerprint, cards, replayed = false) {
   return { batchId: key, fingerprint, savedCount: cards.length, replayed,
@@ -596,13 +648,119 @@ async function saveGeneration({ base, branches, total, maximum, batchKey, finger
 }
 installBulkRoutes(app, { authenticate, validateCreate, businessLimits, buildCard, saveGeneration, findBatch, audit, scope, getBusiness });
 
+app.post("/api/portal/redeem", authenticate, async (req, res, next) => {
+  try {
+    if (req.user.role !== "branch-staff")
+      throw bad("Only branch staff can redeem customer coupons.", 403);
+    const couponCode = clean(req.body.couponCode, 24).toUpperCase();
+    if (!couponCode) throw bad("Enter the customer's coupon code.");
+    const businessId = req.user.businessId, branchId = req.user.branchId;
+    const business = await getBusiness(businessId);
+    const staffBranch = business.branches?.find((item) => item.branchId === branchId && item.status === "active");
+    if (!staffBranch) throw bad("Your assigned branch is not active.", 403);
+    const redemptionAt = new Date();
+    const redemption = {
+      staffRedeemedAt: redemptionAt,
+      staffRedeemedBranchId: branchId,
+      staffRedeemedDepartmentId: staffBranch.departmentId || "",
+      staffRedeemedBy: req.user.id,
+      staffRedeemedByName: req.user.name,
+      redeemedAt: redemptionAt,
+      redeemedBranchId: branchId,
+    };
+    let redeemed;
+    if (atlasConnected) {
+      redeemed = await Card.findOneAndUpdate(
+        {
+          businessId,
+          branchId,
+          couponCode,
+          scratchedAt: { $ne: null },
+          staffRedeemedAt: null,
+          disabled: { $ne: true },
+        },
+        { $set: redemption },
+        { new: true },
+      ).lean();
+    } else {
+      redeemed = await mutateLocalCards((cards) => {
+        const card = cards.find((item) =>
+          (item.businessId || "impact-vibes") === businessId
+          && String(item.branchId || "") === branchId
+          && String(item.couponCode || "").toUpperCase() === couponCode);
+        if (!card || card.disabled || !card.scratchedAt || card.staffRedeemedAt) return null;
+        Object.assign(card, { ...redemption, staffRedeemedAt: redemption.staffRedeemedAt.toISOString() });
+        return { ...card };
+      });
+    }
+    if (!redeemed) {
+      const card = atlasConnected
+        ? await Card.findOne({ businessId, couponCode }).lean()
+        : (await readLocalCards()).find((item) =>
+          (item.businessId || "impact-vibes") === businessId
+          && String(item.couponCode || "").toUpperCase() === couponCode);
+      if (!card) throw bad("Coupon code not found for this business.", 404);
+      if (String(card.branchId || "") !== branchId) {
+        const assignedBranch = business.branches?.find((item) => item.branchId === card.branchId);
+        const completed = card.staffRedeemedAt ? await resolveRedemptionRecord(card) : null;
+        const completedBranch = completed
+          ? business.branches?.find((item) => item.branchId === completed.branchId)
+          : null;
+        const error = bad("This coupon is assigned to another branch and cannot be redeemed here.", 403);
+        error.details = {
+          couponCode: card.couponCode,
+          redemptionStatus: card.staffRedeemedAt ? "Redeemed" : "Not redeemed",
+          assignedBranchName: assignedBranch?.name || card.branchName || "Unknown branch",
+          ...(card.staffRedeemedAt ? {
+            redeemedBranchName: completedBranch?.name || assignedBranch?.name || card.branchName || "Unknown branch",
+            staffName: completed.staffName,
+            redeemedAt: completed.redeemedAt,
+          } : {}),
+        };
+        throw error;
+      }
+      if (card.staffRedeemedAt) {
+        const completed = await resolveRedemptionRecord(card);
+        const completedBranch = business.branches?.find((item) => item.branchId === completed.branchId);
+        const error = bad(`This coupon has already been redeemed${completedBranch ? ` at ${completedBranch.name}` : ""}.`, 409);
+        error.details = {
+          couponCode: card.couponCode,
+          redemptionStatus: "Redeemed",
+          assignedBranchName: staffBranch.name,
+          redeemedBranchName: completedBranch?.name || staffBranch.name,
+          staffName: completed.staffName,
+          redeemedAt: completed.redeemedAt,
+        };
+        throw error;
+      }
+      if (!card.scratchedAt) throw bad("The customer must scratch this card before it can be redeemed.", 409);
+      if (card.disabled) throw bad("This coupon is disabled.", 410);
+      throw bad("This coupon could not be redeemed. Refresh and try again.", 409);
+    }
+    await audit(req, "Coupon redeemed by branch staff", businessId,
+      `${redeemed.couponCode} · ${staffBranch.name}`);
+    res.set("Cache-Control", "no-store").json({
+      coupon: {
+        couponCode: redeemed.couponCode,
+        offerTitle: redeemed.offerTitle,
+        redemptionStatus: "Redeemed",
+        assignedBranchName: staffBranch.name,
+        redeemedBranchName: staffBranch.name,
+        staffName: req.user.name,
+        redeemedAt: redeemed.staffRedeemedAt,
+        status: "redeemed",
+      },
+    });
+  } catch (error) { next(error); }
+});
+
 app.post("/api/portal/cards/:slug/redeem", authenticate, async (req, res, next) => {
   try {
-    if (req.user.role === "viewer") throw bad("Viewer accounts cannot redeem coupons.", 403);
+    if (["viewer", "branch-staff"].includes(req.user.role)) throw bad("This account cannot redeem coupons.", 403);
     const card = (await cardRows(req)).find((item) => item.slug === req.params.slug);
     if (!card) throw bad("Card not found.", 404);
-    // Tell older clients to upgrade; this endpoint must never consume a coupon.
-    throw bad("Coupons are redeemed automatically when scratched. Manual redemption is no longer supported.", 410);
+    // Business dashboards cannot consume coupons; branch staff verify and redeem by code.
+    throw bad("Coupons can only be redeemed by branch staff using the coupon code.", 410);
   } catch (error) { next(error); }
 });
 
@@ -623,7 +781,8 @@ app.get("/api/admin/coupons", authenticate, async (req, res, next) => {
         ? req.query.business
         : req.user.businessId;
     const coupons = (await findAllCoupons()).filter(
-      (item) => !id || item.businessId === id,
+      (item) => (!id || item.businessId === id)
+        && (req.user.role !== "branch-staff" || item.branchId === req.user.branchId),
     );
     const usedCount = coupons.filter((item) => item.used).length;
     res.json({
@@ -643,7 +802,8 @@ app.get("/api/admin/redeemed-coupons", authenticate, async (req, res, next) => {
         ? req.query.business
         : req.user.businessId;
     const coupons = (await findAllCoupons()).filter(
-      (item) => item.used && (!id || item.businessId === id),
+      (item) => item.used && (!id || item.businessId === id)
+        && (req.user.role !== "branch-staff" || item.branchId === req.user.branchId),
     );
     res.json({ coupons, count: coupons.length });
   } catch (error) {
@@ -688,14 +848,16 @@ app.get("/api/cards/:slug", async (req, res, next) => {
     const card = await findCard(req.params.slug);
     if (!card) return res.status(404).json({ message: "Card not found." });
     await getBusiness(card.businessId || "impact-vibes");
-    if (
-      card.disabled ||
-      (card.expiresAt && new Date(card.expiresAt) < new Date())
-    )
+    if (card.disabled)
       return res
         .status(410)
-        .json({ message: "This card is disabled or expired." });
-    res.json(publicCard(card));
+        .json({ message: "This card is disabled." });
+    if (card.expiresAt && new Date(card.expiresAt) < new Date())
+      return res
+        .set("Cache-Control", "no-store")
+        .json({ ...publicCard(card), expired: true });
+    const openedCard = await markCardOpened(card);
+    res.set("Cache-Control", "no-store").json(publicCard(openedCard));
   } catch (error) {
     next(error);
   }
@@ -704,7 +866,7 @@ app.get("/api/cards/:slug/share-image", async (req, res, next) => {
   try {
     if (!/^[A-Za-z0-9_-]{6,32}$/.test(req.params.slug))
       return res.status(404).end();
-    const card = await findCard(req.params.slug);
+    const card = await findCard(req.params.slug, { includeImage: true });
     if (!card?.shareImageBase64 || !card.shareImageMime || card.disabled
       || (card.expiresAt && new Date(card.expiresAt) < new Date()))
       return res.status(404).end();
@@ -742,7 +904,7 @@ app.get("/share/:slug", async (req, res, next) => {
     const cardUrl = `${PRODUCTION_APP_URL}/card/${slug}`;
     const version = /^\d+$/.test(String(req.query.v || "")) ? String(req.query.v) : SHARE_PREVIEW_VERSION;
     const shareUrl = `${PRODUCTION_APP_URL}/share/${slug}?v=${encodeURIComponent(version)}`;
-    const imageUrl = card.shareImageBase64
+    const imageUrl = card.shareImageMime
       ? `${PRODUCTION_APP_URL}/share/${slug}/image?v=${encodeURIComponent(version)}`
       : "";
     const title = card.shareTitle || "Congratulation you got an offer";
@@ -816,16 +978,16 @@ app.post("/api/cards/:slug/claim", async (req, res, next) => {
       return res
         .status(409)
         .json({
-          message: "This coupon has already been redeemed.",
+          message: "This coupon has already been scratched.",
           used: true,
         });
-    await audit(req, "Coupon redeemed by scratching", result.card.businessId || "impact-vibes",
+    await audit(req, "Coupon scratched", result.card.businessId || "impact-vibes",
       `${result.card.couponCode} · ${result.card.redeemedBranchId || "All branches"}`).catch(console.error);
     res.set("Cache-Control", "no-store").json({
       couponCode: result.card.couponCode,
       scratchedAt: result.card.scratchedAt,
-      redeemedAt: result.card.redeemedAt,
-      status: "redeemed",
+      redeemedAt: null,
+      status: "scratched",
     });
   } catch (error) {
     next(error);
@@ -864,7 +1026,10 @@ app.use((error, req, res, _next) => {
       });
   res
     .status(error.status || 400)
-    .json({ message: error.message || "Something went wrong." });
+    .json({
+      message: error.message || "Something went wrong.",
+      ...(error.details ? { details: error.details } : {}),
+    });
 });
 
 if (isLocalServer) {

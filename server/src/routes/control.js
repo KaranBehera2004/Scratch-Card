@@ -88,13 +88,26 @@ export function installControls(app, context) {
   } = context;
   let queue = Promise.resolve();
   const filename = path.join(dataDir, "control.json");
-  async function readMeta() {
+  const metaReads = new Map();
+  async function readMeta(keys = null) {
+    const requested = Array.isArray(keys) ? [...new Set(keys)].sort() : null;
     if (isMongo())
-      return Object.fromEntries(
-        (await Meta.find().lean()).map((item) => [item.key, item.value]),
-      );
+      {
+        const cacheKey = requested?.join("|") || "*";
+        if (metaReads.has(cacheKey)) return metaReads.get(cacheKey);
+        const pending = Meta.find(requested ? { key: { $in: requested } } : {})
+          .select("key value -_id")
+          .lean()
+          .then((items) => Object.fromEntries(items.map((item) => [item.key, item.value])))
+          .finally(() => metaReads.delete(cacheKey));
+        metaReads.set(cacheKey, pending);
+        return pending;
+      }
     try {
-      return JSON.parse(await fs.readFile(filename, "utf8"));
+      const all = JSON.parse(await fs.readFile(filename, "utf8"));
+      return requested
+        ? Object.fromEntries(requested.filter((key) => key in all).map((key) => [key, all[key]]))
+        : all;
     } catch (error) {
       if (error.code === "ENOENT") return {};
       throw error;
@@ -140,7 +153,7 @@ export function installControls(app, context) {
     return run;
   }
   const settings = async () => {
-    const saved = (await readMeta()).settings || {};
+    const saved = (await readMeta(["settings"])).settings || {};
     const savedLimits = saved.defaultLimits || {};
     return {
       ...defaults,
@@ -155,7 +168,7 @@ export function installControls(app, context) {
     };
   };
   // Read old assignments only to preserve existing businesses' allowances.
-  const legacyPlans = async () => (await readMeta()).plans || basePlans;
+  const legacyPlans = async () => (await readMeta(["plans"])).plans || basePlans;
   async function businessLimits(business, legacy = null) {
     const plan = (legacy || (await legacyPlans())).find(
       (item) => item.id === business.planId,
@@ -198,7 +211,7 @@ export function installControls(app, context) {
     }
     return limits;
   }
-  const users = async () => (await readMeta()).users || [];
+  const users = async () => (await readMeta(["users"])).users || [];
   const primaryLogin = () => String(process.env.SUPER_ADMIN_LOGIN_ID || process.env.SUPER_ADMIN_EMAIL || "admin@luckydrop.local").trim().toLowerCase();
   const validateLoginId = (value) => {
     const loginId = String(value || "").trim();
@@ -207,7 +220,7 @@ export function installControls(app, context) {
     return loginId;
   };
   const loginIdInUse = async (value, excludeBusinessId = "") => {
-    const key = String(value || "").toLowerCase(), meta = await readMeta();
+    const key = String(value || "").toLowerCase(), meta = await readMeta(["users", "superAdmins"]);
     return key === primaryLogin()
       || (await listBusinesses()).some((item) => item.businessId !== excludeBusinessId
         && String(item.loginId || item.loginEmail || "").toLowerCase() === key)
@@ -229,7 +242,7 @@ export function installControls(app, context) {
   // supplied by the creating administrator and only their hashes are stored.
   async function issueLoginId() {
     let loginId;
-    const meta = await readMeta();
+    const meta = await readMeta(["users", "superAdmins"]);
     const occupied = new Set([
       primaryLogin(),
       ...(await listBusinesses()).map((item) => String(item.loginId || item.loginEmail || "").toLowerCase()),
@@ -264,37 +277,78 @@ export function installControls(app, context) {
     process.env.AUTH_SECRET ||
     process.env.SUPER_ADMIN_PASSWORD ||
     process.env.SUPER_ADMIN_KEY;
-  const sign = async (user) => {
+  const sign = async (user, sessionHours = null) => {
     if (!secret()) throw fail("Configure AUTH_SECRET before signing in.", 503);
+    const hours = sessionHours ?? (await settings()).sessionHours;
     const body = Buffer.from(
       JSON.stringify({
         ...user,
-        exp: Date.now() + (await settings()).sessionHours * 3600000,
+        exp: Date.now() + hours * 3600000,
       }),
     ).toString("base64url");
     return `${body}.${crypto.createHmac("sha256", secret()).update(body).digest("base64url")}`;
   };
   async function audit(req, action, businessId = "", detail = "") {
-    await changeMeta("audit", (records) =>
-      [
+    const entry = {
+      id: crypto.randomUUID(),
+      actor: req.user?.loginId || req.user?.email || "System",
+      action,
+      businessId,
+      detail,
+      createdAt: new Date().toISOString(),
+    };
+    if (isMongo()) {
+      await Meta.updateOne(
+        { key: "audit" },
         {
-          id: crypto.randomUUID(),
-          actor: req.user?.loginId || req.user?.email || "System",
-          action,
-          businessId,
-          detail,
-          createdAt: new Date().toISOString(),
+          $push: { value: { $each: [entry], $position: 0, $slice: 2000 } },
+          $inc: { revision: 1 },
         },
-        ...(records || []),
-      ].slice(0, 2000),
-    );
+        { upsert: true },
+      );
+      return;
+    }
+    await changeMeta("audit", (records) => [entry, ...(records || [])].slice(0, 2000));
   }
   async function getBusiness(id) {
-    const business = (await listBusinesses()).find(
-      (item) => item.businessId === id,
-    );
+    const business = isMongo()
+      ? await Business.findOne({ businessId: id, status: { $ne: "deleted" } }).lean()
+      : (await listBusinesses()).find((item) => item.businessId === id);
     if (!business) throw fail("Business not found.", 404);
     return business;
+  }
+  async function resolveRedemptionRecord(card) {
+    const meta = await readMeta(["users", "audit"]);
+    const branchId = String(card.branchId || "");
+    const branchStaff = (meta.users || []).filter((item) =>
+      item.businessId === card.businessId
+      && item.role === "branch-staff"
+      && item.branchId === branchId);
+    const recordedStaff = branchStaff.find((item) => item.id === card.staffRedeemedBy);
+    const couponCode = String(card.couponCode || "").toUpperCase();
+    const auditEntry = (meta.audit || []).find((item) =>
+      item.businessId === card.businessId
+      && item.action === "Coupon redeemed by branch staff"
+      && String(item.detail || "").toUpperCase().startsWith(`${couponCode} · `));
+    const auditedStaff = auditEntry
+      ? branchStaff.find((item) =>
+          String(item.loginId || item.email || "").toLowerCase()
+          === String(auditEntry.actor || "").toLowerCase())
+      : null;
+    const snapshotStaff = branchStaff.find((item) => item.name === card.staffRedeemedByName);
+    const staff = recordedStaff || auditedStaff || snapshotStaff
+      || (branchStaff.length === 1 ? branchStaff[0] : null);
+    const savedIdentityMatchesBranch = Boolean(recordedStaff)
+      && String(card.staffRedeemedBranchId || "") === branchId;
+    return {
+      branchId,
+      staffName: staff?.name
+        || (savedIdentityMatchesBranch ? card.staffRedeemedByName : "")
+        || "Unknown staff member",
+      redeemedAt: savedIdentityMatchesBranch
+        ? card.staffRedeemedAt
+        : auditEntry?.createdAt || card.staffRedeemedAt,
+    };
   }
   async function updateBusiness(id, patch) {
     if (isMongo())
@@ -369,11 +423,18 @@ export function installControls(app, context) {
     }
     if (!Number.isFinite(user.exp) || user.exp < Date.now())
       throw fail("Your session has expired.", 401);
-    const meta = await readMeta();
+    const metaKeys = ["versions"];
+    if (user.role === "super-admin" && user.id !== "super-admin")
+      metaKeys.push("superAdmins");
+    if (user.role !== "super-admin") {
+      metaKeys.push("settings");
+      if (user.role !== "business") metaKeys.push("users");
+    }
+    const meta = await readMeta(metaKeys);
     if ((user.version || 0) !== (meta.versions?.[user.id] || 0))
       throw fail("This session was revoked. Please sign in again.", 401);
     if (
-      !["super-admin", "business", "admin", "editor", "viewer"].includes(
+      !["super-admin", "business", "admin", "editor", "viewer", "branch-staff"].includes(
         user.role,
       )
     )
@@ -383,11 +444,18 @@ export function installControls(app, context) {
       if (!account) throw fail("Account access is suspended.", 403);
       user.name = account.name;
     } else if (user.role !== "super-admin") {
-      const business = (await listBusinesses()).find((item) => item.businessId === user.businessId);
-      if (!business) throw fail("This business is no longer available. Please sign in again.", 401);
+      let business;
+      try {
+        business = await getBusiness(user.businessId);
+      } catch (error) {
+        if (error.status === 404)
+          throw fail("This business is no longer available. Please sign in again.", 401);
+        throw error;
+      }
       if (user.role === "business" && (user.passwordVersion || "") !== (business.passwordVersion || ""))
         throw fail("Your password changed. Please sign in again.", 401);
-      if (business.status !== "active" || !(await settings()).memberAccess)
+      const memberAccess = meta.settings?.memberAccess ?? defaults.memberAccess;
+      if (business.status !== "active" || !memberAccess)
         throw fail("Business access is paused.", 403);
       if (user.role !== "business") {
         const account = (meta.users || []).find(
@@ -395,6 +463,13 @@ export function installControls(app, context) {
         );
         if (!account) throw fail("Account access is suspended.", 403);
         user.role = account.role;
+        user.name = account.name;
+        user.branchId = account.branchId || "";
+        if (account.role === "branch-staff") {
+          const branch = business.branches?.find((item) =>
+            item.branchId === account.branchId && item.status === "active");
+          if (!branch) throw fail("Branch access is paused or unavailable.", 403);
+        }
       }
     }
     req.user = user;
@@ -406,8 +481,10 @@ export function installControls(app, context) {
       if (req.authenticated && !res.headersSent) next();
     });
   async function cardRows(req) {
-    const visibleBusinesses = new Set((await listBusinesses()).map((business) => business.businessId));
     const id = scope(req),
+      visibleBusinesses = id
+        ? new Set([id])
+        : new Set((await listBusinesses()).map((business) => business.businessId)),
       query =
         id === "impact-vibes"
           ? { $or: [{ businessId: id }, { businessId: { $exists: false } }] }
@@ -415,11 +492,14 @@ export function installControls(app, context) {
             ? { businessId: id }
             : {};
     const cards = isMongo()
-      ? await Card.find(query).sort({ createdAt: -1 }).lean()
+      ? await Card.find(query).select("-shareImageBase64").sort({ createdAt: -1 }).lean()
       : await readLocalCards();
     return cards
       .filter((item) => visibleBusinesses.has(item.businessId || "impact-vibes"))
       .filter((item) => !id || (item.businessId || "impact-vibes") === id)
+      .filter((item) => req.user.role !== "branch-staff"
+        || item.branchId === req.user.branchId
+        || item.staffRedeemedBranchId === req.user.branchId)
       .map((item) => {
         // The potentially large preview payload is only served through the
         // public image endpoint and must not inflate authenticated tables.
@@ -429,7 +509,8 @@ export function installControls(app, context) {
           hasShareImage: Boolean(_image),
           shareImageMime: shareImageMime || null,
           businessId: item.businessId || "impact-vibes",
-          used: Boolean(item.redeemedAt || item.scratchedAt),
+          used: Boolean(item.staffRedeemedAt),
+          revealed: Boolean(item.scratchedAt || item.redeemedAt || item.staffRedeemedAt),
           status: couponStatus(item),
         };
       })
@@ -475,7 +556,7 @@ export function installControls(app, context) {
         password = String(req.body.password || "");
       if (!password || password.length > 200)
         throw fail("Invalid login ID or password.", 401);
-      const meta = await readMeta(),
+      const meta = await readMeta(["adminPasswordHash", "superAdmins", "users", "versions", "settings"]),
         adminEmail = primaryLogin();
       let user;
       if (
@@ -535,17 +616,26 @@ export function installControls(app, context) {
             user = safe(account);
         }
         if (!user) throw fail("Invalid login ID or password.", 401);
-        if (
-          (await getBusiness(user.businessId)).status !== "active" ||
-          !(await settings()).memberAccess
-        )
+        const loginBusiness = await getBusiness(user.businessId);
+        const loginSettings = { ...defaults, ...(meta.settings || {}) };
+        if (loginBusiness.status !== "active" || !loginSettings.memberAccess)
           throw fail("Business access is paused.", 403);
+        if (user.role === "branch-staff" && !loginBusiness.branches?.some((item) =>
+          item.branchId === user.branchId && item.status === "active"))
+          throw fail("Branch access is paused or unavailable.", 403);
+      }
+      if (user.role === "branch-staff") {
+        const lastLoginAt = new Date().toISOString();
+        user = { ...user, lastLoginAt, loginCount: Number(user.loginCount || 0) + 1 };
+        await changeMeta("users", (records = []) => records.map((item) =>
+          item.id === user.id ? { ...item, lastLoginAt, loginCount: user.loginCount } : item));
       }
       user.version = meta.versions?.[user.id] || 0;
       attempts.delete(req.ip);
       req.user = user;
       await audit(req, "Signed in", user.businessId);
-      res.set("Cache-Control", "no-store").json({ token: await sign(user), user });
+      const sessionHours = Number(meta.settings?.sessionHours) || defaults.sessionHours;
+      res.set("Cache-Control", "no-store").json({ token: await sign(user, sessionHours), user });
     }),
   );
   app.get(
@@ -582,7 +672,7 @@ export function installControls(app, context) {
     route(async (_req, res) => {
       res.json({ users: [
         { id: "super-admin", name: "Primary super admin", loginId: primaryLogin(), role: "super-admin", status: "active", primary: true },
-        ...((await readMeta()).superAdmins || []).map(safe),
+        ...((await readMeta(["superAdmins"])).superAdmins || []).map(safe),
       ] });
     }),
   );
@@ -642,6 +732,14 @@ export function installControls(app, context) {
             if (req.user.role !== "super-admin") {
               result.departments = (result.departments || []).filter((value) => value.status !== "deleted");
               result.branches = (result.branches || []).filter((value) => value.status !== "deleted");
+            }
+            if (req.user.role === "branch-staff") {
+              result.branches = (result.branches || []).filter((value) => value.branchId === req.user.branchId);
+              const departmentIds = new Set(result.branches.map((value) => value.departmentId).filter(Boolean));
+              result.departments = (result.departments || []).filter((value) => departmentIds.has(value.departmentId));
+              delete result.loginId;
+              delete result.loginEmail;
+              delete result.passwordVersion;
             }
             return { ...result, limits: await businessLimits(item, legacy) };
           }),
@@ -835,6 +933,40 @@ export function installControls(app, context) {
       }
       await audit(req, "All businesses deleted", "", text(businesses.map((business) => business.name).join(", "), 1000));
       res.json({ ok: true, archived: true, deletedCount: businesses.length });
+    }),
+  );
+  app.delete(
+    "/api/portal/businesses/:businessId/cards/:slug",
+    auth,
+    superOnly,
+    route(async (req, res) => {
+      const id = scope(req);
+      const business = await getBusiness(id);
+      const slug = text(req.params.slug, 80);
+      const cards = await cardRows(req);
+      const card = cards.find((item) => item.businessId === id && item.slug === slug);
+      if (!card) throw fail("Coupon not found.", 404);
+      if (String(req.body?.confirmCode || "").trim().toUpperCase() !== String(card.couponCode).toUpperCase())
+        throw fail("Type the exact coupon code to confirm deletion.");
+      let deletedCount = 0;
+      if (isMongo()) {
+        const query = id === "impact-vibes"
+          ? { slug: card.slug, $or: [{ businessId: id }, { businessId: { $exists: false } }] }
+          : { slug: card.slug, businessId: id };
+        deletedCount = (await Card.deleteOne(query)).deletedCount;
+      }
+      else
+        deletedCount = await mutateLocalCards((items) => {
+          const index = items.findIndex((item) =>
+            item.slug === card.slug && (item.businessId || "impact-vibes") === id);
+          if (index === -1) return 0;
+          items.splice(index, 1);
+          return 1;
+        });
+      if (!deletedCount) throw fail("Coupon not found.", 404);
+      await audit(req, "Business coupon deleted", id,
+        `${business.name}: ${card.couponCode} permanently deleted`);
+      res.json({ ok: true, deletedCount: 1 });
     }),
   );
   app.delete(
@@ -1147,10 +1279,21 @@ export function installControls(app, context) {
       );
       const name = text(req.body.name, 60);
       if (!name) throw fail("Full name is required.");
-      if (!["admin", "editor", "viewer"].includes(req.body.role)) throw fail("Choose a valid role.");
-      const generated = req.body.generateCredentials === true || !req.body.email;
+      if (!["admin", "editor", "viewer", "branch-staff"].includes(req.body.role)) throw fail("Choose a valid role.");
+      const branch = req.body.role === "branch-staff"
+        ? business.branches?.find((item) => item.branchId === text(req.body.branchId, 60) && item.status === "active")
+        : null;
+      if (req.body.role === "branch-staff" && !branch)
+        throw fail("Choose an active branch for this staff account.");
+      const requestedLoginId = String(req.body.loginId || "").trim();
+      if (req.body.role === "branch-staff" && !requestedLoginId)
+        throw fail("Login ID is required for branch staff.");
+      const generated = req.body.role === "branch-staff" || req.body.generateCredentials === true || !req.body.email;
       const suppliedPassword = generated ? accountPassword(req.body.password) : String(req.body.password || ""),
-        credentials = generated ? { loginId: await issueLoginId(), password: suppliedPassword } : null;
+        credentials = generated ? {
+          loginId: requestedLoginId ? await reserveLoginId(requestedLoginId) : await issueLoginId(),
+          password: suppliedPassword,
+        } : null;
       const email = text(req.body.email).toLowerCase(),
         password = credentials?.password || suppliedPassword;
       if (
@@ -1174,7 +1317,11 @@ export function installControls(app, context) {
         ...(generated ? { loginId: credentials.loginId } : { email }),
         passwordHash: hashPassword(password),
         role: req.body.role,
+        ...(branch ? { branchId: branch.branchId } : {}),
         status: "active",
+        createdAt: new Date().toISOString(),
+        lastLoginAt: null,
+        loginCount: 0,
       };
       await changeMeta("users", (records) => {
         if (!generated && (records || []).some((item) => item.email === email))
@@ -1198,9 +1345,18 @@ export function installControls(app, context) {
         throw fail("Use your account settings to update your own account.");
       const patch = {};
       if (req.body.role !== undefined) {
-        if (!["admin", "editor", "viewer"].includes(req.body.role))
+        if (!["admin", "editor", "viewer", "branch-staff"].includes(req.body.role))
           throw fail("Invalid role.");
         patch.role = req.body.role;
+      }
+      if (req.body.branchId !== undefined || req.body.role === "branch-staff") {
+        const business = await getBusiness(account.businessId);
+        const branchId = text(req.body.branchId ?? account.branchId, 60);
+        const branch = business.branches?.find((item) => item.branchId === branchId && item.status === "active");
+        if (!branch) throw fail("Choose an active branch for this staff account.");
+        patch.branchId = branch.branchId;
+      } else if (req.body.role && req.body.role !== "branch-staff") {
+        patch.branchId = "";
       }
       if (req.body.status !== undefined) {
         if (!["active", "paused"].includes(req.body.status))
@@ -1280,7 +1436,7 @@ export function installControls(app, context) {
       owner(req);
       const id = scope(req);
       res.json({
-        events: ((await readMeta()).audit || []).filter(
+        events: ((await readMeta(["audit"])).audit || []).filter(
           (item) => !id || item.businessId === id,
         ),
       });
@@ -1295,7 +1451,7 @@ export function installControls(app, context) {
         all = await users(),
         business = id ? await getBusiness(id) : null;
       const ids = [
-        ...(!id ? ["super-admin", ...((await readMeta()).superAdmins || []).map((item) => item.id)] : []),
+        ...(!id ? ["super-admin", ...((await readMeta(["superAdmins"])).superAdmins || []).map((item) => item.id)] : []),
         ...all
           .filter((item) => !id || item.businessId === id)
           .map((item) => item.id),
@@ -1330,7 +1486,7 @@ export function installControls(app, context) {
           return records.map((item) => item.id === account.id ? { ...item, passwordHash: hashPassword(password) } : item);
         });
       } else if (req.user.role === "super-admin") {
-        const meta = await readMeta();
+        const meta = await readMeta(["adminPasswordHash"]);
         const valid = meta.adminPasswordHash
           ? verifyPassword(currentPassword, meta.adminPasswordHash)
           : equal(
@@ -1366,7 +1522,7 @@ export function installControls(app, context) {
         [req.user.id]: (values?.[req.user.id] || 0) + 1,
       }));
       await audit(req, "Password changed", req.user.businessId);
-      const version = (await readMeta()).versions?.[req.user.id] || 0;
+      const version = (await readMeta(["versions"])).versions?.[req.user.id] || 0;
       const user = { ...req.user, version };
       res.json({ ok: true, token: await sign(user), user });
     }),
@@ -1375,17 +1531,18 @@ export function installControls(app, context) {
     "/api/portal/cards/:slug",
     auth,
     route(async (req, res) => {
-      if (req.user.role === "viewer")
-        throw fail("Viewer accounts cannot change cards.", 403);
+      if (["viewer", "branch-staff"].includes(req.user.role))
+        throw fail("This account cannot change cards.", 403);
       const card = (await cardRows(req)).find(
         (item) => item.slug === req.params.slug,
       );
       if (!card) throw fail("Card not found.", 404);
       const patch = { disabled: Boolean(req.body.disabled) };
-      if (card.redeemedAt) throw fail("Redeemed cards cannot be changed.");
+      if (card.scratchedAt || card.staffRedeemedAt || card.redeemedAt)
+        throw fail("Scratched or redeemed cards cannot be changed.");
       if (isMongo()) {
         const result = await Card.updateOne(
-          { slug: card.slug, redeemedAt: null },
+          { slug: card.slug, redeemedAt: null, scratchedAt: null, staffRedeemedAt: null },
           { $set: patch },
         );
         if (!result.matchedCount)
@@ -1393,8 +1550,8 @@ export function installControls(app, context) {
       } else
         await mutateLocalCards((items) => {
           const current = items.find((item) => item.slug === card.slug);
-          if (current.redeemedAt)
-            throw fail("This card has already been redeemed.", 409);
+          if (current.scratchedAt || current.staffRedeemedAt || current.redeemedAt)
+            throw fail("This card has already been scratched or redeemed.", 409);
           Object.assign(current, patch);
         });
       await audit(
@@ -1407,8 +1564,8 @@ export function installControls(app, context) {
     }),
   );
   async function validateCreate(req, checkLimit = true) {
-    if (req.user.role === "viewer")
-      throw fail("Viewer accounts cannot create scratch cards.", 403);
+    if (["viewer", "branch-staff"].includes(req.user.role))
+      throw fail("This account cannot create scratch cards.", 403);
     if (!(await settings()).cardCreation)
       throw fail("Card creation is paused by the administrator.", 403);
     const id = scope(req),
@@ -1435,5 +1592,6 @@ export function installControls(app, context) {
     getBusiness,
     businessLimits,
     cardRows,
+    resolveRedemptionRecord,
   };
 }

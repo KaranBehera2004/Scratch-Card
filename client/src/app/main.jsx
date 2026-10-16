@@ -11,7 +11,7 @@ import Portal, { PortalLogin, portalApi } from "../features/portal/Portal.jsx";
 import { workspaceTranslator } from "../i18n/workspace-i18n.js";
 import { normalizeWhatsAppNumber, whatsAppCardUrl } from "../../../server/shared/whatsapp.js";
 import { scratchApiUrl, scratchCardUrl, scratchShareUrl } from "../../../server/shared/urls.js";
-import { pendingBulk, completedBulk, savedBulkDraft, useBulkGeneration, BranchQuantities, BulkResults } from "../features/bulk/BulkGenerate.jsx";
+import { pendingBulk, savedBulkDraft, useBulkGeneration, BranchQuantities, BulkResults } from "../features/bulk/BulkGenerate.jsx";
 import "../styles/bulk.css";
 import "../styles/styles.css";
 import "../styles/share-link.css";
@@ -70,6 +70,11 @@ const TRANSLATIONS = {
     anyoneCanOpen: "Anyone with this link can open and scratch the card.",
     uniqueCoupon: "Unique coupon",
     copy: "Copy",
+    copyCode: "Copy code",
+    codeCopied: "Coupon code copied.",
+    showQr: "QR Code",
+    qrTitle: "Scan to redeem",
+    qrHelp: "A branch staff member can scan this code from their dashboard.",
     linkCopied: "Link copied to your clipboard.",
     shareWhatsApp: "Open WhatsApp Web",
     openCard: "Open card",
@@ -81,6 +86,9 @@ const TRANSLATIONS = {
     scratchHere: "SCRATCH HERE",
     swipeFinger: "Swipe with your finger",
     unlocked: "Offer unlocked!",
+    couponRedeemed: "COUPON REDEEMED",
+    couponExpired: "COUPON IS EXPIRED",
+    expiredMessage: "This coupon has expired and can no longer be redeemed.",
     revealed: "revealed",
     scratchLabel: "Scratch to reveal your offer",
     gettingReady: "Getting your surprise ready…",
@@ -175,6 +183,8 @@ const TRANSLATIONS = {
     scratchHere: "यहाँ स्क्रैच करें",
     swipeFinger: "अपनी उंगली से स्वाइप करें",
     unlocked: "ऑफर खुल गया!",
+    couponExpired: "कूपन की अवधि समाप्त हो गई",
+    expiredMessage: "इस कूपन की अवधि समाप्त हो गई है और अब इसका उपयोग नहीं किया जा सकता।",
     revealed: "खुला",
     scratchLabel: "ऑफर देखने के लिए स्क्रैच करें",
     gettingReady: "आपका सरप्राइज़ तैयार हो रहा है…",
@@ -268,6 +278,8 @@ const TRANSLATIONS = {
     scratchHere: "ఇక్కడ స్క్రాచ్ చేయండి",
     swipeFinger: "వేలితో స్వైప్ చేయండి",
     unlocked: "ఆఫర్ తెరుచుకుంది!",
+    couponExpired: "కూపన్ గడువు ముగిసింది",
+    expiredMessage: "ఈ కూపన్ గడువు ముగిసింది మరియు ఇకపై ఉపయోగించలేరు.",
     revealed: "తెరచింది",
     scratchLabel: "ఆఫర్ చూడటానికి స్క్రాచ్ చేయండి",
     gettingReady: "మీ సర్‌ప్రైజ్ సిద్ధమవుతోంది…",
@@ -527,8 +539,8 @@ const WhatsAppIcon = () => (
   </svg>
 );
 
-function ScratchCard({ card, onReveal = () => {}, preview = false, t }) {
-  const alreadyScratched = Boolean(card.scratchedAt);
+function ScratchCard({ card, onReveal = () => {}, preview = false, t, onCopyCoupon, onShowQr }) {
+  const alreadyScratched = Boolean(card.scratchedAt || card.used || card.expired);
   const canvasRef = useRef(null),
     cardRef = useRef(null),
     drawing = useRef(false),
@@ -629,7 +641,7 @@ function ScratchCard({ card, onReveal = () => {}, preview = false, t }) {
   };
   return (
     <div
-      className={`scratch-shell ${preview ? "is-preview" : ""}`}
+      className={`scratch-shell ${preview ? "is-preview" : ""}${card.expired ? " is-expired" : ""}${card.redeemed ? " is-redeemed" : ""}`}
       style={{ "--accent": card.accentColor || DEFAULT_CARD.accentColor }}
     >
       <i className="ticket-edge left" />
@@ -640,11 +652,19 @@ function ScratchCard({ card, onReveal = () => {}, preview = false, t }) {
           <span>{t("reward")}</span>
           <strong>{card.offerTitle}</strong>
           <p>{card.description}</p>
-          {card.couponCode && (
-            <b>
-              {t("useCode")} · {card.couponCode}
-            </b>
-          )}
+          {card.redeemed ? (
+            <b className="redeemed-coupon-label">{t("couponRedeemed")}</b>
+          ) : card.expired ? (
+            <b className="expired-coupon-label">{t("couponExpired")}</b>
+          ) : card.couponCode ? (
+            <div className="coupon-code-row">
+              <b>{t("useCode")} · {card.couponCode}</b>
+              {(onCopyCoupon || onShowQr) && <div className="coupon-code-actions">
+                {onCopyCoupon && <button type="button" onClick={onCopyCoupon}>{t("copyCode")}</button>}
+                {onShowQr && <button type="button" onClick={onShowQr}>{t("showQr")}</button>}
+              </div>}
+            </div>
+          ) : null}
         </div>
         {!preview && !alreadyScratched && (
           <canvas
@@ -667,12 +687,54 @@ function ScratchCard({ card, onReveal = () => {}, preview = false, t }) {
             <span style={{ width: `${progress}%` }} />
           </div>
           <small>
-            {progress === 100 ? t("unlocked") : `${progress}% ${t("revealed")}`}
+            {card.redeemed
+              ? t("couponRedeemed")
+              : card.expired
+              ? t("couponExpired")
+              : progress === 100 ? t("unlocked") : `${progress}% ${t("revealed")}`}
           </small>
         </>
       )}
     </div>
   );
+}
+
+function CouponQrDialog({ couponCode, t, onClose }) {
+  const [image, setImage] = useState("");
+  useEffect(() => {
+    let active = true;
+    import("qrcode")
+      .then(({ default: QRCode }) => QRCode.toDataURL(couponCode, {
+        width: 300,
+        margin: 2,
+        color: { dark: "#071f3f", light: "#ffffff" },
+        errorCorrectionLevel: "M",
+      }))
+      .then((value) => {
+        if (active) setImage(value);
+      });
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      active = false;
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [couponCode, onClose]);
+  return <div className="coupon-qr-backdrop" onMouseDown={(event) => {
+    if (event.target === event.currentTarget) onClose();
+  }}>
+    <section className="coupon-qr-dialog" role="dialog" aria-modal="true" aria-labelledby="coupon-qr-title">
+      <button type="button" className="coupon-qr-close" onClick={onClose} aria-label={t("close")}>×</button>
+      <span className="coupon-qr-kicker">{t("showQr")}</span>
+      <h2 id="coupon-qr-title">{t("qrTitle")}</h2>
+      <p>{t("qrHelp")}</p>
+      {image ? <img src={image} alt={`QR code for coupon ${couponCode}`} /> : <div className="coupon-qr-loading" />}
+      <strong>{couponCode}</strong>
+      <button type="button" className="coupon-qr-done" onClick={onClose}>{t("close")}</button>
+    </section>
+  </div>;
 }
 
 function Creator({
@@ -699,15 +761,19 @@ function Creator({
     expiresAt: "",
     language: "en",
     ...Object.fromEntries(Object.entries(savedBulkDraft(business.businessId)?.form || {}).filter(([key]) =>
-      [...Object.keys(DEFAULT_CARD), "campaignName", "customerPhone", "language", "expiresAt"].includes(key) && key !== "senderName")),
+      [...Object.keys(DEFAULT_CARD), "campaignName", "customerPhone", "language", "expiresAt"].includes(key)
+        && !["senderName", "couponCode"].includes(key))),
     // Restore shared form fields only, never request-only recipients, branch rows or retry keys.
     ...Object.fromEntries(Object.entries(pendingBulk(business.businessId) || {}).filter(([key]) =>
-      [...Object.keys(DEFAULT_CARD), "campaignName", "customerPhone", "language"].includes(key))),
+      [...Object.keys(DEFAULT_CARD), "campaignName", "customerPhone", "language"].includes(key)
+        && key !== "couponCode")),
     expiresAt: pendingBulk(business.businessId)?.expiresAt
       ? (() => { const date = new Date(pendingBulk(business.businessId).expiresAt); return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16); })()
       : pendingBulk(business.businessId) ? "" : savedBulkDraft(business.businessId)?.form?.expiresAt || "",
   }));
-  const [mode, setMode] = useState(() => pendingBulk(business.businessId) || completedBulk(business.businessId) || savedBulkDraft(business.businessId) ? "bulk" : "single");
+  // Creation always opens on Single Card. Saved bulk work remains available
+  // when the user deliberately selects Bulk Generate.
+  const [mode, setMode] = useState("single");
   const bulk = useBulkGeneration({ form, setForm, business, token, user, onCreated, enabled: mode === "bulk" });
   const isBulk = mode === "bulk";
   const cardT = useMemo(() => cardTranslator(form.language), [form.language]);
@@ -1162,6 +1228,8 @@ function PublicCard({ slug, language: dashboardLanguage }) {
   const [state, setState] = useState("loading");
   const [revealed, setRevealed] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [couponCopied, setCouponCopied] = useState(false);
+  const [qrOpen, setQrOpen] = useState(false);
   const [claimError, setClaimError] = useState("");
   const goBack = () => {
     try {
@@ -1196,8 +1264,9 @@ function PublicCard({ slug, language: dashboardLanguage }) {
     requestJson(`/api/cards/${encodeURIComponent(slug)}`)
       .then((data) => {
         setCard(data);
-        setRevealed(Boolean(data.scratchedAt));
-        setState(data.used ? "used" : "ready");
+        setRevealed(Boolean(data.used));
+        // Reopen an already scratched link as the same unlocked reward.
+        setState("ready");
       })
       .catch(() => setState("error"));
   }, [slug]);
@@ -1221,26 +1290,6 @@ function PublicCard({ slug, language: dashboardLanguage }) {
         <h1>{t("notFound")}</h1>
         <p>{t("checkLink")}</p>
         <a href="/">{t("createCard")}</a>
-      </main>
-    );
-  if (state === "used")
-    return (
-      <main
-        className="recipient status used-card"
-        style={{ "--accent": card?.accentColor }}
-      >
-        <RecipientTopbar
-          brand={card?.senderName || "JustConnect"}
-        />
-        <div className="used-icon">✓</div>
-        <h1>{t("alreadyUsed")}</h1>
-        <p>{t("oneReveal")}</p>
-        <div className="used-card-actions">
-          <button type="button" className="used-card-back" onClick={goBack}>
-            <span aria-hidden="true">←</span> {t("goBack")}
-          </button>
-          <a href="/">{t("createNew")}</a>
-        </div>
       </main>
     );
   const share = () =>
@@ -1267,8 +1316,17 @@ function PublicCard({ slug, language: dashboardLanguage }) {
       setState("ready");
       return true;
     } catch (error) {
-      if (error.status === 409) setState("used");
-      else {
+      if (error.status === 409) {
+        try {
+          const current = await requestJson(`/api/cards/${encodeURIComponent(slug)}`);
+          setCard(current);
+          setRevealed(Boolean(current.used));
+          setState("ready");
+        } catch {
+          setClaimError(error.message);
+          setState("ready");
+        }
+      } else {
         setClaimError(error.message);
         setState("ready");
       }
@@ -1279,6 +1337,11 @@ function PublicCard({ slug, language: dashboardLanguage }) {
     await navigator.clipboard.writeText(location.href);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 2500);
+  };
+  const copyCouponCode = async () => {
+    await navigator.clipboard.writeText(card.couponCode);
+    setCouponCopied(true);
+    window.setTimeout(() => setCouponCopied(false), 2500);
   };
   return (
     <main
@@ -1299,12 +1362,23 @@ function PublicCard({ slug, language: dashboardLanguage }) {
       <div className="glow one" />
       <div className="glow two" />
       <section className="experience">
-        <div className="eyebrow">
-          <GiftIcon /> {t("sentToYou")}
-        </div>
-        <h1>{card.headline}</h1>
-        <p className="intro">{t("scratchInstruction")}</p>
-        <ScratchCard card={card} onReveal={claimCoupon} t={t} />
+        {!card.expired && (
+          <>
+            <div className="eyebrow">
+              <GiftIcon /> {t("sentToYou")}
+            </div>
+            <h1>{card.headline}</h1>
+            <p className="intro">
+              {card.used
+                ? (card.redeemed ? t("alreadyUsed") : t("unlocked"))
+                : t("scratchInstruction")}
+            </p>
+          </>
+        )}
+        <ScratchCard card={card} onReveal={claimCoupon} t={t}
+          onCopyCoupon={revealed && !card.expired && !card.redeemed ? copyCouponCode : undefined}
+          onShowQr={revealed && !card.expired && !card.redeemed ? () => setQrOpen(true) : undefined} />
+        {couponCopied && <p className="coupon-copy-notice" role="status">{t("codeCopied")}</p>}
         {state === "claiming" && (
           <p className="claim-status">{t("securing")}</p>
         )}
@@ -1313,7 +1387,7 @@ function PublicCard({ slug, language: dashboardLanguage }) {
             {claimError} {t("scratchAgain")}
           </p>
         )}
-        <div className="recipient-actions">
+        {!card.expired && !card.redeemed && <div className="recipient-actions">
           {revealed && card.claimUrl && (
             <button className="claim" onClick={openClaimLink}>
               {t("claimOn")} {claimHost}
@@ -1331,9 +1405,10 @@ function PublicCard({ slug, language: dashboardLanguage }) {
               </button>
             </div>
           )}
-        </div>
+        </div>}
         <p className="privacy">{t("privacy")}</p>
       </section>
+      {qrOpen && <CouponQrDialog couponCode={card.couponCode} t={t} onClose={() => setQrOpen(false)} />}
     </main>
   );
 }
