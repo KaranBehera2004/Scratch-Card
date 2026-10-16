@@ -12,6 +12,8 @@ import { ensureUniqueIndex } from "../services/indexes.js";
 import { isProductionRuntime, parseClientOrigins, validateRuntimeConfiguration } from "../services/runtime-config.js";
 import { normalizeWhatsAppNumber } from "../../shared/whatsapp.js";
 import { PRODUCTION_APP_URL } from "../../shared/urls.js";
+import { publicCardProblem } from "../../shared/public-card-errors.js";
+import { publicCardErrorPage } from "../services/public-card-page.js";
 import { installBulkRoutes, bad, couponStatus, checkCapacity } from "../routes/bulk.js";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -84,6 +86,8 @@ const schema = new mongoose.Schema(
     staffRedeemedDepartmentId: { type: String, default: "" },
     staffRedeemedBy: { type: String, default: "" },
     staffRedeemedByName: { type: String, default: "" },
+    staffRedeemedBranchName: { type: String, default: "" },
+    staffRedeemedLocationName: { type: String, default: "" },
     redeemedBranchId: { type: String, default: "" },
     batchKey: { type: String, index: true },
     batchFingerprint: String,
@@ -658,6 +662,16 @@ app.post("/api/portal/redeem", authenticate, async (req, res, next) => {
     const business = await getBusiness(businessId);
     const staffBranch = business.branches?.find((item) => item.branchId === branchId && item.status === "active");
     if (!staffBranch) throw bad("Your assigned branch is not active.", 403);
+    // Storage calls Sales/Service units branches and their locations departments.
+    const departmentName = (value) => String(value || "").trim().toLowerCase();
+    const activeLocation = (unit) => !unit.departmentId || business.departments?.some((location) =>
+      location.departmentId === unit.departmentId && (location.status || "active") === "active");
+    if (!activeLocation(staffBranch)) throw bad("Your assigned branch's department is not active.", 403);
+    const eligibleBranchIds = business.branches.filter((unit) => unit.status === "active"
+      && activeLocation(unit) && departmentName(unit.name)
+      && departmentName(unit.name) === departmentName(staffBranch.name)).map((unit) => unit.branchId);
+    const locationName = (unit) => business.departments?.find((location) =>
+      location.departmentId === unit?.departmentId)?.name || "";
     const redemptionAt = new Date();
     const redemption = {
       staffRedeemedAt: redemptionAt,
@@ -665,6 +679,8 @@ app.post("/api/portal/redeem", authenticate, async (req, res, next) => {
       staffRedeemedDepartmentId: staffBranch.departmentId || "",
       staffRedeemedBy: req.user.id,
       staffRedeemedByName: req.user.name,
+      staffRedeemedBranchName: staffBranch.name,
+      staffRedeemedLocationName: locationName(staffBranch),
       redeemedAt: redemptionAt,
       redeemedBranchId: branchId,
     };
@@ -673,11 +689,12 @@ app.post("/api/portal/redeem", authenticate, async (req, res, next) => {
       redeemed = await Card.findOneAndUpdate(
         {
           businessId,
-          branchId,
+          branchId: { $in: eligibleBranchIds },
           couponCode,
           scratchedAt: { $ne: null },
           staffRedeemedAt: null,
           disabled: { $ne: true },
+          $or: [{ expiresAt: null }, { expiresAt: { $gt: redemptionAt } }],
         },
         { $set: redemption },
         { new: true },
@@ -686,9 +703,10 @@ app.post("/api/portal/redeem", authenticate, async (req, res, next) => {
       redeemed = await mutateLocalCards((cards) => {
         const card = cards.find((item) =>
           (item.businessId || "impact-vibes") === businessId
-          && String(item.branchId || "") === branchId
+          && eligibleBranchIds.includes(String(item.branchId || ""))
           && String(item.couponCode || "").toUpperCase() === couponCode);
-        if (!card || card.disabled || !card.scratchedAt || card.staffRedeemedAt) return null;
+        if (!card || card.disabled || !card.scratchedAt || card.staffRedeemedAt
+          || (card.expiresAt && new Date(card.expiresAt) <= redemptionAt)) return null;
         Object.assign(card, { ...redemption, staffRedeemedAt: redemption.staffRedeemedAt.toISOString() });
         return { ...card };
       });
@@ -700,7 +718,7 @@ app.post("/api/portal/redeem", authenticate, async (req, res, next) => {
           (item.businessId || "impact-vibes") === businessId
           && String(item.couponCode || "").toUpperCase() === couponCode);
       if (!card) throw bad("Coupon code not found for this business.", 404);
-      if (String(card.branchId || "") !== branchId) {
+      if (!eligibleBranchIds.includes(String(card.branchId || ""))) {
         const assignedBranch = business.branches?.find((item) => item.branchId === card.branchId);
         const completed = card.staffRedeemedAt ? await resolveRedemptionRecord(card) : null;
         const completedBranch = completed
@@ -711,8 +729,10 @@ app.post("/api/portal/redeem", authenticate, async (req, res, next) => {
           couponCode: card.couponCode,
           redemptionStatus: card.staffRedeemedAt ? "Redeemed" : "Not redeemed",
           assignedBranchName: assignedBranch?.name || card.branchName || "Unknown branch",
+          assignedLocationName: locationName(assignedBranch),
           ...(card.staffRedeemedAt ? {
-            redeemedBranchName: completedBranch?.name || assignedBranch?.name || card.branchName || "Unknown branch",
+            redeemedBranchName: completed.branchName || completedBranch?.name || "Unknown branch",
+            redeemedLocationName: completed.locationName || locationName(completedBranch),
             staffName: completed.staffName,
             redeemedAt: completed.redeemedAt,
           } : {}),
@@ -722,30 +742,41 @@ app.post("/api/portal/redeem", authenticate, async (req, res, next) => {
       if (card.staffRedeemedAt) {
         const completed = await resolveRedemptionRecord(card);
         const completedBranch = business.branches?.find((item) => item.branchId === completed.branchId);
+        const assignedBranch = business.branches?.find((item) => item.branchId === card.branchId);
         const error = bad(`This coupon has already been redeemed${completedBranch ? ` at ${completedBranch.name}` : ""}.`, 409);
         error.details = {
           couponCode: card.couponCode,
           redemptionStatus: "Redeemed",
-          assignedBranchName: staffBranch.name,
-          redeemedBranchName: completedBranch?.name || staffBranch.name,
+          assignedBranchName: assignedBranch?.name || card.branchName || "Unknown branch",
+          assignedLocationName: locationName(assignedBranch),
+          redeemedBranchName: completed.branchName || completedBranch?.name || "Unknown branch",
+          redeemedLocationName: completed.locationName || locationName(completedBranch),
           staffName: completed.staffName,
           redeemedAt: completed.redeemedAt,
         };
         throw error;
       }
+      if (card.expiresAt && new Date(card.expiresAt) <= redemptionAt) throw bad("This coupon has expired.", 410);
       if (!card.scratchedAt) throw bad("The customer must scratch this card before it can be redeemed.", 409);
       if (card.disabled) throw bad("This coupon is disabled.", 410);
       throw bad("This coupon could not be redeemed. Refresh and try again.", 409);
     }
+    const assignedBranch = business.branches?.find((item) => item.branchId === redeemed.branchId);
     await audit(req, "Coupon redeemed by branch staff", businessId,
-      `${redeemed.couponCode} · ${staffBranch.name}`);
+      `${redeemed.couponCode} · ${staffBranch.name}`, {
+        slug: redeemed.slug, branchId, locationId: staffBranch.departmentId || "",
+        branchName: staffBranch.name, locationName: locationName(staffBranch),
+        staffId: req.user.id, staffName: req.user.name, redeemedAt: redemptionAt.toISOString(),
+      });
     res.set("Cache-Control", "no-store").json({
       coupon: {
         couponCode: redeemed.couponCode,
         offerTitle: redeemed.offerTitle,
         redemptionStatus: "Redeemed",
-        assignedBranchName: staffBranch.name,
+        assignedBranchName: assignedBranch?.name || redeemed.branchName || "Unknown branch",
+        assignedLocationName: locationName(assignedBranch),
         redeemedBranchName: staffBranch.name,
+        redeemedLocationName: locationName(staffBranch),
         staffName: req.user.name,
         redeemedAt: redeemed.staffRedeemedAt,
         status: "redeemed",
@@ -844,14 +875,14 @@ app.post("/api/cards", authenticate, async (req, res, next) => {
 app.get("/api/cards/:slug", async (req, res, next) => {
   try {
     if (!/^[A-Za-z0-9_-]{6,32}$/.test(req.params.slug))
-      return res.status(404).json({ message: "Card not found." });
+      throw Object.assign(new Error("Card not found."), { status: 404 });
     const card = await findCard(req.params.slug);
-    if (!card) return res.status(404).json({ message: "Card not found." });
+    if (!card) throw Object.assign(new Error("Card not found."), { status: 404 });
     await getBusiness(card.businessId || "impact-vibes");
     if (card.disabled)
       return res
         .status(410)
-        .json({ message: "This card is disabled." });
+        .json({ code: "CARD_DISABLED", message: "This card is disabled." });
     if (card.expiresAt && new Date(card.expiresAt) < new Date())
       return res
         .set("Cache-Control", "no-store")
@@ -895,16 +926,16 @@ app.get("/api/cards/:slug/share-image", async (req, res, next) => {
 app.get("/share/:slug", async (req, res, next) => {
   try {
     if (!/^[A-Za-z0-9_-]{6,32}$/.test(req.params.slug))
-      return res.status(404).type("text").send("Card not found.");
+      throw Object.assign(new Error("Card not found."), { status: 404 });
     const card = await findCard(req.params.slug);
-    if (!card || card.disabled || (card.expiresAt && new Date(card.expiresAt) < new Date()))
-      return res.status(404).type("text").send("Card not found.");
+    if (!card) throw Object.assign(new Error("Card not found."), { status: 404 });
     await getBusiness(card.businessId || "impact-vibes");
+    if (card.disabled) throw Object.assign(new Error("This card is disabled."), { status: 410 });
     const slug = encodeURIComponent(card.slug);
     const cardUrl = `${PRODUCTION_APP_URL}/card/${slug}`;
     const version = /^\d+$/.test(String(req.query.v || "")) ? String(req.query.v) : SHARE_PREVIEW_VERSION;
     const shareUrl = `${PRODUCTION_APP_URL}/share/${slug}?v=${encodeURIComponent(version)}`;
-    const imageUrl = card.shareImageMime
+    const imageUrl = card.shareImageMime && !(card.expiresAt && new Date(card.expiresAt) < new Date())
       ? `${PRODUCTION_APP_URL}/share/${slug}/image?v=${encodeURIComponent(version)}`
       : "";
     const title = card.shareTitle || "Congratulation you got an offer";
@@ -943,6 +974,9 @@ app.get("/share/:slug", async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+});
+app.get(["/share", "/share/*rest"], (_req, _res, next) => {
+  next(Object.assign(new Error("Card not found."), { status: 404 }));
 });
 app.post("/api/cards/:slug/claim", async (req, res, next) => {
   try {
@@ -1008,6 +1042,22 @@ if (isLocalServer) {
 }
 app.use((error, req, res, _next) => {
   console.error(error.message);
+  if (/^\/share(?:\/|$)/.test(req.path)) {
+    const problem = publicCardProblem(error);
+    return res.status(problem.status).set({
+      "Cache-Control": "private, no-store",
+      "Content-Type": "text/html; charset=utf-8",
+      "X-Content-Type-Options": "nosniff",
+      "X-Robots-Tag": "noindex, nofollow",
+    }).send(publicCardErrorPage(problem, `/share/${encodeURIComponent(req.params.slug || req.path.split('/')[2] || '')}`));
+  }
+  if (/^\/api\/cards\/[^/]+\/share-image\/?$/.test(req.path))
+    return res.status(publicCardProblem(error).status).end();
+  if ((req.method === "GET" && /^\/api\/cards\/[^/]+\/?$/.test(req.path))
+    || (req.method === "POST" && /^\/api\/cards\/[^/]+\/claim\/?$/.test(req.path))) {
+    const problem = publicCardProblem(error);
+    return res.status(problem.status).json({ code: problem.code, message: problem.description });
+  }
   if (req.path === "/api/cards/bulk") {
     const uncertain = error.hasErrorLabel?.("UnknownTransactionCommitResult");
     return res.status(error.status || 503).json({

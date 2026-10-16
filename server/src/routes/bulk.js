@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeWhatsAppNumber } from "../../shared/whatsapp.js";
+export { couponStatus } from "../../shared/coupon-status.js";
 
 export const MAX_BATCH_SIZE = 1000;
 export function bad(message, status = 400) {
@@ -43,12 +44,6 @@ export function validateRecipients(rows, branches, total) {
   if ([...remaining.values()].some((count) => count !== 0))
     throw bad("The imported number count for each branch must match its coupon quantity.");
   return recipients;
-}
-export function couponStatus(card) {
-  return card.staffRedeemedAt ? "redeemed" : card.scratchedAt || card.redeemedAt ? "scratched" : card.disabled ? "disabled"
-    : card.expiresAt && new Date(card.expiresAt) <= new Date() ? "expired"
-      : card.openedAt ? "opened"
-      : "available";
 }
 export function batchFingerprint(base, branches, recipients = null) {
   // Ignore random generated identifiers and normalize row order for retry comparison.

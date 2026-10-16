@@ -3,6 +3,17 @@ import { createContext, useContext } from "react";
 // Only interface copy belongs here. Business names, branches, campaigns, offers,
 // coupon identifiers and saved card languages must never be rewritten by UI locale.
 const copy = {
+  "Departments & Branches": ["विभाग & शाखाएँ", "విభాగాలు & శాఖలు"],
+  "Delete department?": ["विभाग हटाएँ?", "విభాగాన్ని తొలగించాలా?"],
+  "Delete branch?": ["शाखा हटाएँ?", "శాఖను తొలగించాలా?"],
+  "Delete department “{name}” and all branches under it? They will be removed from this workspace and archived for super administrators.": ["विभाग “{name}” और उसके अंतर्गत सभी शाखाएँ हटाएँ? इन्हें इस कार्यक्षेत्र से हटाकर सुपर एडमिन के लिए संग्रहित किया जाएगा।", "“{name}” విభాగాన్ని, దానిలోని అన్ని శాఖలను తొలగించాలా? ఇవి ఈ వర్క్‌స్పేస్ నుండి తీసివేయబడి సూపర్ అడ్మిన్‌ల కోసం భద్రపరచబడతాయి."],
+  "Delete branch “{name}”? It will be removed from this workspace and archived for super administrators.": ["शाखा “{name}” हटाएँ? इसे इस कार्यक्षेत्र से हटाकर सुपर एडमिन के लिए संग्रहित किया जाएगा।", "“{name}” శాఖను తొలగించాలా? ఇది ఈ వర్క్‌స్పేస్ నుండి తీసివేయబడి సూపర్ అడ్మిన్‌ల కోసం భద్రపరచబడుతుంది."],
+  "Delete staff account?": ["कर्मचारी खाता हटाएँ?", "సిబ్బంది ఖాతాను తొలగించాలా?"],
+  "Deleting…": ["हटाया जा रहा है…", "తొలగిస్తోంది…"],
+  "Staff account deleted.": ["कर्मचारी खाता हटा दिया गया।", "సిబ్బంది ఖాతా తొలగించబడింది."],
+  "Delete staff": ["कर्मचारी हटाएँ", "సిబ్బందిని తొలగించండి"],
+  "Delete staff account for {name}? They will lose login access immediately. Coupon redemption history will be kept.": ["{name} का कर्मचारी खाता हटाएँ? उनकी लॉगिन पहुँच तुरंत बंद हो जाएगी। कूपन उपयोग का इतिहास सुरक्षित रहेगा।", "{name} సిబ్బంది ఖాతాను తొలగించాలా? వారి లాగిన్ యాక్సెస్ వెంటనే నిలిపివేయబడుతుంది. కూపన్ రిడెంప్షన్ చరిత్ర అలాగే ఉంటుంది."],
+  "Department and branch": ["विभाग और शाखा", "విభాగం మరియు శాఖ"],
   "Unable to restore this draft: {message}": ["यह ड्राफ्ट फिर से लोड नहीं हुआ: {message}", "ఈ డ్రాఫ్ట్‌ను తిరిగి లోడ్ చేయలేకపోయాం: {message}"],
   "{count} coupons saved successfully. {total} coupons saved in this draft.": ["{count} कूपन सफलतापूर्वक सहेजे गए। इस ड्राफ्ट में कुल {total} कूपन सहेजे गए हैं।", "{count} కూపన్లు విజయవంతంగా సేవ్ అయ్యాయి. ఈ డ్రాఫ్ట్‌లో మొత్తం {total} కూపన్లు సేవ్ అయ్యాయి."],
   "Existing batch recovered; no duplicate coupons created.": ["पहले से सहेजा गया बैच मिला; कोई कूपन दोबारा नहीं बना।", "ఇప్పటికే సేవ్ చేసిన బ్యాచ్ తిరిగి పొందబడింది; నకిలీ కూపన్లు సృష్టించబడలేదు."],
@@ -160,6 +171,7 @@ const copy = {
   "Search WhatsApp number": ["WhatsApp नंबर खोजें", "WhatsApp నంబర్ వెతకండి"],
   "Number or last digits…": ["नंबर या अंतिम अंक…", "నంబర్ లేదా చివరి అంకెలు…"],
   "Filter by branch": ["शाखा के अनुसार फ़िल्टर", "శాఖ ఆధారంగా ఫిల్టర్ చేయండి"],
+  "Filter by department": ["विभाग के अनुसार फ़िल्टर", "విభాగం ఆధారంగా ఫిల్టర్ చేయండి"],
   "Any branch": ["कोई भी शाखा", "ఏ శాఖ అయినా"],
   "No specific branch": ["कोई विशेष शाखा नहीं", "నిర్దిష్ట శాఖ లేదు"],
   "Filter by campaign": ["अभियान के अनुसार फ़िल्टर", "ప్రచారం ఆధారంగా ఫిల్టర్ చేయండి"],
@@ -196,6 +208,7 @@ const copy = {
   "Created": ["बनाने की तारीख", "సృష్టించిన తేదీ"],
   "Actions": ["कार्रवाई", "చర్యలు"],
   "All branches": ["सभी शाखाएँ", "అన్ని శాఖలు"],
+  "All departments": ["सभी विभाग", "అన్ని విభాగాలు"],
   "General rewards": ["सामान्य इनाम", "సాధారణ బహుమతులు"],
   "Preview": ["पूर्वावलोकन", "ప్రివ్యూ"],
   "Copy link": ["लिंक कॉपी करें", "లింక్ కాపీ చేయండి"],
@@ -296,8 +309,67 @@ export function workspaceTranslator(language = "en") {
     if (limit) return translate("{resource} limit reached ({maximum}). Contact your administrator.", {
       resource: translate(limit[1]), maximum: limit[2],
     });
-    const translated = copy[text]?.[index] || text;
-    return typeof translated === "string" ? translated.replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match) : translated;
+    const localized = copy[text]?.[index];
+    const translated = localized || text;
+    const populated = typeof translated === "string"
+      ? translated.replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match)
+      : translated;
+    if (typeof populated !== "string") return populated;
+    // Persisted/API field names remain unchanged for backwards compatibility.
+    // In the product language, however, a physical place is a Branch and the
+    // Sales/Service unit inside it is a Department.
+    if (language === "hi" && localized) return populated
+      .replace(/विभागों/g, "__JC_HI_BRANCHES__")
+      .replace(/विभाग/g, "__JC_HI_BRANCH__")
+      .replace(/शाखाओं/g, "विभागों")
+      .replace(/शाखाएँ/g, "विभाग")
+      .replace(/शाखा/g, "विभाग")
+      .replace(/__JC_HI_BRANCHES__/g, "शाखाओं")
+      .replace(/__JC_HI_BRANCH__/g, "शाखा");
+    if (language === "te" && localized) return populated
+      .replace(/విభాగాలను/g, "__JC_TE_BRANCHES_ACC__")
+      .replace(/విభాగాల్లో/g, "__JC_TE_BRANCHES_IN__")
+      .replace(/విభాగాలు/g, "__JC_TE_BRANCHES__")
+      .replace(/విభాగాల/g, "__JC_TE_BRANCHES_GEN__")
+      .replace(/విభాగాన్ని/g, "__JC_TE_BRANCH_ACC__")
+      .replace(/విభాగానికి/g, "__JC_TE_BRANCH_TO__")
+      .replace(/విభాగంలో/g, "__JC_TE_BRANCH_IN__")
+      .replace(/విభాగం/g, "__JC_TE_BRANCH__")
+      .replace(/శాఖలను/g, "విభాగాలను")
+      .replace(/శాఖల్లో/g, "విభాగాల్లో")
+      .replace(/శాఖలు/g, "విభాగాలు")
+      .replace(/శాఖల/g, "విభాగాల")
+      .replace(/శాఖను/g, "విభాగాన్ని")
+      .replace(/శాఖకు/g, "విభాగానికి")
+      .replace(/శాఖలో/g, "విభాగంలో")
+      .replace(/శాఖ/g, "విభాగం")
+      .replace(/__JC_TE_BRANCHES_ACC__/g, "శాఖలను")
+      .replace(/__JC_TE_BRANCHES_IN__/g, "శాఖల్లో")
+      .replace(/__JC_TE_BRANCHES__/g, "శాఖలు")
+      .replace(/__JC_TE_BRANCHES_GEN__/g, "శాఖల")
+      .replace(/__JC_TE_BRANCH_ACC__/g, "శాఖను")
+      .replace(/__JC_TE_BRANCH_TO__/g, "శాఖకు")
+      .replace(/__JC_TE_BRANCH_IN__/g, "శాఖలో")
+      .replace(/__JC_TE_BRANCH__/g, "శాఖ");
+    return populated
+      .replace(/\bDEPARTMENTS\b/g, "__JC_UPPER_BRANCHES__")
+      .replace(/\bDEPARTMENT\b/g, "__JC_UPPER_BRANCH__")
+      .replace(/\bDepartments\b/g, "__JC_BRANCHES__")
+      .replace(/\bDepartment\b/g, "__JC_BRANCH__")
+      .replace(/\bdepartments\b/g, "__jc_branches__")
+      .replace(/\bdepartment\b/g, "__jc_branch__")
+      .replace(/\bBRANCHES\b/g, "DEPARTMENTS")
+      .replace(/\bBRANCH\b/g, "DEPARTMENT")
+      .replace(/\bBranches\b/g, "Departments")
+      .replace(/\bBranch\b/g, "Department")
+      .replace(/\bbranches\b/g, "departments")
+      .replace(/\bbranch\b/g, "department")
+      .replace(/__JC_UPPER_BRANCHES__/g, "BRANCHES")
+      .replace(/__JC_UPPER_BRANCH__/g, "BRANCH")
+      .replace(/__JC_BRANCHES__/g, "Branches")
+      .replace(/__JC_BRANCH__/g, "Branch")
+      .replace(/__jc_branches__/g, "branches")
+      .replace(/__jc_branch__/g, "branch");
   };
 }
 

@@ -11,18 +11,20 @@ import Portal, { PortalLogin, portalApi } from "../features/portal/Portal.jsx";
 import { workspaceTranslator } from "../i18n/workspace-i18n.js";
 import { normalizeWhatsAppNumber, whatsAppCardUrl } from "../../../server/shared/whatsapp.js";
 import { scratchApiUrl, scratchCardUrl, scratchShareUrl } from "../../../server/shared/urls.js";
+import { publicCardProblem } from "../../../server/shared/public-card-errors.js";
 import { pendingBulk, savedBulkDraft, useBulkGeneration, BranchQuantities, BulkResults } from "../features/bulk/BulkGenerate.jsx";
 import "../styles/bulk.css";
 import "../styles/styles.css";
 import "../styles/share-link.css";
 import "../styles/card-typography.css";
 import "../styles/responsive.css";
+import "../styles/public-card-errors.css";
 import "../styles/brand.css";
 
 const TRANSLATIONS = {
   en: {
-    branch: "Branch",
-    allBranches: "All branches",
+    branch: "Department",
+    allBranches: "All departments",
     language: "Language",
     creatorTagline: "Scratch-card link creator",
     createKicker: "CREATE A CARD",
@@ -74,7 +76,7 @@ const TRANSLATIONS = {
     codeCopied: "Coupon code copied.",
     showQr: "QR Code",
     qrTitle: "Scan to redeem",
-    qrHelp: "A branch staff member can scan this code from their dashboard.",
+    qrHelp: "A department staff member can scan this code from their dashboard.",
     linkCopied: "Link copied to your clipboard.",
     shareWhatsApp: "Open WhatsApp Web",
     openCard: "Open card",
@@ -122,8 +124,8 @@ const TRANSLATIONS = {
     ],
   },
   hi: {
-    branch: "शाखा",
-    allBranches: "सभी शाखाएँ",
+    branch: "विभाग",
+    allBranches: "सभी विभाग",
     language: "भाषा",
     creatorTagline: "स्क्रैच-कार्ड लिंक निर्माता",
     createKicker: "कार्ड बनाएँ",
@@ -218,8 +220,8 @@ const TRANSLATIONS = {
     ],
   },
   te: {
-    branch: "శాఖ",
-    allBranches: "అన్ని శాఖలు",
+    branch: "విభాగం",
+    allBranches: "అన్ని విభాగాలు",
     language: "భాష",
     creatorTagline: "స్క్రాచ్-కార్డ్ లింక్ క్రియేటర్",
     createKicker: "కార్డ్ సృష్టించండి",
@@ -745,7 +747,6 @@ function Creator({
   user,
   business,
   onCreated,
-  onCreateBranch,
   onManageBranches,
   ui = workspaceTranslator(),
 }) {
@@ -1087,7 +1088,7 @@ function Creator({
                 {ui("Each link can reveal its reward once. Campaigns and branches help you track your results.")}
               </span>
             </div>
-            {isBulk && <BranchQuantities bulk={bulk} business={business} onCreateBranch={onCreateBranch} onManageBranches={onManageBranches} />}
+            {isBulk && <BranchQuantities bulk={bulk} business={business} onManageBranches={onManageBranches} />}
             <fieldset className="theme-panel">
               <legend>{t("cardTheme")}</legend>
               <div className="theme-controls">
@@ -1226,6 +1227,8 @@ function PublicCard({ slug, language: dashboardLanguage }) {
   const language = card?.language || dashboardLanguage;
   const t = useMemo(() => cardTranslator(language), [language]);
   const [state, setState] = useState("loading");
+  const [problem, setProblem] = useState(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [revealed, setRevealed] = useState(false);
   const [copied, setCopied] = useState(false);
   const [couponCopied, setCouponCopied] = useState(false);
@@ -1261,15 +1264,37 @@ function PublicCard({ slug, language: dashboardLanguage }) {
     }, 150);
   };
   useEffect(() => {
-    requestJson(`/api/cards/${encodeURIComponent(slug)}`)
+    let current = true;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 15000);
+    setState("loading");
+    setCard(null);
+    setRevealed(false);
+    setQrOpen(false);
+    setClaimError("");
+    if (!/^[A-Za-z0-9_-]{6,32}$/.test(slug)) {
+      setProblem(publicCardProblem({ code: "CARD_NOT_FOUND" }));
+      setState("error");
+      window.clearTimeout(timeout);
+      return () => { current = false; controller.abort(); };
+    }
+    requestJson(`/api/cards/${encodeURIComponent(slug)}`, { signal: controller.signal })
       .then((data) => {
+        if (!current) return;
+        if (data.slug !== slug || typeof data.offerTitle !== "string")
+          throw new Error("Unexpected coupon response.");
         setCard(data);
         setRevealed(Boolean(data.used));
         // Reopen an already scratched link as the same unlocked reward.
         setState("ready");
       })
-      .catch(() => setState("error"));
-  }, [slug]);
+      .catch((error) => {
+        if (!current) return;
+        setProblem(publicCardProblem(error));
+        setState("error");
+      }).finally(() => window.clearTimeout(timeout));
+    return () => { current = false; controller.abort(); window.clearTimeout(timeout); };
+  }, [slug, loadAttempt]);
   if (state === "loading")
     return (
       <main className="recipient status">
@@ -1286,10 +1311,13 @@ function PublicCard({ slug, language: dashboardLanguage }) {
         <RecipientTopbar
           brand="JustConnect"
         />
-        <div className="broken">?</div>
-        <h1>{t("notFound")}</h1>
-        <p>{t("checkLink")}</p>
-        <a href="/">{t("createCard")}</a>
+        <section className="public-card-problem" role="alert" aria-labelledby="coupon-error-title">
+          <div className="broken" aria-hidden="true">!</div>
+          <h1 id="coupon-error-title">{problem.title}</h1>
+          <p>{problem.description}</p>
+          {problem.retry && <button type="button" onClick={() => setLoadAttempt((value) => value + 1)}>Try again</button>}
+          <small>Secure rewards by JustConnect</small>
+        </section>
       </main>
     );
   const share = () =>
@@ -1322,13 +1350,23 @@ function PublicCard({ slug, language: dashboardLanguage }) {
           setCard(current);
           setRevealed(Boolean(current.used));
           setState("ready");
-        } catch {
-          setClaimError(error.message);
-          setState("ready");
+        } catch (loadError) {
+          setProblem(publicCardProblem(loadError));
+          setState("error");
+        }
+      } else if ([403, 404, 410].includes(error.status)) {
+        if (error.status === 410) {
+          // Reload the canonical state when a card expires during scratching.
+          setLoadAttempt((value) => value + 1);
+        } else {
+          setProblem(publicCardProblem(error));
+          setQrOpen(false);
+          setState("error");
         }
       } else {
-        setClaimError(error.message);
-        setState("ready");
+        setProblem(publicCardProblem(error));
+        setQrOpen(false);
+        setState("error");
       }
       return false;
     }
@@ -1353,6 +1391,7 @@ function PublicCard({ slug, language: dashboardLanguage }) {
         "--text-color": card.textColor || DEFAULT_CARD.textColor,
       }}
     >
+      {!card.expired && !card.redeemed && <Celebration />}
       <RecipientTopbar
         brand={card.senderName}
       />
@@ -1415,7 +1454,8 @@ function PublicCard({ slug, language: dashboardLanguage }) {
 
 function App() {
   const slug = useMemo(
-    () => location.pathname.match(/^\/card\/([\w-]+)\/?$/)?.[1],
+    () => location.pathname.match(/^\/card\/([\w-]+)\/?$/)?.[1]
+      || (/^\/card(?:\/|$)/.test(location.pathname) ? "!" : undefined),
     [],
   );
   const [session, setSession] = useState(() => {
@@ -1486,15 +1526,12 @@ function App() {
   };
   if (slug)
     return (
-      <>
-        <Celebration />
         <PublicCard
           slug={slug}
           language={language}
           setLanguage={setLanguage}
           t={t}
         />
-      </>
     );
   if (checking)
     return (

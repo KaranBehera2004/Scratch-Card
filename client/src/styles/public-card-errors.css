@@ -1,0 +1,7 @@
+.public-card-problem { width: min(520px, calc(100% - 32px)); margin: 32px auto; padding: 36px 28px; border: 1px solid #ffffff26; border-radius: 22px; background: #ffffff09; }
+.public-card-problem .broken { margin: 0 auto 24px; border-radius: 50%; }
+.recipient.status .public-card-problem h1 { font-size: clamp(24px, 5vw, 32px); line-height: 1.25; margin: 0 0 16px; }
+.recipient.status .public-card-problem p { margin: 0; color: #c4d5e8; line-height: 1.7; overflow-wrap: anywhere; }
+.public-card-problem button { margin-top: 24px; padding: 13px 24px; border: 0; border-radius: 10px; background: #f6a800; color: #002b5c; font-weight: 700; cursor: pointer; }
+.public-card-problem button:focus-visible { outline: 3px solid white; outline-offset: 4px; }
+.public-card-problem small { display: block; margin-top: 28px; color: #a9bfd7; font-size: 13px; }

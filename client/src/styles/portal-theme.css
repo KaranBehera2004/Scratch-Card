@@ -90,6 +90,16 @@
 .p-shell[data-theme="dark"] .p-hierarchy-summary > div { background: #15283b; border-color: var(--border); }
 .p-shell[data-theme="dark"] .p-hierarchy-branches > div { background: #101e2d; border-color: var(--border); }
 .p-shell[data-theme="dark"] .p-business-usage > div { background: #15283b; border-color: var(--border); }
+.p-shell[data-theme="dark"] .p-department-controls { background: #15283b; border-color: var(--border); }
+.p-shell[data-theme="dark"] .p-department-control { background: #101e2d; color: var(--ink); border-color: #46516a; }
+.p-shell[data-theme="dark"] .p-department-control button.danger { background: #422632; color: #ffbbc4; border-color: #704251; }
+.p-shell[data-theme="dark"] .p-department-control button.danger:hover { background: #583040; }
+.p-shell[data-theme="dark"] .p-department-control button.restore { background: #193b30; color: #9be1be; border-color: #356752; }
+.p-shell[data-theme="dark"] .p-department-control button.restore:hover { background: #254d3e; }
+.p-shell[data-theme="dark"] .p-info { background: #15283b; color: #b9c2d3; }
+.p-shell[data-theme="dark"] :is(.p-department-list legend, .p-hierarchy-branches > div > span, .p-hierarchy-summary > div b) { color: #ffd36a; }
+.p-shell[data-theme="dark"] .p-search input { background: transparent; }
+.p-shell[data-theme="dark"] .p-staff-confirm-icon { background: #422632; color: #ffacb6; }
 .p-shell[data-theme="dark"] .p-redemption-success { background: #193b30; color: #9be1be; border-color: #356752; }
 .p-shell[data-theme="dark"] .p-redemption-guide li::before { background: #0b365d; color: #ffd36a; }
 .p-shell[data-theme="dark"] .p-redemption-result.is-success .p-result-symbol { background: #193b30; color: #9be1be; border-color: #356752; }

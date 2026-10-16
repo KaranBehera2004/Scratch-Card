@@ -21,8 +21,13 @@ const login = async (page, email, password) => {
 const nav = (page, name) =>
   page
     .locator(".p-sidebar nav")
-    .getByRole("button", { name, exact: true })
+    .getByRole("button", { name: name === "Departments" ? "Branches & Departments" : name, exact: true })
     .click();
+const expandBranchGroups = async (page) => {
+  await expect(page.locator(".p-branch-toggle").first()).toBeVisible();
+  const collapsed = page.locator('.p-branch-toggle[aria-expanded="false"]');
+  while (await collapsed.count()) await collapsed.first().click();
+};
 const createdCredentials = async (page) => {
   const popup = page.getByRole("dialog", { name: "Login credentials", exact: true });
   await expect(popup).toBeVisible();
@@ -67,6 +72,83 @@ test("favicon follows live browser theme changes without refreshing the page", a
   });
   await expect(page.locator("#app-favicon")).toHaveCount(1);
   await expect(page.locator("#app-favicon")).toHaveAttribute("href", /favicon-dark\.png/);
+});
+
+test("public coupon links show safe error screens and recover from temporary failures", async ({ page }, info) => {
+  const auth = await page.request.post("/api/auth/login", { data: { loginId: "platform@example.test", password: "Platform-Test-Password" } });
+  const headers = { Authorization: `Bearer ${(await auth.json()).token}` };
+  const created = await page.request.post("/api/portal/businesses", { headers, data: {
+    name: "Public error screen business", loginId: "PUBLICUI88", password: "Public-UI-Password",
+    limits: { card: 0, branch: 0, department: 0, account: 0 },
+  } });
+  expect(created.status()).toBe(201);
+  const { business } = await created.json();
+  const createCard = async couponCode => {
+    const response = await page.request.post("/api/cards", { headers, data: {
+      businessId: business.businessId, headline: "A little surprise for you", offerTitle: "25% OFF",
+      description: "Your next visit", couponCode, customerPhone: "9876543210",
+    } });
+    expect(response.status()).toBe(201);
+    return response.json();
+  };
+  const card = await createCard("PUBLIC-SAFE-REWARD");
+  const disabled = await createCard("PUBLIC-DISABLED");
+  expect((await page.request.patch(`/api/portal/cards/${disabled.slug}`, { headers, data: { disabled: true } })).status()).toBe(200);
+  const disabledPage = await page.goto(`/share/${disabled.slug}?v=5`);
+  expect(disabledPage.status()).toBe(410);
+  await expect(page.getByRole("heading", { name: "This coupon has been disabled", exact: true })).toBeVisible();
+  await expect(page.locator("body")).not.toContainText(disabled.couponCode);
+  expect((await page.request.post(`/api/cards/${card.slug}/claim`)).status()).toBe(200);
+  const goodShare = await page.request.get(`/share/${card.slug}?v=5`);
+  expect(goodShare.status()).toBe(200);
+  expect(await goodShare.text()).toContain(`/card/${card.slug}`);
+  await page.goto(`/card/${card.slug}`);
+  await expect(page.getByText(card.couponCode, { exact: false })).toBeVisible();
+  await expect(page.locator(".scratch-card canvas")).toHaveCount(0);
+  // HTML gateway responses, private server exceptions and offline failures
+  // must all show the safe temporary screen, never technical details.
+  const apiPath = `**/api/cards/${card.slug}`;
+  for (const kind of ["html", "private-error", "offline", "invalid-json"]) {
+    let requests = 0;
+    await page.route(apiPath, route => {
+      if (++requests > 1) return route.fallback();
+      if (kind === "offline") return route.abort("failed");
+      if (kind === "html") return route.fulfill({ status: 502, contentType: "text/html", body: "<h1>Internal proxy details</h1>" });
+      return route.fulfill({ status: kind === "invalid-json" ? 200 : 503, contentType: "application/json",
+        body: JSON.stringify({ message: "mongodb://private-password@internal-host" }) });
+    });
+    await page.goto(`/card/${card.slug}`);
+    await expect(page.getByRole("heading", { name: "We couldn’t load your coupon", exact: true })).toBeVisible();
+    await expect(page.locator("body")).not.toContainText("private-password");
+    await expect(page.locator("body")).not.toContainText("Internal proxy details");
+    await expect(page.locator("body")).not.toContainText(card.couponCode);
+    await page.getByRole("button", { name: "Try again", exact: true }).click();
+    await expect(page.getByText(card.couponCode, { exact: false })).toBeVisible();
+    await page.unroute(apiPath);
+  }
+  expect((await page.request.delete(`/api/portal/businesses/${business.businessId}`, { headers, data: { confirmName: business.name } })).status()).toBe(200);
+  const share = await page.goto(`/share/${card.slug}?v=5`);
+  expect(share.status()).toBe(404);
+  expect(share.headers()["content-type"]).toContain("text/html");
+  expect(share.headers()["cache-control"]).toContain("no-store");
+  await expect(page.getByRole("heading", { name: "This coupon is no longer available", exact: true })).toBeVisible();
+  await expect(page.locator("body")).not.toContainText("Business not found.");
+  await expect(page.locator("body")).not.toContainText(card.couponCode);
+  await page.screenshot({ path: info.outputPath("share-business-unavailable-desktop.png"), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectResponsiveFit(page);
+  await page.screenshot({ path: info.outputPath("share-business-unavailable-mobile.png"), fullPage: true });
+  await page.goto(`/card/${card.slug}`);
+  await expect(page.getByRole("heading", { name: "This coupon is no longer available", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Create a scratch card", exact: true })).toHaveCount(0);
+  await expect(page.locator(".arrival-celebration")).toHaveCount(0);
+  await expectResponsiveFit(page);
+  await page.screenshot({ path: info.outputPath("card-business-unavailable-mobile.png"), fullPage: true });
+  for (const invalid of ["/share/bad", "/share", "/card", "/card/not/a/link"]) {
+    await page.goto(invalid);
+    await expect(page.getByRole("heading", { name: "We couldn’t find this coupon", exact: true })).toBeVisible();
+    await expect(page.locator(".p-login")).toHaveCount(0);
+  }
 });
 
 test("expired coupon links show a disabled reward card without exposing the code", async ({ page }) => {
@@ -178,17 +260,17 @@ test("super admin can manage workspaces, create rewards, and export English work
   await dialog.getByLabel("Login ID (optional)").fill("ORBIT58");
   await dialog.getByLabel("Password", { exact: true }).fill("ORBITPASS58F");
   await dialog.getByLabel("Confirm password", { exact: true }).fill("ORBITPASS58F");
-  await expect(dialog.getByLabel("Branch limit", { exact: true })).toHaveValue(
+  await expect(dialog.getByLabel("Department limit", { exact: true })).toHaveValue(
     "2",
   );
-  await expect(dialog.getByLabel("Department limit", { exact: true })).toHaveValue("2");
+  await expect(dialog.getByLabel("Branch limit", { exact: true })).toHaveValue("2");
   await expect(dialog.getByLabel("Business account limit")).toHaveValue("1");
   await expect(
     dialog.getByRole("combobox", { name: "Subscription plan" }),
   ).toHaveCount(0);
   await dialog.getByLabel("Scratch-card limit").fill("250");
-  await dialog.getByLabel("Branch limit", { exact: true }).fill("4");
-  await dialog.getByLabel("Department limit", { exact: true }).fill("3");
+  await dialog.getByLabel("Department limit", { exact: true }).fill("4");
+  await dialog.getByLabel("Branch limit", { exact: true }).fill("3");
   await dialog.getByLabel("Business account limit").fill("3");
   await page.screenshot({
     path: info.outputPath("business-limits.png"),
@@ -205,8 +287,8 @@ test("super admin can manage workspaces, create rewards, and export English work
   await expect(businessRow).toContainText(orbitCredentials.loginId);
   await expect(businessRow).not.toContainText(orbitCredentials.password);
   await expect(businessRow).toContainText("250 scratch cards");
-  await expect(businessRow).toContainText("4 branches");
-  await expect(businessRow).toContainText("3 departments");
+  await expect(businessRow).toContainText("4 departments");
+  await expect(businessRow).toContainText("3 branches");
   await expect(businessRow).toContainText("3 business accounts");
   const notice = page.getByRole("status");
   await expect(notice).toContainText("Changes saved successfully.");
@@ -223,28 +305,28 @@ test("super admin can manage workspaces, create rewards, and export English work
   await businessRow
     .getByRole("button", { name: "Manage", exact: true })
     .click();
-  await expect(dialog.getByLabel("Branch limit", { exact: true })).toHaveValue(
+  await expect(dialog.getByLabel("Department limit", { exact: true })).toHaveValue(
     "4",
   );
   await expect(dialog.getByLabel("Owner login ID")).toHaveValue("ORBIT58");
   await dialog.getByRole("button", { name: "Generate new", exact: true }).click();
   await expect(dialog.getByLabel("Owner login ID")).toHaveValue(/^(?=.*[A-Z])(?=.*\d)[A-Z\d]{12}$/);
   await dialog.getByLabel("Owner login ID").fill("ORBIT59");
-  await dialog.getByLabel("Branch limit", { exact: true }).fill("2");
+  await dialog.getByLabel("Department limit", { exact: true }).fill("2");
   await dialog.getByRole("button", { name: "Save changes" }).click();
   await expect(dialog).not.toBeVisible();
   await expect(businessRow).toContainText("ORBIT59");
-  await expect(businessRow).toContainText("2 branches");
-  await nav(page, "Branches");
-  await page.getByRole("button", { name: "Add departments & branches", exact: true }).click();
-  const capacityDialog = page.getByRole("dialog", { name: "Add departments and branches" });
+  await expect(businessRow).toContainText("2 departments");
+  await nav(page, "Departments");
+  await page.getByRole("button", { name: "Add branches & departments", exact: true }).click();
+  const capacityDialog = page.getByRole("dialog", { name: "Add branches and departments" });
   await capacityDialog.getByRole("combobox", { name: "Business", exact: true }).selectOption({ label: "Orbit Retail" });
-  await expect(capacityDialog.getByLabel("Number of departments")).toHaveAttribute("max", "2");
-  const capacityBranchCount = capacityDialog.getByLabel("Number of branches");
+  await expect(capacityDialog.getByLabel("Number of branches")).toHaveAttribute("max", "2");
+  const capacityBranchCount = capacityDialog.getByLabel("Number of departments");
   await expect(capacityBranchCount).toHaveAttribute("max", "2");
   await capacityBranchCount.fill("5");
   await expect(capacityBranchCount).toHaveValue("2");
-  await expect(capacityDialog).toContainText("2 of 2 branch slots remaining");
+  await expect(capacityDialog).toContainText("2 of 2 department slots remaining");
   await capacityDialog.getByRole("button", { name: "Cancel" }).click();
   await nav(page, "Businesses");
   const impactBusinessRow = page.getByRole("row").filter({ hasText: "Impact Vibes" });
@@ -253,26 +335,29 @@ test("super admin can manage workspaces, create rewards, and export English work
   await expect(page.locator(".p-workspace-banner")).toContainText(
     "Impact Vibes",
   );
-  await nav(page, "Branches");
-  await page.getByRole("button", { name: "Add branch", exact: true }).click();
-  await dialog.getByLabel("Branch name").fill("Hyderabad");
+  await nav(page, "Departments");
+  await page.getByRole("button", { name: "Add department", exact: true }).click();
+  await dialog.getByLabel("Department name").fill("Hyderabad");
   await dialog.getByLabel("Address").fill("Jubilee Hills");
   await dialog.getByRole("button", { name: "Save changes" }).click();
+  await expandBranchGroups(page);
   await expect(
     page.getByRole("cell", { name: "Hyderabad", exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Add departments & branches", exact: true }).click();
-  const hierarchyDialog = page.getByRole("dialog", { name: "Add departments and branches" });
-  await hierarchyDialog.getByLabel("Department name").fill("Sales");
+  await page.getByRole("button", { name: "Add branches & departments", exact: true }).click();
+  const hierarchyDialog = page.getByRole("dialog", { name: "Add branches and departments" });
   await hierarchyDialog.getByLabel("Branch name").fill("Secunderabad");
+  await hierarchyDialog.getByLabel("Department name").fill("Sales");
   await hierarchyDialog.getByLabel("Address optional").fill("Main showroom");
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await hierarchyDialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await hierarchyDialog.getByRole("button", { name: "Create 1 department and 1 branch" }).click();
+  await hierarchyDialog.getByRole("button", { name: "Create 1 branch and 1 department" }).click();
   await expect(hierarchyDialog).not.toBeVisible();
+  await expect(page.locator(".p-branch-toggle").filter({ hasText: "Secunderabad" })).toBeVisible();
+  await expandBranchGroups(page);
   await expect(page.getByRole("cell", { name: "Sales", exact: true })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "Secunderabad", exact: true })).toBeVisible();
+  await expect(page.locator(".p-branch-toggle").filter({ hasText: "Secunderabad" })).toBeVisible();
   await page.getByRole("button", { name: "Return to super admin" }).click();
   await nav(page, "Business accounts");
   await page.getByRole("button", { name: "Add account", exact: true }).click();
@@ -296,14 +381,14 @@ test("super admin can manage workspaces, create rewards, and export English work
     page.getByRole("textbox", { name: "From", exact: true }),
   ).toHaveCount(0);
   await expect(page.locator(".phone-brand")).toHaveText("✦ Impact Vibes");
-  await expect(page.locator(".scratch-card .offer-branch")).toHaveText("All branches");
+  await expect(page.locator(".scratch-card .offer-branch")).toHaveText("All departments");
   await page.getByLabel("Campaign name").fill("Diwali rewards");
   await page
-    .getByRole("combobox", { name: "Branch", exact: true })
+    .getByRole("combobox", { name: "Department", exact: true })
     .selectOption({ label: "Hyderabad" });
   await expect(page.locator(".phone-brand")).toHaveText("✦ Impact Vibes");
   await expect(page.locator(".scratch-card .offer-branch")).toHaveText("Hyderabad");
-  await expect(page.getByRole("combobox", { name: "Branch", exact: true })).toHaveCount(1);
+  await expect(page.getByRole("combobox", { name: "Department", exact: true })).toHaveCount(1);
   await page.screenshot({
     path: info.outputPath("card-builder.png"),
     fullPage: true,
@@ -380,18 +465,19 @@ test("super admin can manage workspaces, create rewards, and export English work
   await nav(page, "Scratch cards");
   await page.getByLabel("Filter by business").selectOption("impact-vibes");
   await expect(page.getByRole("columnheader", { name: "Business" })).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "Branch" })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "Department" })).toBeVisible();
   await expect(page.getByRole("row").filter({ hasText: "Diwali rewards" })).toContainText("Hyderabad");
-  await nav(page, "Branches");
+  await nav(page, "Departments");
   await page.getByLabel("Filter by business").selectOption("impact-vibes");
   const adminBranchRow = page.getByRole("row").filter({ hasText: "Hyderabad" });
+  await expandBranchGroups(page);
   await expect(adminBranchRow).toContainText("Impact Vibes");
   await expect(adminBranchRow.getByRole("button", { name: "Manage business" })).toBeVisible();
   await page.screenshot({ path: info.outputPath("superadmin-branch-control.png"), fullPage: true });
   for (const tab of [
     "Campaigns",
     "Scratch cards",
-    "Branches",
+    "Departments",
     "Business accounts",
     "Analytics",
     "Security",
@@ -468,6 +554,126 @@ test("super admin can manage workspaces, create rewards, and export English work
   await expect(page.locator(".scratch-card .offer-content b")).toContainText(createdCouponCode);
   await expect(page.getByRole("link", { name: "Create a new scratch card" })).toHaveCount(0);
   expect(errors).toEqual([]);
+});
+
+test("analytics shows every coupon status, reconciles totals and refreshes expiry without double counting", async ({ page }, info) => {
+  const past = "2020-01-01T00:00:00.000Z";
+  const businesses = Array.from({ length: 6 }, (_, index) => ({
+    businessId: `analytics-${index}`, name: `Analytics business ${index + 1}`, status: "active",
+    departments: [{ departmentId: `location-${index}`, name: `Location ${index + 1}`, status: "active" }],
+    branches: [{ branchId: `sales-${index}`, departmentId: `location-${index}`, name: "Sales", status: "active" }],
+  }));
+  let cards = [
+    ...Array.from({ length: 44 }, () => ({ status: "available" })),
+    ...Array.from({ length: 10 }, () => ({ status: "opened", openedAt: past })),
+    ...Array.from({ length: 12 }, () => ({ status: "scratched", scratchedAt: past })),
+    ...Array.from({ length: 15 }, () => ({ status: "redeemed", staffRedeemedAt: past, used: true })),
+    ...Array.from({ length: 8 }, () => ({ status: "scratched", scratchedAt: past, expiresAt: past })),
+    ...Array.from({ length: 5 }, () => ({ status: "scratched", scratchedAt: past, disabled: true })),
+  ].map((card, index) => ({
+    slug: `analytics-card-${index}`, couponCode: `ANALYTICS-${index}`, createdAt: past,
+    businessId: `analytics-${index % 6}`, branchId: `sales-${index % 6}`, branchName: "Sales",
+    senderName: `Analytics business ${index % 6 + 1}`, ...card,
+  }));
+  await page.route("**/api/portal/businesses", (route) => route.fulfill({ json: { businesses } }));
+  await page.route("**/api/portal/cards", (route) => route.fulfill({ json: { cards } }));
+  await login(page, "platform@example.test", "Platform-Test-Password");
+  await nav(page, "Analytics");
+  const summary = page.getByLabel("Analytics summary", { exact: true });
+  await expect(summary.locator("article")).toHaveCount(9);
+  await expect(summary.locator("article").filter({ has: page.getByText("Businesses", { exact: true }) }).locator("strong")).toHaveText("6");
+  await expect(summary.locator("article").filter({ hasText: "Total scratch cards" }).locator("strong")).toHaveText("94");
+  await expect(summary.locator("article").filter({ hasText: "Redemption rate" }).locator("strong")).toHaveText("16%");
+  for (const [status, count] of Object.entries({ available: 44, opened: 10, scratched: 12, redeemed: 15, expired: 8, disabled: 5 }))
+    await expect(summary.locator(`article[data-status="${status}"] strong`)).toHaveText(String(count));
+  expect(await summary.locator("article[data-status] strong").evaluateAll((elements) =>
+    elements.reduce((total, element) => total + Number(element.textContent), 0))).toBe(94);
+  await expect(page.locator(".p-analytics-breakdown")).toContainText("15 ÷ 94 × 100 = 16%");
+  await page.screenshot({ path: info.outputPath("analytics-all-statuses-desktop.png"), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(() => page.locator(".p-sidebar").evaluate((element) => element.getBoundingClientRect().right)).toBeLessThanOrEqual(1);
+  await expectResponsiveFit(page);
+  await page.screenshot({ path: info.outputPath("analytics-all-statuses-mobile.png"), fullPage: true });
+  cards[0] = { ...cards[0], expiresAt: past };
+  await page.getByRole("button", { name: "Refresh data", exact: true }).click();
+  await expect(summary.locator('article[data-status="available"] strong')).toHaveText("43");
+  await expect(summary.locator('article[data-status="expired"] strong')).toHaveText("9");
+  cards = [];
+  await page.getByRole("button", { name: "Refresh data", exact: true }).click();
+  await expect(summary.locator("article").filter({ hasText: "Total scratch cards" }).locator("strong")).toHaveText("0");
+  await expect(summary.locator("article").filter({ hasText: "Redemption rate" }).locator("strong")).toHaveText("0%");
+  await expect(page.locator(".p-analytics-breakdown")).toContainText("No coupons yet. Redemption rate is 0%.");
+});
+
+test("hierarchy defaults populate every branch and removing panels preserves the other drafts", async ({ page }, info) => {
+  const rootLogin = await page.request.post("/api/auth/login", { data: { loginId: "platform@example.test", password: "Platform-Test-Password" } });
+  const headers = { Authorization: `Bearer ${(await rootLogin.json()).token}` };
+  const created = await page.request.post("/api/portal/businesses", { headers, data: {
+    name: "Hierarchy Draft Test", password: "Hierarchy-Draft-Password", limits: { card: 10, branch: 12, department: 5, account: 1 },
+  } });
+  expect(created.status()).toBe(201);
+  const { business } = await created.json();
+  await login(page, "platform@example.test", "Platform-Test-Password");
+  await page.goto(`/?business=${business.businessId}&tab=Branches`);
+  await page.getByRole("button", { name: "Add branches & departments", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Add branches and departments", exact: true });
+  const panels = dialog.locator("fieldset");
+  const branchCount = dialog.getByRole("spinbutton", { name: "Number of branches", exact: true });
+  const defaultCount = dialog.getByRole("spinbutton", { name: "Departments per branch", exact: true });
+  await defaultCount.fill("2");
+  await branchCount.fill("3");
+  await expect(panels).toHaveCount(3);
+  for (const [index, name] of ["Ameerpet", "Discard branch", "Punjagutta"].entries()) {
+    const panel = panels.nth(index);
+    await expect(panel.getByRole("spinbutton", { name: "Number of departments", exact: true })).toHaveValue("2");
+    await panel.getByRole("textbox", { name: "Branch name", exact: true }).fill(name);
+    await panel.getByRole("textbox", { name: "Department name", exact: true }).nth(0).fill("Sales");
+    await panel.getByRole("textbox", { name: "Department name", exact: true }).nth(1).fill("Service");
+  }
+  await panels.nth(2).getByRole("spinbutton", { name: "Number of departments", exact: true }).fill("3");
+  await panels.nth(2).getByRole("textbox", { name: "Department name", exact: true }).nth(2).fill("Support");
+  await panels.nth(2).getByRole("textbox", { name: "Address optional", exact: true }).nth(0).fill("Punjagutta showroom");
+  await dialog.getByRole("button", { name: "Remove branch 2", exact: true }).click();
+  await expect(branchCount).toHaveValue("2");
+  await expect(panels.nth(1).getByRole("textbox", { name: "Branch name", exact: true })).toHaveValue("Punjagutta");
+  await expect(panels.nth(1).getByRole("textbox", { name: "Department name", exact: true }).nth(2)).toHaveValue("Support");
+  await expect(panels.nth(1).getByRole("textbox", { name: "Address optional", exact: true }).nth(0)).toHaveValue("Punjagutta showroom");
+  await expect(dialog.getByRole("button", { name: "Create 2 branches and 5 departments", exact: true })).toBeEnabled();
+  await dialog.evaluate((element) => { element.scrollTop = 0; });
+  await page.screenshot({ path: info.outputPath("hierarchy-defaults-desktop.png"), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).resolves.toBe(true);
+  const remove = dialog.getByRole("button", { name: "Remove branch 1", exact: true });
+  await remove.scrollIntoViewIfNeeded();
+  await expect(remove).toBeInViewport();
+  await page.screenshot({ path: info.outputPath("hierarchy-remove-mobile.png"), fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await defaultCount.fill("100");
+  await expect(defaultCount).toHaveValue("6");
+  for (let index = 0; index < 2; index++)
+    await expect(panels.nth(index).getByRole("spinbutton", { name: "Number of departments", exact: true })).toHaveValue("6");
+  await branchCount.fill("3");
+  await expect(branchCount).toHaveValue("2");
+  await dialog.getByRole("button", { name: "Remove branch 1", exact: true }).click();
+  await dialog.getByRole("button", { name: "Remove branch 1", exact: true }).click();
+  await expect(panels).toHaveCount(0);
+  await expect(branchCount).toHaveValue("0");
+  await expect(dialog.getByRole("button", { name: "Create 0 branches and 0 departments", exact: true })).toBeDisabled();
+  await dialog.getByRole("button", { name: "Add branch", exact: true }).click();
+  await defaultCount.fill("2");
+  await expect(panels).toHaveCount(1);
+  await panels.getByRole("textbox", { name: "Branch name", exact: true }).fill("SR Nagar");
+  await panels.getByRole("textbox", { name: "Department name", exact: true }).nth(0).fill("Sales");
+  await panels.getByRole("textbox", { name: "Department name", exact: true }).nth(1).fill("Service");
+  const saved = page.waitForResponse((response) => response.url().endsWith(`/businesses/${business.businessId}/departments/branches`) && response.request().method() === "POST");
+  await dialog.getByRole("button", { name: "Create 1 branch and 2 departments", exact: true }).click();
+  const response = await saved;
+  expect(response.status()).toBe(201);
+  expect(response.request().postDataJSON().departments).toEqual([{ name: "SR Nagar", branches: [{ name: "Sales", address: "" }, { name: "Service", address: "" }] }]);
+  await expect(dialog).not.toBeVisible();
+  await expect(page.getByRole("row").filter({ has: page.getByRole("cell", { name: "SR Nagar", exact: true }) })).toHaveCount(2);
+  const cleanup = await page.request.post("/api/auth/login", { data: { loginId: "platform@example.test", password: "Platform-Test-Password" } });
+  expect((await page.request.delete(`/api/portal/businesses/${business.businessId}`, { headers: { Authorization: `Bearer ${(await cleanup.json()).token}` }, data: { confirmName: business.name } })).status()).toBe(200);
 });
 
 test("super admin can reset a forgotten business password without changing its login ID", async ({ page, browser }, info) => {
@@ -592,15 +798,15 @@ test("platform settings customize login and prefill new business limits", async 
   await page.getByLabel("Login welcome message").fill("Welcome to your rewards portal");
   await page.getByLabel("Support website", { exact: true }).fill("https://example.test/help");
   await page.getByLabel("Default scratch-card limit").fill("500");
-  await page.getByLabel("Default branch limit").fill("5");
-  await page.getByLabel("Default department limit").fill("4");
+  await page.getByLabel("Default department limit").fill("5");
+  await page.getByLabel("Default branch limit").fill("4");
   await page.getByLabel("Default business account limit").fill("2");
   await page.getByRole("button", { name: "Save platform settings" }).click();
   await expect(page.getByRole("status")).toContainText("Changes saved successfully.");
   await page.reload();
   await expect(page.locator(".p-page-heading h1")).toHaveText("Platform settings");
-  await expect(page.getByLabel("Default branch limit")).toHaveValue("5");
-  await expect(page.getByLabel("Default department limit")).toHaveValue("4");
+  await expect(page.getByLabel("Default department limit")).toHaveValue("5");
+  await expect(page.getByLabel("Default branch limit")).toHaveValue("4");
   await page.screenshot({ path: info.outputPath("platform-settings.png"), fullPage: true });
   await page.getByRole("switch", { name: "Dark mode" }).click();
   await page.screenshot({ path: info.outputPath("dark-platform-settings.png"), fullPage: true });
@@ -614,7 +820,7 @@ test("platform settings customize login and prefill new business limits", async 
   await page.getByRole("button", { name: "Create business", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByLabel("Scratch-card limit")).toHaveValue("500");
-  await expect(dialog.getByLabel("Branch limit", { exact: true })).toHaveValue("5");
+  await expect(dialog.getByLabel("Department limit", { exact: true })).toHaveValue("5");
   await expect(dialog.getByLabel("Business account limit")).toHaveValue("2");
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
   await page.locator(".p-topbar").getByRole("button", { name: "Sign out" }).click();
@@ -635,8 +841,8 @@ test("business login stays scoped and mobile navigation fits the screen", async 
     "Create scratch card",
     "Campaigns",
     "Coupons",
-    "Branches",
-    "Branch staff",
+    "Branches & Departments",
+    "Department staff",
     "Business settings",
   ]);
   await page.getByRole("button", { name: "View all", exact: true }).click();
@@ -679,7 +885,7 @@ test("business login stays scoped and mobile navigation fits the screen", async 
   await page.getByRole("button", { name: "Open navigation" }).click();
   await nav(page, "Create scratch card");
   await expect(
-    page.getByRole("combobox", { name: "Branch", exact: true }),
+    page.getByRole("combobox", { name: "Department", exact: true }),
   ).toBeVisible();
   expect(
     await page.evaluate(
@@ -700,19 +906,19 @@ test("business languages translate the whole workspace without changing cards or
   await login(page, "owner@example.test", "Owner-Test-Password");
   const languagePicker = page.locator(".p-topbar select");
   for (const locale of [
-    { code: "hi", nav: ["अवलोकन", "स्क्रैच कार्ड बनाएँ", "अभियान", "कूपन", "शाखाएँ", "शाखा स्टाफ", "व्यवसाय सेटिंग्स"],
+    { code: "hi", nav: ["अवलोकन", "स्क्रैच कार्ड बनाएँ", "अभियान", "कूपन", "शाखा & विभाग", "विभाग स्टाफ", "व्यवसाय सेटिंग्स"],
       workspace: "Impact Vibes कार्यक्षेत्र", available: "उपलब्ध इनाम", signOut: "साइन आउट",
-      cardLanguage: "कार्ड की भाषा", campaign: "अभियान का नाम", branch: "शाखा", allBranches: "सभी शाखाएँ",
+      cardLanguage: "कार्ड की भाषा", campaign: "अभियान का नाम", branch: "विभाग", allBranches: "सभी विभाग",
       preview: "पूर्वावलोकन", previewTitle: "स्क्रैच-कार्ड पूर्वावलोकन", closePreview: "पूर्वावलोकन बंद करें",
-      add: "शाखा जोड़ें", branchName: "शाखा का नाम", address: "पता", save: "बदलाव सहेजें", cancel: "रद्द करें",
-      branchError: "शाखा का नाम ज़रूरी है।", edit: "संपादित करें", editTitle: "शाखा संपादित करें",
+      add: "विभाग जोड़ें", branchName: "विभाग का नाम", address: "पता", save: "बदलाव सहेजें", cancel: "रद्द करें",
+      branchError: "विभाग का नाम ज़रूरी है।", edit: "संपादित करें", editTitle: "विभाग संपादित करें",
       success: "बदलाव सफलतापूर्वक सहेजे गए।", empty: "कोई रिकॉर्ड नहीं मिला", header: "इनाम और कूपन", exportHeader: "कूपन कोड" },
-    { code: "te", nav: ["అవలోకనం", "స్క్రాచ్ కార్డ్ సృష్టించండి", "ప్రచారాలు", "కూపన్లు", "శాఖలు", "శాఖ సిబ్బంది", "వ్యాపార సెట్టింగ్‌లు"],
+    { code: "te", nav: ["అవలోకనం", "స్క్రాచ్ కార్డ్ సృష్టించండి", "ప్రచారాలు", "కూపన్లు", "శాఖలు & విభాగాలు", "విభాగం సిబ్బంది", "వ్యాపార సెట్టింగ్‌లు"],
       workspace: "Impact Vibes కార్యస్థలం", available: "అందుబాటులో ఉన్న బహుమతులు", signOut: "సైన్ అవుట్",
-      cardLanguage: "కార్డ్ భాష", campaign: "ప్రచారం పేరు", branch: "శాఖ", allBranches: "అన్ని శాఖలు",
+      cardLanguage: "కార్డ్ భాష", campaign: "ప్రచారం పేరు", branch: "విభాగం", allBranches: "అన్ని విభాగాలు",
       preview: "ప్రివ్యూ", previewTitle: "స్క్రాచ్ కార్డ్ ప్రివ్యూ", closePreview: "ప్రివ్యూను మూసివేయండి",
-      add: "శాఖను జోడించండి", branchName: "శాఖ పేరు", address: "చిరునామా", save: "మార్పులను సేవ్ చేయండి", cancel: "రద్దు చేయండి",
-      branchError: "శాఖ పేరు అవసరం.", edit: "సవరించండి", editTitle: "శాఖను సవరించండి",
+      add: "విభాగాన్ని జోడించండి", branchName: "విభాగం పేరు", address: "చిరునామా", save: "మార్పులను సేవ్ చేయండి", cancel: "రద్దు చేయండి",
+      branchError: "విభాగం పేరు అవసరం.", edit: "సవరించండి", editTitle: "విభాగాన్ని సవరించండి",
       success: "మార్పులు విజయవంతంగా సేవ్ అయ్యాయి.", empty: "రికార్డులు కనబడలేదు", header: "బహుమతి మరియు కూపన్", exportHeader: "కూపన్ కోడ్" },
   ]) {
     await languagePicker.selectOption(locale.code);
@@ -730,7 +936,7 @@ test("business languages translate the whole workspace without changing cards or
     // UI language must not change an English draft or its card-only selector.
     await expect(page.getByRole("combobox", { name: locale.cardLanguage, exact: true })).toHaveValue("en");
     await expect(page.locator(".phone h2")).toHaveText("A little surprise for you");
-    await expect(page.locator(".offer-branch")).toHaveText("All branches");
+    await expect(page.locator(".offer-branch")).toHaveText("All departments");
     await page.getByRole("combobox", { name: locale.cardLanguage, exact: true }).selectOption("hi");
     await languagePicker.selectOption("en");
     await expect(page.getByLabel("Campaign name", { exact: true })).toHaveValue("Custom campaign unchanged");
@@ -1086,7 +1292,7 @@ test("customer phones stay private while campaigns report cards by branch", asyn
   await nav(page, "Campaigns");
   await page.getByRole("button", { name: "Create scratch card", exact: true }).last().click();
   await page.getByLabel("Campaign name").fill("Branch reporting test");
-  await page.getByRole("combobox", { name: "Branch", exact: true }).selectOption(branch.branchId);
+  await page.getByRole("combobox", { name: "Department", exact: true }).selectOption(branch.branchId);
   await page.getByLabel("WhatsApp number", { exact: true }).fill("+91 (98765) 43210");
   await expect(page.locator(".phone")).not.toContainText("98765");
   await page.evaluate(() => window.scrollTo(0, 0));
@@ -1132,7 +1338,7 @@ test("customer phones stay private while campaigns report cards by branch", asyn
   const assignedRow = campaignRows.filter({ hasText: "Hyderabad" });
   await expect(assignedRow.locator('[data-label="Scratch cards"]')).toHaveText("2");
   await expect(assignedRow.locator('[data-label="Redeemed"]')).toHaveText("0");
-  await expect(campaignRows.filter({ hasText: "All branches" }).locator('[data-label="Scratch cards"]')).toHaveText("1");
+  await expect(campaignRows.filter({ hasText: "All departments" }).locator('[data-label="Scratch cards"]')).toHaveText("1");
   const cardsResponse = await page.request.get("/api/portal/cards", { headers });
   const { cards } = await cardsResponse.json();
   await expect(page.locator(".p-metrics strong")).toHaveText(String(cards.length));
@@ -1336,7 +1542,7 @@ test("coupon filters combine numbers, branches, campaigns, custom dates and filt
   await page.goto("/?tab=Coupons");
   const textSearch = page.getByLabel("Search Coupons", { exact: true });
   const numberSearch = page.getByLabel("Search WhatsApp number", { exact: true });
-  const branchFilter = page.getByLabel("Filter by branch", { exact: true });
+  const branchFilter = page.getByLabel("Filter by department", { exact: true });
   const campaignFilter = page.getByLabel("Filter by campaign", { exact: true });
   const dateFilter = page.getByLabel("Created date range", { exact: true });
   const sampleRows = page.getByRole("row").filter({ hasText: "FILTER-TEST-" });
@@ -1438,7 +1644,7 @@ test("branch export matches searched rows in all languages and works for super a
     branchList.push((await response.json()).branch);
   }
   await page.goto("/?tab=Branches");
-  const search = page.getByLabel("Search Branches", { exact: true });
+  const search = page.getByLabel("Search Departments", { exact: true });
   await search.fill(branchList[0].name);
   const readWorkbook = async () => {
     const pending = page.waitForEvent("download");
@@ -1454,7 +1660,7 @@ test("branch export matches searched rows in all languages and works for super a
   for (const [language, header] of [["en", "Address"], ["hi", "पता"], ["te", "చిరునామా"]]) {
     await page.locator(".p-topbar select").selectOption(language);
     const workbook = await readWorkbook();
-    expect(workbook.filename).toContain(`branches-${language}`);
+    expect(workbook.filename).toContain(`departments-${language}`);
     expect(workbook.text).toContain(header);
     expect(workbook.text).toContain(branchList[0].name);
     expect(workbook.text).toContain(branchList[0].address);
@@ -1463,7 +1669,7 @@ test("branch export matches searched rows in all languages and works for super a
   }
   await page.locator(".p-topbar select").selectOption("en");
   await search.fill("no-matching-export-branch");
-  await expect(page.getByRole("button", { name: "Export branches", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Export departments", exact: true })).toBeDisabled();
   await search.fill("");
   const allBranches = await readWorkbook();
   expect((allBranches.sheet.match(/<row\b/g) || []).length).toBe(branchList.length + 1);
@@ -1474,11 +1680,11 @@ test("branch export matches searched rows in all languages and works for super a
   await page.locator(".p-topbar").getByRole("button", { name: "Sign out", exact: true }).click();
   await page.setViewportSize({ width: 1440, height: 1000 });
   await login(page, "platform@example.test", "Platform-Test-Password");
-  await nav(page, "Branches");
-  await page.getByLabel("Search Branches", { exact: true }).fill(branchList[0].name);
+  await nav(page, "Departments");
+  await page.getByLabel("Search Departments", { exact: true }).fill(branchList[0].name);
   const visibleRows = await page.locator(".p-table-scroll tbody tr").count();
   const adminWorkbook = await readWorkbook();
-  expect(adminWorkbook.filename).toContain("branches-en");
+  expect(adminWorkbook.filename).toContain("departments-en");
   expect(adminWorkbook.text).toContain("Impact Vibes");
   expect((adminWorkbook.sheet.match(/<row\b/g) || []).length).toBe(visibleRows + 1);
 });
@@ -1503,17 +1709,17 @@ test("bulk creator recovers retries, marks scratches pending and exports every p
   await page.getByRole("button", { name: "Bulk Generate", exact: true }).click();
   await expect(page.getByLabel("Coupon quantity 1", { exact: true })).toHaveValue("25");
   await expect(page.getByLabel("WhatsApp number", { exact: true })).not.toHaveAttribute("required", "");
-  await page.getByRole("button", { name: "+ Add Branch", exact: true }).click();
-  await page.getByRole("button", { name: "+ Add Branch", exact: true }).click();
-  await expect(page.getByLabel("Bulk branch 2").locator(`option[value="${branches[0].branchId}"]`)).toHaveAttribute("disabled", "");
+  await page.getByRole("button", { name: "+ Add Department", exact: true }).click();
+  await page.getByRole("button", { name: "+ Add Department", exact: true }).click();
+  await expect(page.getByLabel("Bulk department 2").locator(`option[value="${branches[0].branchId}"]`)).toHaveAttribute("disabled", "");
   await expect(page.getByRole("button", { name: "Generate 75 Coupons", exact: true })).toBeEnabled();
   await expect(page.locator(".bulk-summary")).toContainText("Total: 75 coupons");
   await page.locator(".bulk-branch-row").nth(2).getByRole("button", { name: "Preview", exact: true }).click();
   await expect(page.locator(".phone .offer-branch")).toHaveText("Madhapur");
   await expect(page.locator(".phone-brand")).toContainText("Bulk Test Business");
-  await page.getByLabel("Remove branch row 3").click();
+  await page.getByLabel("Remove department row 3").click();
   await expect(page.getByRole("button", { name: "Generate 50 Coupons", exact: true })).toBeEnabled();
-  await page.getByRole("button", { name: "+ Add Branch", exact: true }).click();
+  await page.getByRole("button", { name: "+ Add Department", exact: true }).click();
   await page.locator('input[name="campaignName"]').fill("Bulk Summer");
   await page.locator('input[name="expiresAt"]').fill("2099-12-31T18:00");
   await page.setViewportSize({ width: 390, height: 844 });
@@ -1531,7 +1737,8 @@ test("bulk creator recovers retries, marks scratches pending and exports every p
   await expect(page.getByRole("button", { name: "Retry saved batch", exact: true })).toBeEnabled();
   expect(committed.savedCount).toBe(75);
   await page.reload();
-  await expect(page.getByRole("button", { name: "Bulk Generate", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "Single Card", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Bulk Generate", exact: true }).click();
   await expect(page.getByRole("button", { name: "Retry saved batch", exact: true })).toBeEnabled();
   const retryResponse = page.waitForResponse((response) => response.url().endsWith("/api/cards/bulk") && response.request().method() === "POST");
   await page.getByRole("button", { name: "Retry saved batch", exact: true }).click();
@@ -1543,7 +1750,7 @@ test("bulk creator recovers retries, marks scratches pending and exports every p
   await expect(results.locator(".bulk-pagination")).toContainText("Page 1 of 3");
   await results.getByRole("button", { name: "Next", exact: true }).click();
   await expect(results.locator(".bulk-pagination")).toContainText("Page 2 of 3");
-  await results.getByLabel("Filter batch by branch").selectOption(branches[2].branchId);
+  await results.getByLabel("Filter batch by department").selectOption(branches[2].branchId);
   await expect(results.locator("tbody tr")).toHaveCount(25);
   await expect(results.locator("tbody tr").first()).toContainText("Madhapur");
   const downloadPromise = page.waitForEvent("download");
@@ -1554,7 +1761,7 @@ test("bulk creator recovers retries, marks scratches pending and exports every p
   const sheet = strFromU8(archive["xl/worksheets/sheet1.xml"]);
   expect((sheet.match(/<row\b/g) || []).length).toBe(76);
   const text = Object.values(archive).map((value) => strFromU8(value)).join(" ");
-  for (const header of ["Branch", "Coupon Code", "Main Offer", "Offer Details", "Campaign Name", "Scratch Link", "Expiry Date", "Status", "Created At"])
+  for (const header of ["Department", "Coupon Code", "Main Offer", "Offer Details", "Campaign Name", "Scratch Link", "Expiry Date", "Status", "Created At"])
     expect(text).toContain(header);
   for (const card of committed.coupons) { expect(text).toContain(card.couponCode); expect(text).toContain(`/card/${card.slug}`); }
   expect(sheet).toMatch(/r="B2"[^>]*t="(?:s|inlineStr)"/);
@@ -1573,7 +1780,7 @@ test("bulk creator recovers retries, marks scratches pending and exports every p
   expect((await page.request.post(`/api/cards/${card.slug}/claim`, { data: {} })).status()).toBe(200);
   expect((await page.request.post(`/api/portal/cards/${card.slug}/redeem`, { headers, data: { branchId: branches[1].branchId } })).status()).toBe(410);
   // The list updates from server activity without reloading or clicking Refresh.
-  await expect(row.locator(".p-badge")).toHaveText("scratched", { timeout: 15000 });
+  await expect(row.locator(".p-badge")).toHaveText("scratched", { timeout: 20000 });
   await expect(row.getByRole("button", { name: "Redeem", exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Coupon status").locator('option[value="scratched"]')).toHaveCount(1);
   await expect(row.locator(".p-badge")).toHaveText("scratched");
@@ -1630,6 +1837,8 @@ test("batch WhatsApp sharing exports every coupon and opens one chat for manual 
   expect(batch.savedCount).toBe(32);
   await page.evaluate(({ id, draft }) => sessionStorage.setItem(`scratch-bulk-pending:${id}`, JSON.stringify(draft)), { id: business.businessId, draft });
   await page.reload();
+  await expect(page.getByRole("button", { name: "Single Card", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Bulk Generate", exact: true }).click();
   await expect(page.getByRole("button", { name: "Retry saved batch", exact: true })).toBeEnabled();
   const retryResponse = page.waitForResponse(response => response.url().endsWith("/api/cards/bulk") && response.request().method() === "POST");
   await page.getByRole("button", { name: "Retry saved batch", exact: true }).click();
@@ -1641,7 +1850,7 @@ test("batch WhatsApp sharing exports every coupon and opens one chat for manual 
   await expect(results.locator("tbody tr")).toHaveCount(25);
   await results.getByRole("button", { name: "Next", exact: true }).click();
   await expect(results.locator("tbody tr")).toHaveCount(7);
-  await results.getByLabel("Filter batch by branch").selectOption(branches[1].branchId);
+  await results.getByLabel("Filter batch by department").selectOption(branches[1].branchId);
   await expect(results.locator("tbody tr")).toHaveCount(16);
   await expect(results.getByRole("button", { name: "Send via WhatsApp", exact: true })).toBeEnabled();
 
@@ -1734,14 +1943,14 @@ test("batch WhatsApp sharing exports every coupon and opens one chat for manual 
   await expect(dialog.getByRole("status")).toContainText("32");
   const workbook = await readWorkbook(download);
   expect(workbook.rows).toHaveLength(33);
-  const requiredHeaders = ["Branch", "Coupon Code", "Main Offer", "Offer Details", "Campaign Name", "Scratch Link", "Expiry Date", "Status", "Created At", "WhatsApp Number"];
+  const requiredHeaders = ["Department", "Coupon Code", "Main Offer", "Offer Details", "Campaign Name", "Scratch Link", "Expiry Date", "Status", "Created At", "WhatsApp Number"];
   expect(workbook.rows[0].values).toEqual(expect.arrayContaining(requiredHeaders));
   expect(workbook.rows[0].values.filter(Boolean)).toHaveLength(10);
   const headerIndex = Object.fromEntries(workbook.rows[0].values.map((header, index) => [header, index]));
   for (const card of batch.coupons) {
     const row = workbook.rows.find(row => row.values[headerIndex["Coupon Code"]] === card.couponCode);
     expect(row).toBeTruthy();
-    expect(row.values[headerIndex.Branch]).toBe(card.branchName);
+    expect(row.values[headerIndex.Department]).toBe(card.branchName);
     expect(row.values[headerIndex["WhatsApp Number"]]).toBe(card.customerPhone);
     expect(row.values[headerIndex["Scratch Link"]]).toBe(`http://127.0.0.1:5099/card/${card.slug}`);
     for (const name of ["Coupon Code", "Scratch Link", "WhatsApp Number"]) expect(row.types[headerIndex[name]]).toMatch(/^(s|inlineStr)$/);
@@ -1796,6 +2005,7 @@ test("batch WhatsApp sharing exports every coupon and opens one chat for manual 
   await page.screenshot({ path: info.outputPath("batch-excel-whatsapp-mobile-footer-dark.png") });
   await dialog.getByRole("button", { name: "Close dialog", exact: true }).last().click();
   await page.reload();
+  await page.getByRole("button", { name: "Bulk Generate", exact: true }).click();
   await expect(results).toBeVisible();
   await expect(results.locator("tbody tr")).toHaveCount(25);
   const savedAfter = (await (await page.request.get("/api/portal/cards", { headers })).json()).cards;
@@ -1866,11 +2076,11 @@ test("bulk branch controls continue the same draft across generations, refreshes
   await login(page, credentials.loginId, credentials.password);
   await nav(page, "Create scratch card");
   await page.getByRole("button", { name: "Bulk Generate", exact: true }).click();
-  const addRow = page.getByRole("button", { name: "+ Add Branch", exact: true });
-  const createBranch = page.getByRole("button", { name: "Create new branch", exact: true });
+  const addRow = page.getByRole("button", { name: "+ Add Department", exact: true });
+  const createBranch = page.getByRole("button", { name: "Create new department", exact: true });
   await expect(addRow).toBeDisabled();
-  await expect(page.getByText("All active branches are already in this batch. Create or activate another branch to add a row.", { exact: true })).toBeVisible();
-  await expect(createBranch).toBeEnabled();
+  await expect(page.getByText("All active departments are already in this batch. Create or activate another department to add a row.", { exact: true })).toBeVisible();
+  await expect(createBranch).toHaveCount(0);
   await page.getByLabel("Main offer", { exact: true }).fill("30% OFF");
   await page.getByLabel("Campaign name", { exact: true }).fill("Branch draft remains intact");
   await page.getByLabel("Coupon quantity 1", { exact: true }).fill("3");
@@ -1883,12 +2093,14 @@ test("bulk branch controls continue the same draft across generations, refreshes
   await expect(results).toBeVisible();
   await expect(page.getByLabel("Coupon quantity 1", { exact: true })).toBeEnabled();
   await expect(page.getByLabel("Main offer", { exact: true })).toBeEnabled();
-  await expect(createBranch).toBeEnabled();
+  await expect(createBranch).toHaveCount(0);
   await expect(page.getByRole("button", { name: "All requested coupons generated", exact: true })).toBeDisabled();
-  await createBranch.click();
-  const dialog = page.getByRole("dialog", { name: "Add branch", exact: true });
+  await page.getByRole("button", { name: "Manage departments", exact: true }).click();
+  await expect(page.locator(".p-page-heading h1")).toHaveText("Departments");
+  await page.getByRole("button", { name: "Add department", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Add department", exact: true });
   await expect(dialog).toBeVisible();
-  await dialog.getByLabel("Branch name", { exact: true }).fill("Service");
+  await dialog.getByLabel("Department name", { exact: true }).fill("Service");
   await dialog.getByLabel("Address", { exact: true }).fill("Second location");
   const branchSaved = page.waitForResponse(response => response.url().endsWith(`/businesses/${business.businessId}/branches`) && response.request().method() === "POST");
   await dialog.getByRole("button", { name: "Save changes", exact: true }).click();
@@ -1896,25 +2108,28 @@ test("bulk branch controls continue the same draft across generations, refreshes
   expect(savedResponse.status()).toBe(201);
   const service = (await savedResponse.json()).branch;
   await expect(dialog).not.toBeVisible();
+  await nav(page, "Create scratch card");
+  await page.getByRole("button", { name: "Bulk Generate", exact: true }).click();
+  await expect(addRow).toBeEnabled();
+  await addRow.click();
   await expect(page.getByRole("button", { name: "Bulk Generate", exact: true })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByLabel("Main offer", { exact: true })).toHaveValue("30% OFF");
   await expect(page.getByLabel("Campaign name", { exact: true })).toHaveValue("Branch draft remains intact");
   await expect(page.getByLabel("Coupon quantity 1", { exact: true })).toHaveValue("3");
-  await expect(page.getByLabel("Bulk branch 1", { exact: true })).toHaveValue(sales.branchId);
-  await expect(page.getByLabel("Bulk branch 2", { exact: true })).toHaveValue(service.branchId);
+  await expect(page.getByLabel("Bulk department 1", { exact: true })).toHaveValue(sales.branchId);
+  await expect(page.getByLabel("Bulk department 2", { exact: true })).toHaveValue(service.branchId);
   await expect(page.getByLabel("Coupon quantity 2", { exact: true })).toHaveValue("25");
-  await expect(page.getByLabel("Bulk branch 2", { exact: true }).locator(`option[value="${sales.branchId}"]`)).toHaveAttribute("disabled", "");
+  await expect(page.getByLabel("Bulk department 2", { exact: true }).locator(`option[value="${sales.branchId}"]`)).toHaveAttribute("disabled", "");
   await expect(results.locator("tbody tr")).toHaveCount(3);
-  await expect(createBranch).toBeDisabled();
-  await expect(page.getByText("Branch limit reached (2). Contact your administrator to increase it.", { exact: true })).toBeVisible();
+  await expect(createBranch).toHaveCount(0);
   const savedBusiness = (await (await page.request.get("/api/portal/businesses", { headers })).json()).businesses[0];
   expect(savedBusiness.limits.branch).toBe(2);
   expect(savedBusiness.branches).toHaveLength(2);
 
-  await page.getByLabel("Remove branch row 2", { exact: true }).click();
+  await page.getByLabel("Remove department row 2", { exact: true }).click();
   await expect(addRow).toBeEnabled();
   await addRow.click();
-  await expect(page.getByLabel("Bulk branch 2", { exact: true })).toHaveValue(service.branchId);
+  await expect(page.getByLabel("Bulk department 2", { exact: true })).toHaveValue(service.branchId);
   await expect(page.getByLabel("Coupon quantity 2", { exact: true })).toHaveValue("25");
   await page.getByLabel("Coupon quantity 2", { exact: true }).fill("2");
   await expect(page.getByRole("button", { name: "Generate 2 Coupons", exact: true })).toBeEnabled();
@@ -1959,7 +2174,7 @@ test("bulk branch controls continue the same draft across generations, refreshes
   await page.getByRole("button", { name: "Generate 2 Coupons", exact: true }).click();
   await expect(page.getByRole("button", { name: "Retry saved batch", exact: true })).toBeEnabled();
   await expect(page.getByLabel("Coupon quantity 1", { exact: true })).toBeDisabled();
-  await expect(page.getByLabel("Remove branch row 2", { exact: true })).toBeDisabled();
+  await expect(page.getByLabel("Remove department row 2", { exact: true })).toBeDisabled();
   await page.reload();
   await expect(page.getByRole("button", { name: "Single Card", exact: true })).toHaveAttribute("aria-pressed", "true");
   await page.getByRole("button", { name: "Bulk Generate", exact: true }).click();
@@ -1969,19 +2184,19 @@ test("bulk branch controls continue the same draft across generations, refreshes
   await expect(page.getByLabel("Coupon quantity 1", { exact: true })).toHaveValue("3");
   await expect(page.getByLabel("Coupon quantity 2", { exact: true })).toHaveValue("2");
   await expect(page.getByRole("button", { name: "Retry saved batch", exact: true })).toBeEnabled();
-  await results.getByLabel("Filter batch by branch").selectOption(sales.branchId);
+  await results.getByLabel("Filter batch by department").selectOption(sales.branchId);
   const retryResponse = page.waitForResponse(response => response.url().endsWith("/api/cards/bulk") && response.request().method() === "POST");
   await page.getByRole("button", { name: "Retry saved batch", exact: true }).click();
   const second = await (await retryResponse).json();
   expect(second.replayed).toBe(true);
   expect(second.batchId).toBe(lostBatch.batchId);
   await expect(results).toContainText("5 coupons saved in this draft");
-  await expect(results.getByLabel("Filter batch by branch")).toHaveValue(sales.branchId);
+  await expect(results.getByLabel("Filter batch by department")).toHaveValue(sales.branchId);
   await expect(results.locator("tbody tr")).toHaveCount(3);
   await expect(page.getByLabel("Coupon quantity 1", { exact: true })).toBeEnabled();
-  await expect(page.getByLabel("Remove branch row 2", { exact: true })).toBeEnabled();
+  await expect(page.getByLabel("Remove department row 2", { exact: true })).toBeEnabled();
   await expect(page.getByLabel("Main offer", { exact: true })).toHaveValue("30% OFF");
-  await results.getByLabel("Filter batch by branch").selectOption(service.branchId);
+  await results.getByLabel("Filter batch by department").selectOption(service.branchId);
   await expect(results.locator("tbody tr")).toHaveCount(2);
   await page.getByLabel("Coupon quantity 2", { exact: true }).fill("4");
   const third = await generate(2);
@@ -2011,8 +2226,8 @@ test("bulk branch controls continue the same draft across generations, refreshes
   await expect(page.getByLabel("Campaign name", { exact: true })).toHaveValue("Branch draft remains intact");
   await expect(page.getByLabel("Coupon quantity 2", { exact: true })).toHaveValue("4");
   await expect(page.getByLabel("Coupon quantity 1", { exact: true })).toBeEnabled();
-  await expect(page.getByLabel("Remove branch row 2", { exact: true })).toBeEnabled();
-  await results.getByLabel("Filter batch by branch").selectOption(sales.branchId);
+  await expect(page.getByLabel("Remove department row 2", { exact: true })).toBeEnabled();
+  await results.getByLabel("Filter batch by department").selectOption(sales.branchId);
   await expect(results.locator("tbody tr")).toHaveCount(3);
   const fileReady = page.waitForEvent("download");
   await results.getByRole("button", { name: "Download Excel", exact: true }).click();
@@ -2066,13 +2281,13 @@ test("bulk branch controls continue the same draft across generations, refreshes
   expect(continuousChatUrl.pathname).toBe("/send");
   expect(continuousChatUrl.searchParams.get("phone")).toBe("919876543210");
   await shareDialog.getByRole("button", { name: "Close dialog", exact: true }).last().click();
-  await page.getByLabel("Remove branch row 1", { exact: true }).click();
+  await page.getByLabel("Remove department row 1", { exact: true }).click();
   await addRow.click();
-  await expect(page.getByLabel("Bulk branch 2", { exact: true })).toHaveValue(sales.branchId);
+  await expect(page.getByLabel("Bulk department 2", { exact: true })).toHaveValue(sales.branchId);
   await expect(page.getByRole("button", { name: "Generate 22 Coupons", exact: true })).toBeEnabled();
   await page.getByLabel("Coupon quantity 2", { exact: true }).fill("3");
   await expect(page.getByRole("button", { name: "All requested coupons generated", exact: true })).toBeDisabled();
-  await expect(createBranch).toBeDisabled();
+  await expect(createBranch).toHaveCount(0);
   const savedCards = (await (await page.request.get("/api/portal/cards", { headers })).json()).cards;
   expect(savedCards).toHaveLength(7);
   expect(savedCards.every(card => card.offerTitle === "30% OFF" && card.campaignName === "Branch draft remains intact")).toBe(true);
@@ -2104,9 +2319,12 @@ test("business creates branch staff with a mandatory manual login ID and super a
   const southCard = await (await page.request.post("/api/cards", { headers: ownerHeaders, data: { ...cardData, branchId: south.branchId, couponCode: "STAFF-SOUTH" } })).json();
 
   await login(page, "BRPORT58", "Branch-Portal-Owner");
-  await nav(page, "Branch staff");
-  await page.getByRole("button", { name: "Add branch staff", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "Create branch staff login", exact: true });
+  await nav(page, "Department staff");
+  await page.getByRole("button", { name: "Add department staff", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Create department staff login", exact: true });
+  const assignment = dialog.getByRole("combobox", { name: "Branch and department", exact: true });
+  await expect(assignment).not.toContainText("Branch Portal Retail");
+  await expect(assignment).toContainText("Unassigned · North Showroom");
   await dialog.getByLabel("Staff name", { exact: true }).fill("Nina North");
   const loginIdField = dialog.getByLabel("Login ID", { exact: true });
   await expect(loginIdField).toHaveAttribute("required", "");
@@ -2117,6 +2335,7 @@ test("business creates branch staff with a mandatory manual login ID and super a
   await dialog.getByRole("button", { name: "Save changes", exact: true }).click();
   const credentials = await createdCredentials(page);
   expect(credentials.loginId).toBe("NINANORTH58");
+  await expandBranchGroups(page);
   const staffRow = page.getByRole("row").filter({ hasText: "Nina North" });
   await expect(staffRow).toContainText("Branch Portal Retail");
   await expect(staffRow).toContainText("North Showroom");
@@ -2144,19 +2363,20 @@ test("business creates branch staff with a mandatory manual login ID and super a
   await expect(page.getByRole("heading", { name: "North Showroom", exact: true })).toBeVisible();
   await expect(page.locator(".p-sidebar nav").getByRole("button")).toHaveCount(4);
   await expect(page.locator(".p-sidebar nav").getByRole("button")).toHaveText([
-    "Overview", "Redeem coupon", "Branch coupons", "Redemption history",
+    "Overview", "Redeem coupon", "Department coupons", "Redemption history",
   ]);
   await expect(page.locator(".p-sidebar nav").getByRole("button", { name: "Create scratch card", exact: true })).toHaveCount(0);
-  await expect(page.locator(".p-metrics article").filter({ hasText: "Ready to redeem" }).locator("strong")).toHaveText("1");
-  await nav(page, "Branch coupons");
-  await expect(page.getByRole("heading", { name: "Branch coupons", exact: true })).toBeVisible();
+  await expect(page.locator(".p-staff-metrics article")).toHaveCount(2);
+  await expect(page.getByText("Ready to redeem", { exact: true })).toHaveCount(0);
+  await nav(page, "Department coupons");
+  await expect(page.getByRole("heading", { name: "Department coupons", exact: true })).toBeVisible();
   await expect(page.getByRole("row").filter({ hasText: "STAFF-NORTH" })).toBeVisible();
   await expect(page.getByRole("row").filter({ hasText: "STAFF-SOUTH" })).toHaveCount(0);
   await nav(page, "Redeem coupon");
   await page.getByLabel("Coupon code", { exact: true }).fill("staff-south");
   await page.getByRole("main").getByRole("button", { name: "Redeem coupon", exact: true }).click();
   const wrongBranchPopup = page.getByRole("alertdialog");
-  await expect(wrongBranchPopup.getByRole("heading", { name: "Wrong branch" })).toBeVisible();
+  await expect(wrongBranchPopup.getByRole("heading", { name: "Wrong department" })).toBeVisible();
   await expect(wrongBranchPopup).toContainText("Not redeemed");
   await expect(wrongBranchPopup).toContainText("South Showroom");
   await expect(wrongBranchPopup).not.toContainText("Staff member");
@@ -2200,25 +2420,26 @@ test("business creates branch staff with a mandatory manual login ID and super a
   expect(redeemedCard.used).toBe(true);
   await page.goto(`/card/${northCard.slug}`);
   await expect(page.locator(".scratch-shell")).toHaveClass(/is-redeemed/);
-  await expect(page.getByText("COUPON REDEEMED", { exact: true })).toBeVisible();
+  await expect(page.locator(".redeemed-coupon-label")).toHaveText("COUPON REDEEMED");
   await expect(page.getByText("STAFF-NORTH", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Copy code", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "QR Code", exact: true })).toHaveCount(0);
   await page.goto("/");
   await nav(page, "Overview");
-  await expect(page.locator(".p-metrics article").filter({ hasText: "Ready to redeem" }).locator("strong")).toHaveText("0");
+  await expect(page.getByText("Ready to redeem", { exact: true })).toHaveCount(0);
   await expect(page.locator(".p-metrics article").filter({ hasText: "Total redeemed" }).locator("strong")).toHaveText("1");
-  await nav(page, "Branch coupons");
+  await nav(page, "Department coupons");
   await expect(page.getByRole("row").filter({ hasText: "STAFF-NORTH" })).toContainText("redeemed");
   await nav(page, "Redemption history");
   await expect(page.getByRole("row").filter({ hasText: "STAFF-NORTH" })).toContainText("redeemed");
 
   await page.locator(".p-topbar").getByRole("button", { name: "Sign out" }).click();
   await login(page, "platform@example.test", "Platform-Test-Password");
-  await nav(page, "Branch staff");
+  await nav(page, "Department staff");
   const businessFilter = page.getByLabel("Filter by business", { exact: true });
   await expect(businessFilter).toBeVisible();
   await businessFilter.selectOption(business.businessId);
+  await expandBranchGroups(page);
   const monitoredRow = page.getByRole("row").filter({ hasText: "Nina North" });
   await expect(monitoredRow).not.toContainText("Never");
   await expect(monitoredRow).toContainText("1");
@@ -2230,6 +2451,504 @@ test("business creates branch staff with a mandatory manual login ID and super a
   expect((await page.request.delete(`/api/portal/businesses/${business.businessId}`, {
     headers: finalRootHeaders, data: { confirmName: business.name },
   })).status()).toBe(200);
+});
+
+test("branch arrows reveal only their departments and keep duplicate names separate", async ({ page }, info) => {
+  const auth = await page.request.post("/api/auth/login", { data: { loginId: "platform@example.test", password: "Platform-Test-Password" } });
+  const headers = { Authorization: `Bearer ${(await auth.json()).token}` };
+  const created = await page.request.post("/api/portal/businesses", { headers, data: {
+    name: "Branch accordion business", loginId: "ACCORDION88", password: "Accordion-Test-Password",
+    limits: { card: 0, branch: 0, department: 0, account: 0 },
+  } });
+  expect(created.status()).toBe(201);
+  const { business } = await created.json();
+  const hierarchy = await page.request.post(`/api/portal/businesses/${business.businessId}/departments/branches`, { headers, data: {
+    departments: [
+      { name: "Central", branches: [{ name: "Sales" }, { name: "Service" }] },
+      { name: "Central", branches: [{ name: "Support" }] },
+      { name: "West", branches: [{ name: "Development" }] },
+    ],
+  } });
+  expect(hierarchy.status()).toBe(201);
+  const structure = await hierarchy.json();
+  const legacyUnits = [];
+  for (const name of ["Legacy A", "Legacy B"]) {
+    const legacy = await page.request.post(`/api/portal/businesses/${business.businessId}/branches`, { headers, data: { name } });
+    expect(legacy.status()).toBe(201);
+    legacyUnits.push((await legacy.json()).branch);
+  }
+  await login(page, "ACCORDION88", "Accordion-Test-Password");
+  await nav(page, "Departments");
+  const groups = page.locator(".p-branch-group");
+  const first = groups.nth(0);
+  const second = groups.nth(1);
+  const firstToggle = first.locator(".p-branch-toggle");
+  await expect(groups).toHaveCount(4);
+  await expect(page.locator('.p-branch-toggle[aria-expanded="false"]')).toHaveCount(4);
+  const unassigned = groups.filter({ hasText: "Unassigned" });
+  await unassigned.locator(".p-branch-toggle").click();
+  await expect(unassigned.getByRole("cell", { name: "Legacy A", exact: true })).toBeVisible();
+  await expect(unassigned.getByRole("cell", { name: "Legacy B", exact: true })).toBeVisible();
+  await unassigned.locator(".p-branch-toggle").click();
+  await expect(page.getByRole("cell", { name: "Sales", exact: true })).toHaveCount(0);
+  await firstToggle.click();
+  await expect(firstToggle).toHaveAttribute("aria-expanded", "true");
+  await expect(first.getByRole("cell", { name: "Sales", exact: true })).toBeVisible();
+  await expect(first.getByRole("cell", { name: "Service", exact: true })).toBeVisible();
+  await expect(first.getByRole("columnheader", { name: "Branch", exact: true })).toHaveCount(0);
+  await expect(first.getByRole("cell", { name: "Central", exact: true })).toHaveCount(0);
+  await expect(first.getByRole("columnheader", { name: "Department", exact: true })).toBeVisible();
+  await expect(first).not.toContainText("Support");
+  await expect(second.locator(".p-branch-toggle")).toHaveAttribute("aria-expanded", "false");
+  await second.locator(".p-branch-toggle").click();
+  await expect(second.getByRole("cell", { name: "Support", exact: true })).toBeVisible();
+  await expect(second).not.toContainText("Sales");
+  // A management action must not also collapse/expand its branch.
+  await first.getByRole("button", { name: "Delete branch", exact: true }).click();
+  const branchConfirmation = page.getByRole("alertdialog", { name: "Delete branch?", exact: true });
+  await expect(branchConfirmation).toBeVisible();
+  await expect(branchConfirmation).toContainText("Central");
+  await expect(branchConfirmation).toContainText("all departments under it");
+  await page.screenshot({ path: info.outputPath("branch-confirm-light.png"), fullPage: true });
+  await branchConfirmation.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(firstToggle).toHaveAttribute("aria-expanded", "true");
+  await firstToggle.focus();
+  await page.keyboard.press("Enter");
+  await expect(firstToggle).toHaveAttribute("aria-expanded", "false");
+  await page.keyboard.press("Space");
+  await expect(firstToggle).toHaveAttribute("aria-expanded", "true");
+  await page.getByRole("button", { name: "Refresh data", exact: true }).click();
+  await expect(firstToggle).toHaveAttribute("aria-expanded", "true");
+  await page.screenshot({ path: info.outputPath("branch-accordion-light.png"), fullPage: true });
+  await page.getByRole("switch", { name: "Dark mode" }).click();
+  await expect(first.locator(".p-department-control")).toHaveCSS("background-color", "rgb(16, 30, 45)");
+  await expect(firstToggle).toHaveCSS("color", "rgb(237, 240, 247)");
+  await expect(first.getByRole("button", { name: "Delete branch", exact: true })).toHaveCSS("background-color", "rgb(66, 38, 50)");
+  await page.screenshot({ path: info.outputPath("branch-accordion-dark.png"), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(() => page.locator(".p-sidebar").evaluate((element) => element.getBoundingClientRect().right)).toBeLessThanOrEqual(1);
+  await expectResponsiveFit(page);
+  await page.screenshot({ path: info.outputPath("branch-accordion-mobile.png"), fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  // Searching and filters reveal their matching departments automatically.
+  await page.getByRole("combobox", { name: "Filter by department", exact: true }).selectOption("support");
+  await expect(groups).toHaveCount(1);
+  await expect(groups.locator(".p-branch-toggle")).toHaveAttribute("aria-expanded", "true");
+  await expect(groups.getByRole("cell", { name: "Support", exact: true })).toBeVisible();
+  await page.getByRole("combobox", { name: "Filter by department", exact: true }).selectOption("");
+  await page.getByRole("textbox", { name: "Search Departments", exact: true }).fill("Development");
+  await expect(groups).toHaveCount(1);
+  await expect(groups).toContainText("West");
+  await expect(groups.getByRole("cell", { name: "Development", exact: true })).toBeVisible();
+
+  for (const [index, unit] of [structure.branches[0], structure.branches[1], structure.branches[2], legacyUnits[0]].entries()) {
+    const staff = await page.request.post("/api/portal/users", { headers, data: {
+      businessId: business.businessId, branchId: unit.branchId, role: "branch-staff",
+      name: `Accordion staff ${index + 1}`, loginId: `ACCORDIONSTAFF${index + 1}`, password: "Accordion-Staff-Password",
+    } });
+    expect(staff.status()).toBe(201);
+  }
+  await page.getByRole("button", { name: "Refresh data", exact: true }).click();
+  await nav(page, "Department staff");
+  await expect(groups).toHaveCount(3);
+  await expect(page.locator('.p-branch-toggle[aria-expanded="false"]')).toHaveCount(3);
+  await expect(page.getByText("Accordion staff 1", { exact: true })).toHaveCount(0);
+  await firstToggle.click();
+  await expect(first.getByText("Accordion staff 1", { exact: true })).toBeVisible();
+  await expect(first.getByText("Accordion staff 2", { exact: true })).toBeVisible();
+  await expect(first.getByRole("columnheader", { name: "Branch", exact: true })).toHaveCount(0);
+  await expect(first.getByRole("cell", { name: "Central", exact: true })).toHaveCount(0);
+  await expect(first.getByRole("columnheader", { name: "Department", exact: true })).toBeVisible();
+  await expect(first).toContainText("Service");
+  await expect(second.locator(".p-branch-toggle")).toHaveAttribute("aria-expanded", "false");
+  await second.locator(".p-branch-toggle").click();
+  await expect(second.getByText("Accordion staff 3", { exact: true })).toBeVisible();
+  await expect(second).not.toContainText("Accordion staff 1");
+  await first.getByRole("row").filter({ hasText: "Accordion staff 2" }).getByRole("button", { name: "Manage staff", exact: true }).click();
+  const staffDialog = page.getByRole("dialog", { name: "Manage Accordion staff 2", exact: true });
+  const staffAssignment = staffDialog.getByRole("combobox", { name: "Assigned branch and department", exact: true });
+  await expect(staffAssignment).toHaveValue(structure.branches[1].branchId);
+  await expect(staffAssignment.locator("option:checked")).toHaveText("Central · Service");
+  await expect(staffAssignment).not.toContainText(business.name);
+  await staffDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(firstToggle).toHaveAttribute("aria-expanded", "true");
+  await unassigned.locator(".p-branch-toggle").click();
+  await expect(unassigned.getByText("Accordion staff 4", { exact: true })).toBeVisible();
+  await unassigned.locator(".p-branch-toggle").click();
+  await page.screenshot({ path: info.outputPath("staff-accordion-dark.png"), fullPage: true });
+  await page.getByRole("switch", { name: "Dark mode" }).click();
+  await expect(first.locator(".p-department-control")).toHaveCSS("background-color", "rgb(255, 255, 255)");
+  await expect(page.getByRole("button", { name: "Add department staff", exact: true })).toHaveCSS("background-color", "rgb(0, 43, 92)");
+  await page.screenshot({ path: info.outputPath("staff-accordion-light.png"), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(() => page.locator(".p-sidebar").evaluate((element) => element.getBoundingClientRect().right)).toBeLessThanOrEqual(1);
+  await expectResponsiveFit(page);
+  await page.screenshot({ path: info.outputPath("staff-accordion-mobile.png"), fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole("textbox", { name: "Search Department staff", exact: true }).fill("Service");
+  await expect(groups).toHaveCount(1);
+  await expect(groups.getByText("Accordion staff 2", { exact: true })).toBeVisible();
+  const staffDelete = groups.getByRole("button", { name: "Delete staff", exact: true });
+  const nativePrompts = [];
+  const unexpectedPrompt = async dialog => { nativePrompts.push(dialog.type()); await dialog.dismiss(); };
+  page.on("dialog", unexpectedPrompt);
+  const deleteConfirmation = page.getByRole("alertdialog", { name: "Delete staff account?", exact: true });
+  await staffDelete.click();
+  await expect(deleteConfirmation).toBeVisible();
+  await expect(deleteConfirmation).toContainText("Accordion staff 2");
+  await expect(deleteConfirmation).toContainText("redemption history will be kept");
+  await expect(deleteConfirmation.getByRole("button", { name: "Cancel", exact: true })).toBeFocused();
+  await page.screenshot({ path: info.outputPath("staff-confirm-light.png"), fullPage: true });
+  await deleteConfirmation.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(deleteConfirmation).toHaveCount(0);
+  await expect(staffDelete).toBeFocused();
+  await staffDelete.click();
+  await page.keyboard.press("Escape");
+  await expect(deleteConfirmation).toHaveCount(0);
+  await expect(staffDelete).toBeFocused();
+  await expect(groups.getByText("Accordion staff 2", { exact: true })).toBeVisible();
+  await page.getByRole("switch", { name: "Dark mode" }).click();
+  await staffDelete.click();
+  await expect(deleteConfirmation).toHaveCSS("background-color", "rgb(27, 35, 50)");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(() => page.locator(".p-sidebar").evaluate(element => element.getBoundingClientRect().right)).toBeLessThanOrEqual(1);
+  await expectResponsiveFit(page);
+  expect(await deleteConfirmation.evaluate(element => {
+    const rect = element.getBoundingClientRect();
+    return rect.left >= 0 && rect.right <= innerWidth && element.scrollWidth <= element.clientWidth;
+  })).toBe(true);
+  await page.screenshot({ path: info.outputPath("staff-confirm-dark-mobile.png"), fullPage: true });
+  await deleteConfirmation.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole("switch", { name: "Dark mode" }).click();
+  const staffLogin = await page.request.post("/api/auth/login", { data: {
+    loginId: "ACCORDIONSTAFF2", password: "Accordion-Staff-Password",
+  } });
+  expect(staffLogin.status()).toBe(200);
+  const deletedToken = (await staffLogin.json()).token;
+  const deleteEndpoint = "**/api/portal/users/*";
+  await page.route(deleteEndpoint, route => route.request().method() === "DELETE"
+    ? route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ message: "Temporary delete failure. Try again." }) })
+    : route.fallback());
+  await staffDelete.click();
+  await deleteConfirmation.getByRole("button", { name: "Delete staff", exact: true }).click();
+  await expect(deleteConfirmation.getByRole("alert")).toHaveText("Temporary delete failure. Try again.");
+  await expect(deleteConfirmation.getByRole("button", { name: "Delete staff", exact: true })).toBeEnabled();
+  await page.unroute(deleteEndpoint);
+  let releaseDelete;
+  let deleteRequests = 0;
+  const deleteGate = new Promise(resolve => { releaseDelete = resolve; });
+  await page.route(deleteEndpoint, async route => {
+    if (route.request().method() === "DELETE") { deleteRequests++; await deleteGate; }
+    await route.fallback();
+  });
+  await deleteConfirmation.getByRole("button", { name: "Delete staff", exact: true }).click();
+  await expect(deleteConfirmation).toHaveAttribute("aria-busy", "true");
+  await expect(deleteConfirmation.getByRole("button", { name: "Deleting…", exact: true })).toBeDisabled();
+  await expect(deleteConfirmation.getByRole("button", { name: "Cancel", exact: true })).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await expect(deleteConfirmation).toBeVisible();
+  releaseDelete();
+  await expect(page.getByText("No records found", { exact: true })).toBeVisible();
+  await expect(deleteConfirmation).toHaveCount(0);
+  expect(deleteRequests).toBe(1);
+  expect(nativePrompts).toEqual([]);
+  page.off("dialog", unexpectedPrompt);
+  await page.unroute(deleteEndpoint);
+  await expect(page.getByText("Accordion staff 2", { exact: true })).toHaveCount(0);
+  expect((await page.request.get("/api/auth/me", { headers: { Authorization: `Bearer ${deletedToken}` } })).status()).toBe(401);
+  const retainedStaff = (await (await page.request.get(`/api/portal/users?business=${business.businessId}`, { headers })).json()).users;
+  expect(retainedStaff.map(staff => staff.name).sort()).toEqual(["Accordion staff 1", "Accordion staff 3", "Accordion staff 4"]);
+  await page.getByRole("textbox", { name: "Search Department staff", exact: true }).fill("");
+  await expandBranchGroups(page);
+  await page.screenshot({ path: info.outputPath("staff-delete-light.png"), fullPage: true });
+  await page.getByRole("switch", { name: "Dark mode" }).click();
+  await expect(page.getByRole("button", { name: "Delete staff", exact: true }).first()).toHaveCSS("background-color", "rgb(66, 38, 50)");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(() => page.locator(".p-sidebar").evaluate(element => element.getBoundingClientRect().right)).toBeLessThanOrEqual(1);
+  await expectResponsiveFit(page);
+  await page.screenshot({ path: info.outputPath("staff-delete-dark-mobile.png"), fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await nav(page, "Departments");
+  page.on("dialog", unexpectedPrompt);
+  const westGroup = groups.filter({ hasText: "West" });
+  await westGroup.getByRole("button", { name: "Delete branch", exact: true }).click();
+  await expect(branchConfirmation).toBeVisible();
+  await expect(branchConfirmation).toContainText("West");
+  await expect(branchConfirmation).toContainText("archived for super administrators");
+  await expect(branchConfirmation).toHaveCSS("background-color", "rgb(27, 35, 50)");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectResponsiveFit(page);
+  await page.screenshot({ path: info.outputPath("branch-confirm-dark-mobile.png"), fullPage: true });
+  await branchConfirmation.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await expect(westGroup).toBeVisible();
+  await westGroup.getByRole("button", { name: "Delete branch", exact: true }).click();
+  await branchConfirmation.getByRole("button", { name: "Delete branch", exact: true }).click();
+  await expect(branchConfirmation).toHaveCount(0);
+  await expect(westGroup).toHaveCount(0);
+  await expect(page.locator(".p-branch-toggle").filter({ hasText: "Central" })).toHaveCount(2);
+  const archivedBusiness = (await (await page.request.get("/api/portal/businesses", { headers })).json()).businesses
+    .find(item => item.businessId === business.businessId);
+  expect(archivedBusiness.departments.find(item => item.name === "West").status).toBe("deleted");
+  expect(archivedBusiness.branches.find(item => item.name === "Development").status).toBe("deleted");
+  if (await unassigned.locator(".p-branch-toggle").getAttribute("aria-expanded") === "false")
+    await unassigned.locator(".p-branch-toggle").click();
+  const legacyRow = unassigned.getByRole("row").filter({ hasText: "Legacy B" });
+  await legacyRow.getByRole("button", { name: "Delete department", exact: true }).click();
+  const departmentConfirmation = page.getByRole("alertdialog", { name: "Delete department?", exact: true });
+  await expect(departmentConfirmation).toContainText("Legacy B");
+  await page.keyboard.press("Escape");
+  await expect(departmentConfirmation).toHaveCount(0);
+  await expect(legacyRow).toBeVisible();
+  await legacyRow.getByRole("button", { name: "Delete department", exact: true }).click();
+  await departmentConfirmation.getByRole("button", { name: "Delete department", exact: true }).click();
+  await expect(departmentConfirmation).toHaveCount(0);
+  await expect(legacyRow).toHaveCount(0);
+  await expect(unassigned.getByRole("cell", { name: "Legacy A", exact: true })).toBeVisible();
+  expect(nativePrompts).toEqual([]);
+  page.off("dialog", unexpectedPrompt);
+});
+
+test("Sales staff redeem another location's coupon and history counts the actual redeeming location", async ({ page }, info) => {
+  const auth = await page.request.post("/api/auth/login", { data: { loginId: "platform@example.test", password: "Platform-Test-Password" } });
+  const headers = { Authorization: `Bearer ${(await auth.json()).token}` };
+  const response = await page.request.post("/api/portal/businesses", { headers, data: {
+    name: "Cross-location browser business", loginId: "CROSSBROWSER88", password: "Cross-Browser-Password",
+    limits: { card: 0, branch: 0, department: 0, account: 0 },
+  } });
+  expect(response.status()).toBe(201);
+  const { business } = await response.json();
+  const hierarchyResponse = await page.request.post(`/api/portal/businesses/${business.businessId}/departments/branches`, { headers, data: {
+    departments: [
+      { name: "Ameerpet", branches: [{ name: "Sales" }] },
+      { name: "Punjagutta", branches: [{ name: "Sales" }] },
+    ],
+  } });
+  expect(hierarchyResponse.status()).toBe(201);
+  const hierarchy = await hierarchyResponse.json();
+  const serviceResponse = await page.request.post(`/api/portal/businesses/${business.businessId}/branches`, { headers, data: {
+    name: "Service", departmentId: hierarchy.departments[0].departmentId,
+  } });
+  expect(serviceResponse.status()).toBe(201);
+  hierarchy.branches.push((await serviceResponse.json()).branch);
+  await login(page, "platform@example.test", "Platform-Test-Password");
+  await nav(page, "Department staff");
+  await page.getByRole("button", { name: "Add department staff", exact: true }).click();
+  const assignmentDialog = page.getByRole("dialog", { name: "Create department staff login", exact: true });
+  const assignmentSelect = assignmentDialog.getByRole("combobox", { name: "Business, branch and department", exact: true });
+  await expect(assignmentSelect.getByRole("option", { name: `${business.name} · Ameerpet · Sales`, exact: true }))
+    .toHaveAttribute("value", hierarchy.branches[0].branchId);
+  await expect(assignmentSelect.getByRole("option", { name: `${business.name} · Punjagutta · Sales`, exact: true }))
+    .toHaveAttribute("value", hierarchy.branches[1].branchId);
+  await assignmentSelect.selectOption(hierarchy.branches[1].branchId);
+  await expect(assignmentSelect).toHaveValue(hierarchy.branches[1].branchId);
+  await assignmentDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  for (const [index, name, loginId] of [[0, "Ameerpet sales staff", "AMSALESTEST88"], [1, "Punjagutta sales staff", "PJSALESTEST88"], [2, "Ameerpet service staff", "AMSERVICETEST88"]]) {
+    const staff = await page.request.post("/api/portal/users", { headers, data: {
+      businessId: business.businessId, branchId: hierarchy.branches[index].branchId,
+      name, loginId, password: "Cross-Staff-Password", role: "branch-staff", generateCredentials: true,
+    } });
+    expect(staff.status()).toBe(201);
+  }
+  await page.getByRole("button", { name: "Refresh data", exact: true }).click();
+  const staffRows = page.locator(".p-table-scroll tbody tr").filter({ has: page.getByRole("button", { name: "Manage staff", exact: true }) });
+  const locationFilter = page.getByRole("combobox", { name: "Filter by branch", exact: true });
+  const departmentFilter = page.getByRole("combobox", { name: "Filter by department", exact: true });
+  const departmentRows = page.locator(".p-table-scroll tbody tr").filter({ has: page.getByRole("button", { name: "Edit", exact: true }) });
+  await nav(page, "Departments");
+  await page.getByRole("combobox", { name: "Filter by business", exact: true }).selectOption(business.businessId);
+  await departmentFilter.selectOption("sales");
+  await expect(departmentRows).toHaveCount(2);
+  await locationFilter.selectOption({ label: `${business.name} · Ameerpet` });
+  await expect(departmentRows).toHaveCount(2);
+  await departmentFilter.selectOption("service");
+  await expect(departmentRows).toHaveCount(1);
+  await page.getByRole("combobox", { name: "Filter by business", exact: true }).selectOption("");
+  await expect(locationFilter).toHaveValue("");
+  await expect(departmentFilter).toHaveValue("");
+  await nav(page, "Department staff");
+  await page.getByRole("combobox", { name: "Filter by business", exact: true }).selectOption(business.businessId);
+  await expandBranchGroups(page);
+  await expect(staffRows).toHaveCount(3);
+  await departmentFilter.selectOption("sales");
+  await expect(staffRows).toHaveCount(2);
+  await page.getByRole("textbox", { name: "Search Department staff", exact: true }).fill("Punjagutta");
+  await expect(staffRows).toHaveCount(1);
+  await page.getByRole("textbox", { name: "Search Department staff", exact: true }).fill("");
+  await locationFilter.selectOption({ label: `${business.name} · Ameerpet` });
+  await expect(departmentFilter).toHaveValue("");
+  await expect(staffRows).toHaveCount(2);
+  await departmentFilter.selectOption("sales");
+  await expect(staffRows).toHaveCount(1);
+  await expect(staffRows).toContainText("Ameerpet sales staff");
+  await page.getByRole("button", { name: "Refresh data", exact: true }).click();
+  await expect(staffRows).toHaveCount(1);
+  await expect(departmentFilter).toHaveValue("sales");
+  await locationFilter.selectOption({ label: `${business.name} · Punjagutta` });
+  await expect(departmentFilter.locator('option[value="service"]')).toHaveCount(0);
+  await expect(staffRows).toHaveCount(1);
+  await expect(staffRows).toContainText("Punjagutta sales staff");
+  await locationFilter.selectOption("unassigned");
+  await expect(staffRows).toHaveCount(0);
+  await expect(page.getByText("No records found", { exact: true })).toBeVisible();
+  await page.getByRole("combobox", { name: "Filter by business", exact: true }).selectOption("");
+  await expect(locationFilter).toHaveValue("");
+  await expect(departmentFilter).toHaveValue("");
+  await expandBranchGroups(page);
+  for (const location of ["Ameerpet", "Punjagutta"]) {
+    const staffRow = page.getByRole("row").filter({ hasText: `${location} sales staff` });
+    await expect(staffRow.locator('td[data-label="Branch"]')).toHaveCount(0);
+    await expect(page.locator(".p-branch-group").filter({ has: staffRow }).locator(".p-branch-toggle")).toContainText(location);
+    await expect(staffRow.locator('td[data-label="Department"]')).toHaveText("Sales");
+  }
+  await page.getByRole("row").filter({ hasText: "Punjagutta sales staff" })
+    .getByRole("button", { name: "Manage staff", exact: true }).click();
+  const manageDialog = page.getByRole("dialog", { name: "Manage Punjagutta sales staff", exact: true });
+  const manageAssignment = manageDialog.getByRole("combobox", { name: "Assigned branch and department", exact: true });
+  await expect(manageAssignment).toHaveValue(hierarchy.branches[1].branchId);
+  await expect(manageAssignment.locator("option:checked")).toHaveText("Punjagutta · Sales");
+  await expect(manageAssignment).not.toContainText(business.name);
+  await manageDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.locator(".p-topbar").getByRole("button", { name: "Sign out", exact: true }).click();
+  await login(page, "CROSSBROWSER88", "Cross-Browser-Password");
+  await nav(page, "Departments");
+  await expandBranchGroups(page);
+  await expect(departmentRows).toHaveCount(3);
+  await departmentFilter.selectOption("sales");
+  await expect(departmentRows).toHaveCount(2);
+  await locationFilter.selectOption({ label: "Ameerpet" });
+  await expect(departmentFilter).toHaveValue("");
+  await expect(departmentRows).toHaveCount(2);
+  await departmentFilter.selectOption("service");
+  await expect(departmentRows).toHaveCount(1);
+  await expect(departmentRows.locator('td[data-label="Branch"]')).toHaveCount(0);
+  await expect(page.locator(".p-branch-group").filter({ has: departmentRows }).locator(".p-branch-toggle")).toContainText("Ameerpet");
+  await expect(departmentRows.locator('td[data-label="Department"]')).toHaveText("Service");
+  await expect(page.getByRole("region", { name: "Branch controls", exact: true })).toContainText("Ameerpet");
+  await expect(page.getByRole("region", { name: "Branch controls", exact: true })).not.toContainText("Punjagutta");
+  const departmentExport = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export departments", exact: true }).click();
+  const departmentDownload = await departmentExport;
+  const departmentWorkbook = unzipSync(await fs.readFile(await departmentDownload.path()));
+  const departmentSheet = strFromU8(departmentWorkbook["xl/worksheets/sheet1.xml"]);
+  const departmentWorkbookText = Object.values(departmentWorkbook).map((value) => strFromU8(value)).join(" ");
+  expect((departmentSheet.match(/<row\b/g) || []).length).toBe(2);
+  expect(departmentWorkbookText).toContain("Ameerpet");
+  expect(departmentWorkbookText).toContain("Service");
+  expect(departmentWorkbookText).not.toContain("Punjagutta");
+  expect(departmentWorkbookText).not.toContain("Sales");
+  await page.getByRole("textbox", { name: "Search Departments", exact: true }).fill("Sales");
+  await expect(departmentRows).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Export departments", exact: true })).toBeDisabled();
+  await page.getByRole("textbox", { name: "Search Departments", exact: true }).fill("");
+  await page.getByRole("button", { name: "Refresh data", exact: true }).click();
+  await expect(departmentFilter).toHaveValue("service");
+  await expect(departmentRows).toHaveCount(1);
+  await locationFilter.selectOption({ label: "Punjagutta" });
+  await expect(departmentFilter).toHaveValue("");
+  await expect(departmentFilter.locator('option[value="service"]')).toHaveCount(0);
+  await expect(departmentRows).toHaveCount(1);
+  await page.screenshot({ path: info.outputPath("departments-filters-desktop.png"), fullPage: true });
+  await page.getByRole("switch", { name: "Dark mode" }).click();
+  const branchControls = page.getByRole("region", { name: "Branch controls", exact: true });
+  await expect(branchControls).toHaveCSS("background-color", "rgb(21, 40, 59)");
+  await expect(branchControls.locator(".p-department-control")).toHaveCSS("background-color", "rgb(16, 30, 45)");
+  await expect(branchControls.locator(".p-department-control")).toHaveCSS("color", "rgb(237, 240, 247)");
+  const deleteBranch = branchControls.getByRole("button", { name: "Delete branch", exact: true });
+  await expect(deleteBranch).toHaveCSS("background-color", "rgb(66, 38, 50)");
+  await expect(deleteBranch).toHaveCSS("color", "rgb(255, 187, 196)");
+  await deleteBranch.hover();
+  await expect(deleteBranch).toHaveCSS("background-color", "rgb(88, 48, 64)");
+  await page.screenshot({ path: info.outputPath("departments-dark-desktop.png"), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(() => page.locator(".p-sidebar").evaluate((element) => element.getBoundingClientRect().right)).toBeLessThanOrEqual(1);
+  await expectResponsiveFit(page);
+  await page.screenshot({ path: info.outputPath("departments-filters-mobile.png"), fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await nav(page, "Department staff");
+  await expect(locationFilter).toHaveValue("");
+  await expect(departmentFilter).toHaveValue("");
+  await locationFilter.selectOption({ label: "Ameerpet" });
+  await expect(staffRows).toHaveCount(2);
+  await departmentFilter.selectOption("service");
+  await expect(staffRows).toHaveCount(1);
+  await expect(staffRows).toContainText("Ameerpet service staff");
+  await locationFilter.selectOption("");
+  await departmentFilter.selectOption("sales");
+  await expect(staffRows).toHaveCount(2);
+  await expect(page.locator(".p-info")).toHaveCSS("background-color", "rgb(21, 40, 59)");
+  await expect(page.locator(".p-info")).toHaveCSS("color", "rgb(185, 194, 211)");
+  await page.screenshot({ path: info.outputPath("department-staff-dark-desktop.png"), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(() => page.locator(".p-sidebar").evaluate((element) => element.getBoundingClientRect().right)).toBeLessThanOrEqual(1);
+  await expectResponsiveFit(page);
+  await page.screenshot({ path: info.outputPath("department-staff-filters-mobile.png"), fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole("switch", { name: "Dark mode" }).click();
+  await expect(page.locator(".p-info")).toHaveCSS("background-color", "rgb(250, 251, 254)");
+  await page.locator(".p-topbar").getByRole("button", { name: "Sign out", exact: true }).click();
+  const creationAuth = await page.request.post("/api/auth/login", { data: { loginId: "platform@example.test", password: "Platform-Test-Password" } });
+  const creationHeaders = { Authorization: `Bearer ${(await creationAuth.json()).token}` };
+  const created = await page.request.post("/api/cards", { headers: creationHeaders, data: {
+    businessId: business.businessId, branchId: hierarchy.branches[0].branchId,
+    headline: "Sales reward", offerTitle: "15% OFF", description: "Your next visit",
+    couponCode: "CROSS-LOCATION-BROWSER", customerPhone: "9876543210",
+  } });
+  expect(created.status()).toBe(201);
+  const card = await created.json();
+  expect((await page.request.post(`/api/cards/${card.slug}/claim`)).status()).toBe(200);
+  await login(page, "CROSSBROWSER88", "Cross-Browser-Password");
+  await nav(page, "Coupons");
+  const couponRow = page.getByRole("row").filter({ hasText: "CROSS-LOCATION-BROWSER" });
+  await expect(couponRow.locator('td[data-label="Branch"]')).toHaveText("Ameerpet");
+  await expect(couponRow.locator('td[data-label="Department"]')).toHaveText("Sales");
+  const couponExport = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export Excel", exact: true }).click();
+  const exported = await couponExport;
+  const couponWorkbook = unzipSync(await fs.readFile(await exported.path()));
+  const couponWorkbookText = Object.values(couponWorkbook).map((value) => strFromU8(value)).join(" ");
+  for (const value of ["Branch", "Department", "Ameerpet", "Sales"]) expect(couponWorkbookText).toContain(value);
+  await page.screenshot({ path: info.outputPath("coupons-branch-column-desktop.png"), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(() => page.locator(".p-sidebar").evaluate((element) => element.getBoundingClientRect().right)).toBeLessThanOrEqual(1);
+  await expectResponsiveFit(page);
+  await page.screenshot({ path: info.outputPath("coupons-branch-column-mobile.png"), fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.locator(".p-topbar").getByRole("button", { name: "Sign out", exact: true }).click();
+  await login(page, "PJSALESTEST88", "Cross-Staff-Password");
+  await expect(page.locator(".p-staff-location")).toHaveText("Branch: Punjagutta");
+  await expect(page.locator(".p-workspace-assignment")).toHaveText("Branch: Punjagutta · Sales");
+  await page.screenshot({ path: info.outputPath("staff-dashboard-assigned-branch.png") });
+  await page.getByLabel("Coupon code", { exact: true }).fill("CROSS-LOCATION-BROWSER");
+  await page.getByRole("main").getByRole("button", { name: "Redeem coupon", exact: true }).click();
+  const popup = page.getByRole("alertdialog");
+  await expect(popup.getByRole("heading", { name: "Coupon redeemed", exact: true })).toBeVisible();
+  await expect(popup.locator(".p-result-details > div").filter({ has: page.locator("dt", { hasText: /^Issued branch$/ }) })).toContainText("Ameerpet");
+  await expect(popup.locator(".p-result-details > div").filter({ has: page.locator("dt", { hasText: /^Redeemed branch$/ }) })).toContainText("Punjagutta");
+  await expect(popup).toContainText("Punjagutta sales staff");
+  await expect(popup).toContainText("Date & time");
+  await page.screenshot({ path: info.outputPath("cross-location-redemption.png"), fullPage: true });
+  await popup.getByRole("button", { name: "Done", exact: true }).click();
+  await expect(page.locator(".p-staff-metrics article").filter({ hasText: "Total redeemed" }).locator("strong")).toHaveText("1");
+  await nav(page, "Redemption history");
+  await expect(page.getByRole("row").filter({ hasText: "CROSS-LOCATION-BROWSER" })).toBeVisible();
+  await page.locator(".p-topbar").getByRole("button", { name: "Sign out", exact: true }).click();
+  await login(page, "AMSALESTEST88", "Cross-Staff-Password");
+  await expect(page.locator(".p-staff-location")).toHaveText("Branch: Ameerpet");
+  await expect(page.locator(".p-workspace-assignment")).toHaveText("Branch: Ameerpet · Sales");
+  await expect(page.locator(".p-staff-metrics article").filter({ hasText: "Total redeemed" }).locator("strong")).toHaveText("0");
+  await nav(page, "Redemption history");
+  await expect(page.getByRole("row").filter({ hasText: "CROSS-LOCATION-BROWSER" })).toHaveCount(0);
+  await nav(page, "Redeem coupon");
+  await page.getByLabel("Coupon code", { exact: true }).fill("CROSS-LOCATION-BROWSER");
+  await page.getByRole("main").getByRole("button", { name: "Redeem coupon", exact: true }).click();
+  await expect(popup.getByRole("heading", { name: "Coupon cannot be redeemed", exact: true })).toBeVisible();
+  await expect(popup).toContainText("Punjagutta sales staff");
+  await expect(popup).toContainText("Punjagutta");
+  const cleanupAuth = await page.request.post("/api/auth/login", { data: { loginId: "platform@example.test", password: "Platform-Test-Password" } });
+  const cleanupHeaders = { Authorization: `Bearer ${(await cleanupAuth.json()).token}` };
+  expect((await page.request.delete(`/api/portal/businesses/${business.businessId}`, { headers: cleanupHeaders, data: { confirmName: business.name } })).status()).toBe(200);
 });
 
 test("super admin can delete all coupons for one verified business only", async ({ page }) => {

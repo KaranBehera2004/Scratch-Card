@@ -4,6 +4,7 @@ import "../../styles/portal-theme.css";
 import { WorkspaceLocale, useWorkspaceText, workspaceTranslator } from "../../i18n/workspace-i18n.js";
 import { summarizeCampaigns } from "./campaigns.js";
 import { scratchApiUrl, scratchCardUrl } from "../../../../server/shared/urls.js";
+import { COUPON_STATUSES, summarizeCouponStatuses } from "../../../../server/shared/coupon-status.js";
 import { EMPTY_COUPON_FILTERS, couponBranchKey, couponCampaignKey, couponDateBounds, filterCouponCards } from "./coupon-filters.js";
 
 function JustConnectLogo({ theme = "light", className = "" }) {
@@ -78,6 +79,8 @@ const paths = {
   audit: "M5 3h14v18H5z M9 7h6 M9 11h6 M9 15h4",
   campaign: "M3 10l17-6v16L3 14z M7 15l2 6h4l-2-7",
   arrow: "M5 12h14 M13 6l6 6-6 6",
+  chevron: "M9 5l7 7-7 7",
+  trash: "M3 6h18 M9 6V3h6v3 M5 6l1 15h12l1-15 M10 10v7 M14 10v7",
   logout: "M10 3H3v18h7 M8 12h13 M16 7l5 5-5 5",
   plus: "M12 4v16 M4 12h16",
   search: "M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14 M15 15l6 6",
@@ -209,7 +212,7 @@ export function PortalLogin({ onLogin }) {
             <br />A lasting connection.
           </h1>
           <p>
-            Create memorable rewards, manage every branch, and see how your
+            Create memorable rewards, manage every department, and see how your
             offers perform.
           </p>
           <div className="p-login-points">
@@ -226,7 +229,7 @@ export function PortalLogin({ onLogin }) {
           <div className="p-login-ticket">
             <small>YOUR NEXT CUSTOMER MOMENT</small>
             <strong>Make it rewarding.</strong>
-            <span>Scratch cards • Branches • Insights</span>
+            <span>Scratch cards • Departments • Insights</span>
           </div>
         </div>
         <small className="p-login-footer">
@@ -481,6 +484,7 @@ function Editor({ editor, onClose, onSave }) {
 }
 
 function RedemptionResultDialog({ feedback, onClose }) {
+  const ui = useWorkspaceText();
   const buttonRef = useRef(null);
   const success = feedback.type === "success";
   const details = feedback.coupon || feedback.details;
@@ -504,15 +508,17 @@ function RedemptionResultDialog({ feedback, onClose }) {
           <Icon name={success ? "check" : "close"} size={34} />
         </div>
         <span className="p-eyebrow">{success ? "REDEMPTION SUCCESSFUL" : "REDEMPTION FAILED"}</span>
-        <h2 id="redemption-result-title">{feedback.title}</h2>
-        <p>{feedback.message}</p>
+        <h2 id="redemption-result-title">{ui(feedback.title)}</h2>
+        <p>{ui(feedback.message)}</p>
         {details && <dl className="p-result-details">
           {details.couponCode && <div><dt>Coupon code</dt><dd>{details.couponCode}</dd></div>}
           {details.offerTitle && <div><dt>Reward</dt><dd>{details.offerTitle}</dd></div>}
           {details.redemptionStatus && <div><dt>Status</dt><dd>{details.redemptionStatus}</dd></div>}
-          {details.assignedBranchName && <div><dt>Assigned branch</dt><dd>{details.assignedBranchName}</dd></div>}
-          {details.redeemedBranchName && <div><dt>Redeemed branch</dt><dd>{details.redeemedBranchName}</dd></div>}
-          {details.branchName && !details.redeemedBranchName && <div><dt>Branch</dt><dd>{details.branchName}</dd></div>}
+          {details.assignedBranchName && <div><dt>Assigned department</dt><dd>{details.assignedBranchName}</dd></div>}
+          {details.assignedLocationName && <div><dt>Issued branch</dt><dd>{details.assignedLocationName}</dd></div>}
+          {details.redeemedBranchName && <div><dt>Redeemed department</dt><dd>{details.redeemedBranchName}</dd></div>}
+          {details.redeemedLocationName && <div><dt>Redeemed branch</dt><dd>{details.redeemedLocationName}</dd></div>}
+          {details.branchName && !details.redeemedBranchName && <div><dt>Department</dt><dd>{details.branchName}</dd></div>}
           {details.staffName && <div><dt>Staff member</dt><dd>{details.staffName}</dd></div>}
           {details.redeemedAt && <div><dt>Date &amp; time</dt><dd>{new Date(details.redeemedAt).toLocaleString()}</dd></div>}
         </dl>}
@@ -731,7 +737,7 @@ function CouponManagerDialog({ business, cards, busy, onClose, onPreview, onCopy
     ["Disabled", count("disabled")],
   ];
   const branchName = (card) => business.branches?.find((branch) =>
-    branch.branchId === card.branchId)?.name || card.branchName || "All branches";
+    branch.branchId === card.branchId)?.name || card.branchName || "All departments";
   return (
     <div className="p-backdrop p-coupon-manager-backdrop" onMouseDown={(event) => {
       if (event.target === event.currentTarget) onClose();
@@ -750,7 +756,7 @@ function CouponManagerDialog({ business, cards, busy, onClose, onPreview, onCopy
         <div className="p-coupon-manager-tools">
           <label><span>Search coupons</span><input type="search" aria-label="Search coupons" value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Code, reward, campaign, branch or number" /></label>
+            placeholder="Code, reward, campaign, department or number" /></label>
           <label><span>Coupon status</span><select aria-label="Coupon status" value={status}
             onChange={(event) => setStatus(event.target.value)}>
             {["all", "available", "opened", "scratched", "redeemed", "expired", "disabled"].map((value) =>
@@ -786,7 +792,12 @@ function CouponManagerDialog({ business, cards, busy, onClose, onPreview, onCopy
 }
 
 const newBranchDraft = () => ({ name: "", address: "" });
-const newDepartmentDraft = () => ({ name: "", branches: [newBranchDraft()] });
+let nextHierarchyDraftId = 0;
+const newDepartmentDraft = (branchCount = 1) => ({
+  draftId: ++nextHierarchyDraftId,
+  name: "",
+  branches: Array.from({ length: branchCount }, newBranchDraft),
+});
 const resizeDrafts = (items, count, factory) => [
   ...items.slice(0, count),
   ...Array.from({ length: Math.max(0, count - items.length) }, factory),
@@ -800,9 +811,11 @@ const hasDepartmentCapacity = (item) => Boolean(item) && (!item.limits?.departme
 const hasHierarchyCapacity = (item) => hasBranchCapacity(item) && hasDepartmentCapacity(item);
 
 function DepartmentBranchEditor({ businesses, initialBusinessId, onClose, onSave }) {
+  const ui = useWorkspaceText();
   const firstAvailableBusiness = businesses.find(hasHierarchyCapacity);
   const [businessId, setBusinessId] = useState(initialBusinessId || firstAvailableBusiness?.businessId || "");
-  const [departments, setDepartments] = useState([newDepartmentDraft()]);
+  const [departments, setDepartments] = useState(() => [newDepartmentDraft()]);
+  const [defaultBranchCount, setDefaultBranchCount] = useState(1);
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
   const branchTotal = departments.reduce((sum, item) => sum + item.branches.length, 0);
   const selectedBusiness = businesses.find((item) => item.businessId === businessId);
@@ -816,9 +829,12 @@ function DepartmentBranchEditor({ businesses, initialBusinessId, onClose, onSave
     : Infinity;
   const departmentLimitExceeded = departments.length > departmentRemaining;
   const branchLimitExceeded = branchTotal > branchRemaining;
-  const maximumDepartmentsByBranchCapacity = Number.isFinite(branchRemaining)
-    ? Math.max(0, branchRemaining - (branchTotal - departments.length))
-    : 20;
+  const availableBranchSlots = Math.min(200, branchRemaining);
+  const maximumDefaultBranchCount = Math.max(1, Math.min(50,
+    Math.floor(availableBranchSlots / Math.max(1, departments.length))));
+  const effectiveDefaultBranchCount = Math.min(defaultBranchCount, maximumDefaultBranchCount);
+  const maximumDepartmentsByBranchCapacity = departments.length
+    + Math.floor(Math.max(0, availableBranchSlots - branchTotal) / effectiveDefaultBranchCount);
   const maximumNewDepartments = Math.min(
     20,
     Number.isFinite(departmentRemaining) ? departmentRemaining : 20,
@@ -827,18 +843,22 @@ function DepartmentBranchEditor({ businesses, initialBusinessId, onClose, onSave
   const submit = async (event) => {
     event.preventDefault();
     setBusy(true); setError("");
-    try { await onSave({ businessId, departments }); }
+    try {
+      if (!departments.length) throw new Error("Add at least one department before saving.");
+      if (branchTotal > availableBranchSlots) throw new Error("The hierarchy exceeds the available branch slots.");
+      await onSave({ businessId, departments: departments.map(({ draftId, ...department }) => department) });
+    }
     catch (reason) { setError(reason.message); }
     finally { setBusy(false); }
   };
   return <div className="p-backdrop">
     <form className="p-dialog p-department-editor" role="dialog" aria-modal="true"
-      aria-label="Add departments and branches" onSubmit={submit}>
+      aria-label={ui("Add departments and branches")} onSubmit={submit}>
       <div className="p-dialog-head">
-        <div><span className="p-eyebrow">PLATFORM STRUCTURE</span><h2>Add departments and branches</h2></div>
+        <div><span className="p-eyebrow">PLATFORM STRUCTURE</span><h2>{ui("Add departments and branches")}</h2></div>
         <button type="button" className="p-icon-button" onClick={onClose} disabled={busy} aria-label="Close dialog"><Icon name="close" /></button>
       </div>
-      <p>Choose how many departments this business needs, then add the branches belonging to each department. Everything is validated and saved together.</p>
+      <p>{ui("Choose how many departments this business needs, then add the branches belonging to each department. Everything is validated and saved together.")}</p>
       <div className="p-hierarchy-summary">
         <label>Business<select required value={businessId} disabled={busy || Boolean(initialBusinessId)}
           onChange={(event) => setBusinessId(event.target.value)}>
@@ -848,50 +868,72 @@ function DepartmentBranchEditor({ businesses, initialBusinessId, onClose, onSave
             {item.name}{hasHierarchyCapacity(item) ? "" : " — workspace limit reached"}
           </option>)}
         </select></label>
-        <label>Number of departments<input type="number" min="1"
-          max={Math.max(1, maximumNewDepartments)} step="1" required
-          disabled={busy || maximumNewDepartments < 1}
+        <label>{ui("Number of departments")}<input type="number" min="0"
+          max={maximumNewDepartments} step="1" required
+          disabled={busy}
           value={departments.length} onChange={(event) => {
-            const count = Math.min(Math.max(1, maximumNewDepartments), Math.max(1, Number(event.target.value) || 1));
-            setDepartments((current) => resizeDrafts(current, count, newDepartmentDraft));
+            const count = Math.min(maximumNewDepartments, Math.max(0, Math.trunc(Number(event.target.value) || 0)));
+            setDepartments((current) => resizeDrafts(current, count, () => newDepartmentDraft(effectiveDefaultBranchCount)));
           }} /></label>
-        <div><b>{branchTotal}</b><span>Total branches</span></div>
+        <label>{ui("Branches per department")}<input type="number" min="1"
+          max={maximumDefaultBranchCount} step="1" required
+          disabled={busy || availableBranchSlots < Math.max(1, departments.length)}
+          value={effectiveDefaultBranchCount} onChange={(event) => {
+            const count = Math.min(maximumDefaultBranchCount, Math.max(1, Math.trunc(Number(event.target.value) || 1)));
+            setDefaultBranchCount(count);
+            setDepartments((current) => current.map((department) => ({
+              ...department, branches: resizeDrafts(department.branches, count, newBranchDraft),
+            })));
+          }} /></label>
+        <div><b>{branchTotal}</b><span>{ui("Total branches")}</span></div>
       </div>
+      <p className="p-hierarchy-default-note">{ui("Set the default number of branches for every department. You can change each department below.")}</p>
       {Number.isFinite(departmentRemaining) && <div className={`p-alert${departmentLimitExceeded ? " error" : ""}`} role="status">
         {departmentRemaining
-          ? `${departmentRemaining} of ${departmentLimit} department slots remaining for this business.`
-          : `Department limit reached (${departmentLimit}). Increase it in the business workspace settings.`}
+          ? ui("{remaining} of {limit} department slots remaining for this business.", { remaining: departmentRemaining, limit: departmentLimit })
+          : ui("Department limit reached ({limit}). Increase it in the business workspace settings.", { limit: departmentLimit })}
       </div>}
       {Number.isFinite(branchRemaining) && <div className={`p-alert${branchLimitExceeded || branchRemaining === 0 ? " error" : ""}`} role="status">
         {branchRemaining
-          ? `${branchRemaining} of ${branchLimit} branch slots remaining for this business. The form will not allow more.`
-          : `Branch limit reached (${branchLimit}). Increase it in the business workspace settings before adding another branch.`}
+          ? ui("{remaining} of {limit} branch slots remaining for this business. The form will not allow more.", { remaining: branchRemaining, limit: branchLimit })
+          : ui("Branch limit reached ({limit}). Increase it in the business workspace settings before adding another branch.", { limit: branchLimit })}
       </div>}
       <div className="p-department-list">
-        {departments.map((department, departmentIndex) => <fieldset key={departmentIndex}>
-          <legend>Department {departmentIndex + 1}</legend>
+        {!departments.length && <div className="p-hierarchy-empty" role="status">
+          <p>{ui("No departments added. Add a department to continue.")}</p>
+          <button type="button" className="p-button" disabled={busy || maximumNewDepartments < 1}
+            onClick={() => setDepartments([newDepartmentDraft(effectiveDefaultBranchCount)])}>
+            <Icon name="plus" />{ui("Add department")}
+          </button>
+        </div>}
+        {departments.map((department, departmentIndex) => <fieldset key={department.draftId}>
+          <legend>{ui("Department {number}", { number: departmentIndex + 1 })}</legend>
+          <div className="p-hierarchy-panel-actions">
+            <button type="button" className="p-button small danger" disabled={busy}
+              aria-label={ui("Remove department {number}", { number: departmentIndex + 1 })}
+              onClick={() => setDepartments((current) => current.filter((item) => item.draftId !== department.draftId))}>
+              <Icon name="close" size={16} />{ui("Remove department")}
+            </button>
+          </div>
           <div className="p-department-head">
-            <label>Department name<input required maxLength="60" value={department.name}
+            <label>{ui("Department name")}<input required maxLength="60" value={department.name}
               onChange={(event) => setDepartments((current) => current.map((item, index) =>
                 index === departmentIndex ? { ...item, name: event.target.value } : item))} /></label>
-            <label>Number of branches<input type="number" min="1"
-              max={Math.max(1, Math.min(50, Number.isFinite(branchRemaining)
-                ? branchRemaining - (branchTotal - department.branches.length)
-                : 50))}
-              step="1" required disabled={busy || branchRemaining < 1}
+            <label>{ui("Number of branches")}<input type="number" min="1"
+              max={Math.max(1, Math.min(50, availableBranchSlots - (branchTotal - department.branches.length)))}
+              step="1" required disabled={busy || availableBranchSlots < 1}
               value={department.branches.length} onChange={(event) => {
-                const availableForDepartment = Math.max(1, Math.min(50, Number.isFinite(branchRemaining)
-                  ? branchRemaining - (branchTotal - department.branches.length)
-                  : 50));
-                const count = Math.min(availableForDepartment, Math.max(1, Number(event.target.value) || 1));
+                const availableForDepartment = Math.max(1, Math.min(50,
+                  availableBranchSlots - (branchTotal - department.branches.length)));
+                const count = Math.min(availableForDepartment, Math.max(1, Math.trunc(Number(event.target.value) || 1)));
                 setDepartments((current) => current.map((item, index) => index === departmentIndex
                   ? { ...item, branches: resizeDrafts(item.branches, count, newBranchDraft) } : item));
               }} /></label>
           </div>
           <div className="p-hierarchy-branches">
             {department.branches.map((branch, branchIndex) => <div key={branchIndex}>
-              <span>Branch {branchIndex + 1}</span>
-              <label>Branch name<input required maxLength="60" value={branch.name}
+              <span>{ui("Branch {number}", { number: branchIndex + 1 })}</span>
+              <label>{ui("Branch name")}<input required maxLength="60" value={branch.name}
                 onChange={(event) => setDepartments((current) => current.map((item, index) => index === departmentIndex
                   ? { ...item, branches: item.branches.map((value, position) => position === branchIndex ? { ...value, name: event.target.value } : value) } : item))} /></label>
               <label>Address <em>optional</em><input maxLength="140" value={branch.address}
@@ -901,12 +943,73 @@ function DepartmentBranchEditor({ businesses, initialBusinessId, onClose, onSave
           </div>
         </fieldset>)}
       </div>
-      {error && <div className="p-alert error" role="alert">{error}</div>}
-      <footer><button type="button" className="p-button" onClick={onClose} disabled={busy}>Cancel</button>
-        <button className="p-button primary" disabled={busy || departmentLimitExceeded || branchLimitExceeded || branchRemaining === 0}>{busy ? "Saving…" : `Create ${departments.length} ${departments.length === 1 ? "department" : "departments"} and ${branchTotal} ${branchTotal === 1 ? "branch" : "branches"}`}</button></footer>
+      {error && <div className="p-alert error" role="alert">{ui(error)}</div>}
+      <footer><button type="button" className="p-button" onClick={onClose} disabled={busy}>{ui("Cancel")}</button>
+        <button className="p-button primary" disabled={busy || !departments.length || departmentLimitExceeded || branchLimitExceeded || branchTotal > availableBranchSlots || branchRemaining === 0}>{busy ? ui("Saving…") : ui("Create {branches} {branchLabel} and {departments} {departmentLabel}", {
+          branches: departments.length,
+          branchLabel: departments.length === 1 ? "department" : "departments",
+          departments: branchTotal,
+          departmentLabel: branchTotal === 1 ? "branch" : "branches",
+        })}</button></footer>
     </form>
   </div>;
 }
+function DeleteConfirmationDialog({ title, message, values = {}, confirmLabel, onClose, onDelete }) {
+  const ui = useWorkspaceText();
+  const ref = useRef(null);
+  const cancelRef = useRef(null);
+  const submitting = useRef(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    const previous = document.activeElement;
+    const dialog = ref.current;
+    const previousOverflow = document.body.style.overflow;
+    dialog.showModal();
+    cancelRef.current?.focus();
+    document.body.style.overflow = "hidden";
+    return () => {
+      dialog.close();
+      document.body.style.overflow = previousOverflow;
+      if (previous?.isConnected) previous.focus();
+    };
+  }, []);
+  const confirm = async () => {
+    if (submitting.current) return;
+    submitting.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      await onDelete();
+    } catch (reason) {
+      setError(reason.message);
+      setBusy(false);
+      submitting.current = false;
+    }
+  };
+  return <dialog ref={ref} className="p-dialog p-staff-confirm" role="alertdialog"
+    aria-labelledby="delete-confirmation-title" aria-describedby="delete-confirmation-description" aria-busy={busy}
+    onCancel={(event) => { event.preventDefault(); if (!submitting.current) onClose(); }}>
+    <div className="p-dialog-head">
+      <div className="p-staff-confirm-heading">
+        <span className="p-staff-confirm-icon" aria-hidden="true"><Icon name="trash" size={24} /></span>
+        <h2 id="delete-confirmation-title">{ui(title)}</h2>
+      </div>
+      <button type="button" className="p-icon-button" disabled={busy} aria-label={ui("Close dialog")} onClick={onClose}>
+        <Icon name="close" />
+      </button>
+    </div>
+    <p id="delete-confirmation-description">{ui(message, values)}</p>
+    {error && <div className="p-alert error" role="alert">{ui(error)}</div>}
+    <footer>
+      <button ref={cancelRef} type="button" className="p-button" disabled={busy} onClick={onClose}>{ui("Cancel")}</button>
+      <button type="button" className="p-button danger" disabled={busy} onClick={confirm}>
+        {ui(busy ? "Deleting…" : confirmLabel)}
+      </button>
+    </footer>
+  </dialog>;
+}
+
 function CredentialsDialog({ credentials, onClose }) {
   const ref = useRef(null);
   const [copied, setCopied] = useState(""), [error, setError] = useState("");
@@ -1104,8 +1207,13 @@ export default function Portal({
     [search, setSearch] = useState(""),
     [status, setStatus] = useState("all"),
     [businessFilter, setBusinessFilter] = useState(""),
+    [locationFilter, setLocationFilter] = useState(""),
+    [departmentFilter, setDepartmentFilter] = useState(""),
+    [expandedLocations, setExpandedLocations] = useState({}),
     [couponFilters, setCouponFilters] = useState(() => ({ ...EMPTY_COUPON_FILTERS })),
     [editor, setEditor] = useState(null),
+    [staffToDelete, setStaffToDelete] = useState(null),
+    [structureToDelete, setStructureToDelete] = useState(null),
     [couponManagerBusinessId, setCouponManagerBusinessId] = useState(""),
     [departmentEditor, setDepartmentEditor] = useState(false),
     [credentials, setCredentials] = useState(null),
@@ -1164,6 +1272,10 @@ export default function Portal({
   const branchStaffBranch = branchStaff
     ? business?.branches?.find((item) => item.branchId === session.user.branchId)
     : null;
+  const branchStaffLocation = business?.departments?.find((item) =>
+    item.departmentId === branchStaffBranch?.departmentId);
+  const branchStaffLocationName = branchStaffLocation?.name
+    || ui(branchStaffBranch?.departmentId ? "Unavailable department" : "Unassigned");
   useEffect(() => {
     try {
       sessionStorage.setItem("scratch-card-dashboard-return", location.href);
@@ -1171,6 +1283,10 @@ export default function Portal({
       // Navigation still works through browser history when storage is unavailable.
     }
   }, [tab, workspaceId]);
+  useEffect(() => {
+    setLocationFilter("");
+    setDepartmentFilter("");
+  }, [businessFilter, tab, workspaceId]);
   const branchCreationDisabled = global
     ? !businesses.some(hasBranchCapacity)
     : !hasBranchCapacity(business);
@@ -1428,14 +1544,33 @@ export default function Portal({
       businessId: item.businessId,
       businessName: item.name,
     })));
+  const locationKey = (unit) => unit?.departmentId
+    ? `${unit.businessId}:${unit.departmentId}` : "unassigned";
+  const departmentNameKey = (name) => String(name || "").trim().toLowerCase();
+  const structureUnits = branches.filter((unit) =>
+    (platformAdmin || unit.status !== "deleted") && inSelectedBusiness(unit));
+  const locationOptions = departments.filter((location) =>
+    (platformAdmin || location.status !== "deleted") && inSelectedBusiness(location))
+    .map((location) => ({
+      value: `${location.businessId}:${location.departmentId}`,
+      label: global ? `${location.businessName} · ${location.name}` : location.name,
+    })).sort((a, b) => a.label.localeCompare(b.label));
+  const departmentOptions = [...new Map(structureUnits.filter((unit) =>
+    (!locationFilter || locationKey(unit) === locationFilter) && departmentNameKey(unit.name))
+    .map((unit) => [departmentNameKey(unit.name), { value: departmentNameKey(unit.name), label: unit.name }]))
+    .values()].sort((a, b) => a.label.localeCompare(b.label));
+  const matchesStructureFilters = (unit) => (!locationFilter || locationKey(unit) === locationFilter)
+    && (!departmentFilter || departmentNameKey(unit?.name) === departmentFilter);
   const options = businesses.map((item) => ({
     value: item.businessId,
     label: item.name,
   }));
-  const visibleBranches = branches.filter((branch) =>
-    (platformAdmin || branch.status !== "deleted") && inSelectedBusiness(branch) && match(branch));
+  const visibleBranches = structureUnits.filter((branch) => matchesStructureFilters(branch) && match(branch));
   const visibleDepartments = departments.filter((department) =>
-    (platformAdmin || department.status !== "deleted") && inSelectedBusiness(department));
+    (platformAdmin || department.status !== "deleted") && inSelectedBusiness(department)
+    && (!locationFilter || locationKey(department) === locationFilter)
+    && (!departmentFilter || structureUnits.some((unit) => unit.businessId === department.businessId
+      && unit.departmentId === department.departmentId && departmentNameKey(unit.name) === departmentFilter)));
   const couponBranchOptions = new Map(branches.filter(inSelectedBusiness).map((branch) => [couponBranchKey(branch), {
     key: couponBranchKey(branch),
     name: global ? `${branch.businessName} · ${branch.name}` : branch.name,
@@ -1565,7 +1700,7 @@ export default function Portal({
         return api(`/api/portal/businesses/${item.businessId}`, "PATCH", payload);
       },
     });
-  const createBranch = (inline = false, onSaved) =>
+  const createBranch = () =>
     setEditor({
       title: "Add branch",
       fields: [...(global ? [{ ...businessSelect, options: options.filter((option) =>
@@ -1576,30 +1711,19 @@ export default function Portal({
               .filter((item) => (item.status || "active") === "active")
               .map((item) => ({ value: item.departmentId, label: item.name }))] }] : [])],
       values: { businessId: workspaceId },
-      quietRefresh: inline === true,
-      onSaved: typeof onSaved === "function" ? onSaved : undefined,
-      save: async (values) => {
-        const result = await api(
+      save: (values) => api(
           `/api/portal/businesses/${values.businessId}/branches`,
           "POST",
           values,
-        );
-        // The response confirms persistence. Update this workspace without
-        // unmounting its draft form, even if a later background refresh fails.
-        if (inline === true && result.branch) setBusinesses((current) => current.map((item) =>
-          item.businessId === values.businessId ? { ...item, branches: [
-            ...(item.branches || []).filter((branch) => branch.branchId !== result.branch.branchId), result.branch,
-          ] } : item));
-        return result;
-      },
+        ),
     });
   const createDepartmentHierarchy = () => setDepartmentEditor(true);
   const saveDepartmentHierarchy = async ({ businessId, departments }) => {
     const result = await api(`/api/portal/businesses/${businessId}/departments/branches`, "POST", { departments });
     setDepartmentEditor(false);
-    const departmentLabel = result.departments.length === 1 ? "department" : "departments";
-    const branchLabel = result.branches.length === 1 ? "branch" : "branches";
-    setNotice(`${result.departments.length} ${departmentLabel} and ${result.branches.length} ${branchLabel} created successfully.`);
+    const branchLabel = result.departments.length === 1 ? "branch" : "branches";
+    const departmentLabel = result.branches.length === 1 ? "department" : "departments";
+    setNotice(`${result.departments.length} ${branchLabel} and ${result.branches.length} ${departmentLabel} created successfully.`);
     await refresh();
   };
   const createAccount = () =>
@@ -1642,12 +1766,12 @@ export default function Portal({
         },
         {
           key: "branchId",
-          label: "Business and branch",
+          label: global ? "Business, department and branch" : "Department and branch",
           type: "select",
           required: true,
           options: availableBranches.map((item) => ({
             value: item.branchId,
-            label: `${item.businessName} · ${item.name}`,
+            label: [global && item.businessName, item.departmentName, item.name].filter(Boolean).join(" · "),
           })),
         },
         ...accountPasswordFields,
@@ -1714,10 +1838,15 @@ export default function Portal({
       fields: [
         {
           key: "branchId",
-          label: "Assigned branch",
+          label: "Assigned department and branch",
           type: "select",
           required: true,
-          options: businessBranches.map((branch) => ({ value: branch.branchId, label: branch.name })),
+          options: businessBranches.map((branch) => ({
+            value: branch.branchId,
+            // This dialog only permits assignments inside the staff member's
+            // existing business, even when opened by a super administrator.
+            label: `${branch.departmentName} · ${branch.name}`,
+          })),
         },
         {
           key: "status",
@@ -1732,12 +1861,23 @@ export default function Portal({
       save: (values) => api(`/api/portal/users/${item.id}`, "PATCH", values),
     });
   };
+  const couponDepartmentName = (card) => branches.find((unit) =>
+    unit.businessId === card.businessId && unit.branchId === card.branchId)?.name
+      || card.branchName || ui("All branches");
+  const couponLocationName = (card) => {
+    if (!card.branchId) return ui("All departments");
+    const assignedBusiness = businesses.find((item) => item.businessId === card.businessId);
+    const unit = assignedBusiness?.branches?.find((item) => item.branchId === card.branchId);
+    if (unit && !unit.departmentId) return ui("Unassigned");
+    return assignedBusiness?.departments?.find((item) => item.departmentId === unit?.departmentId)?.name
+      || ui("Unavailable department");
+  };
   const exportCards = async () => {
     setBusy(true);
     setError("");
     try {
       const { default: write } = await import("write-excel-file/universal");
-      const labels = [...t("excelHeaders"), ui("Expiry date"), ui("WhatsApp number")],
+      const labels = [...t("excelHeaders"), ui("Expiry date"), ui("WhatsApp number"), ui("Department"), ui("Branch")],
         rows = visibleCards.map((item) =>
           [
             item.couponCode,
@@ -1761,6 +1901,8 @@ export default function Portal({
             scratchCardUrl(item.slug),
             item.expiresAt ? localizedDate(item.expiresAt) : ui("No expiry"),
             item.customerPhone || "—",
+            couponLocationName(item),
+            couponDepartmentName(item),
           ].map((value) => ({ value: String(value ?? "") })),
         );
       const blob = await write(
@@ -1794,11 +1936,13 @@ export default function Portal({
       setBusy(false);
     }
   };
-  const used = cards.filter((item) => item.used).length,
-    available = cards.filter((item) => item.status === "available").length,
-    readyToRedeem = cards.filter((item) => item.scratchedAt && !item.staffRedeemedAt).length,
-    staffRedeemed = cards.filter((item) => item.staffRedeemedAt).length,
-    redeemedToday = cards.filter((item) => item.staffRedeemedAt
+  const completedHere = cards.filter((item) => item.staffRedeemedAt
+    && item.staffRedeemedBranchId === session.user.branchId);
+  const couponCounts = summarizeCouponStatuses(cards);
+  const used = couponCounts.redeemed,
+    available = couponCounts.available,
+    staffRedeemed = completedHere.length,
+    redeemedToday = completedHere.filter((item) => item.staffRedeemedAt
       && new Date(item.staffRedeemedAt).toDateString() === new Date().toDateString()).length;
   const campaigns = summarizeCampaigns(managedCards, businesses);
   const campaignRows = campaigns.flatMap((campaign) => campaign.branches.map((branch) => ({
@@ -1881,7 +2025,7 @@ export default function Portal({
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `branches-${language}-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      link.download = `departments-${language}-${new Date().toISOString().slice(0, 10)}.xlsx`;
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -1911,13 +2055,13 @@ export default function Portal({
     {
       title: "Available rewards",
       value: available,
-      caption: "Ready to be scratched",
+      caption: "Not opened or scratched",
       icon: "cards",
     },
     {
       title: "Redeemed coupons",
       value: used,
-      caption: "One-time rewards unlocked",
+      caption: "Claimed by staff",
       icon: "security",
     },
     {
@@ -1927,12 +2071,35 @@ export default function Portal({
       icon: "analytics",
     },
   ];
+  const analyticsStats = [
+    ...(global ? [{
+      title: "Businesses",
+      value: businesses.length,
+      caption: ui("{active} active · {paused} paused", {
+        active: businesses.filter((item) => item.status === "active").length,
+        paused: businesses.filter((item) => item.status === "paused").length,
+      }),
+    }] : []),
+    { title: "Total scratch cards", value: couponCounts.total, caption: global ? "Across all businesses" : "All coupons in this workspace" },
+    { title: "Redemption rate", value: `${couponCounts.redemptionRate}%`,
+      caption: ui("{used} of {total} scratch cards", { used: couponCounts.redeemed, total: couponCounts.total }) },
+    ...[
+      ["available", "Available rewards", "Not opened or scratched"],
+      ["opened", "Opened coupons", "Opened, not scratched"],
+      ["scratched", "Scratched coupons", "Scratched, not redeemed"],
+      ["redeemed", "Redeemed coupons", "Claimed by staff"],
+      ["expired", "Expired coupons", "Expired before redemption"],
+      ["disabled", "Disabled coupons", "Disabled by an administrator"],
+    ].map(([status, title, caption]) => ({ status, title, value: couponCounts[status], caption })),
+  ];
   const cardsTable = (rows, showPhone = false) => (
     <Table
       columns={[
         "Reward & coupon",
         ...(showPhone ? ["WhatsApp number"] : []),
-        ...(global ? ["Business", "Branch"] : ["Branch"]),
+        ...(global ? ["Business"] : []),
+        "Department",
+        "Branch",
         "Campaign",
         "Status",
         "Created",
@@ -1948,16 +2115,9 @@ export default function Portal({
             <small className="p-code">{item.couponCode}</small>
           </td>
           {showPhone && <td>{item.customerPhone || "—"}</td>}
-          <td>
-            {global
-              ? businesses.find((value) => value.businessId === item.businessId)
-                  ?.name || item.senderName
-              : branches.find((value) => value.branchId === item.branchId)
-                  ?.name || ui("All branches")}
-          </td>
-          {global && <td>{branches.find((value) =>
-            value.businessId === item.businessId && value.branchId === item.branchId)
-              ?.name || item.branchName || ui("All branches")}</td>}
+          {global && <td>{businesses.find((value) => value.businessId === item.businessId)?.name || item.senderName}</td>}
+          <td>{couponLocationName(item)}</td>
+          <td>{couponDepartmentName(item)}</td>
           <td>{item.campaignName || ui("General rewards")}</td>
           <td>
             <Badge status={item.status} />
@@ -2012,7 +2172,7 @@ export default function Portal({
       <article className="p-card p-redeem-desk">
         <span className="p-eyebrow">COUPON VERIFICATION</span>
         <h2>Redeem a scratched coupon</h2>
-        <p>Enter a scratched coupon assigned to {branchStaffBranch?.name || "your branch"}.</p>
+        <p>Enter a scratched coupon assigned to {branchStaffBranch?.name || "your department"}.</p>
         <form onSubmit={redeemBranchCoupon}>
           <label htmlFor="branch-redemption-code">Coupon code</label>
           <div>
@@ -2035,18 +2195,18 @@ export default function Portal({
         <h2>Before you redeem</h2>
         <ol>
           <li><b>Customer scratches the card</b><span>The reward and coupon code become visible.</span></li>
-          <li><b>Check the assigned branch</b><span>Only coupons assigned to {branchStaffBranch?.name || "this branch"} can be accepted here.</span></li>
+          <li><b>Check the assigned department</b><span>Coupons for {branchStaffBranch?.name || "this department"} can be redeemed here from any branch of this business. Other departments cannot redeem them.</span></li>
           <li><b>Confirm once</b><span>A redeemed code is locked permanently and cannot be used again.</span></li>
         </ol>
       </article>
     </div>
   );
   const branchRedemptionHistory = (limit) => {
-    const rows = cards.filter((item) => item.staffRedeemedAt && match(item));
+    const rows = completedHere.filter(match);
     const displayed = Number.isFinite(limit) ? rows.slice(0, limit) : rows;
     return <article className="p-card">
       <div className="p-card-title"><div><h2>{limit ? "Recent redemptions" : "Redemption history"}</h2>
-        <p>Coupons completed by staff at {branchStaffBranch?.name || "this branch"}.</p></div></div>
+        <p>Coupons completed by staff at {branchStaffBranch?.name || "this department"}.</p></div></div>
       <Table columns={["Coupon code", "Reward", "Campaign", "Redeemed at", "Status"]}
         empty={!displayed.length}>
         {displayed.map((item) => <tr key={item.slug}>
@@ -2062,7 +2222,7 @@ export default function Portal({
   const branchCouponsTable = (
     <article className="p-card">
       <div className="p-info">
-        Only coupons assigned to {branchStaffBranch?.name || "your branch"} are shown. Coupons from other branches are not accessible or redeemable.
+        Coupons issued here or redeemed here are shown. Enter or scan a coupon code for {branchStaffBranch?.name || "your department"} from any branch of this business to redeem it once.
       </div>
       <Table columns={["Coupon code", "Reward", "Campaign", "Status", "Created", "Expiry date"]}
         empty={!visibleCards.length}>
@@ -2081,19 +2241,20 @@ export default function Portal({
     <>
       <div className="p-welcome-row p-staff-welcome">
         <div>
-          <span className="p-eyebrow">BRANCH REDEMPTION DESK</span>
-          <h1>{branchStaffBranch?.name || "Assigned branch"}</h1>
+          <span className="p-eyebrow">DEPARTMENT REDEMPTION DESK</span>
+          <h1>{branchStaffBranch?.name || "Assigned department"}</h1>
+          <p className="p-staff-location"><Icon name="business" size={16} />
+            <span>{ui("Department")}: <strong>{branchStaffLocationName}</strong></span>
+          </p>
           <p>Verify a customer's scratched coupon code and redeem it securely for {business?.name || "this business"}.</p>
         </div>
         <Badge status="active" />
       </div>
       <div className="p-metrics p-staff-metrics">
-        <article><div><span>Ready to redeem</span><Icon name="cards" /></div>
-          <strong>{readyToRedeem}</strong><small>Customers who revealed their reward</small></article>
         <article><div><span>Redeemed today</span><Icon name="check" /></div>
-          <strong>{redeemedToday}</strong><small>Completed at this branch today</small></article>
+          <strong>{redeemedToday}</strong><small>Completed at this department today</small></article>
         <article><div><span>Total redeemed</span><Icon name="analytics" /></div>
-          <strong>{staffRedeemed}</strong><small>All completed branch redemptions</small></article>
+          <strong>{staffRedeemed}</strong><small>All completed department redemptions</small></article>
       </div>
       <div className="p-staff-redemption-grid">
         <article className="p-card p-redeem-desk">
@@ -2122,17 +2283,17 @@ export default function Portal({
           <h2>Before you redeem</h2>
           <ol>
             <li><b>Customer scratches the card</b><span>The reward and coupon code become visible.</span></li>
-            <li><b>Check the assigned branch</b><span>Only coupons assigned to this branch can be accepted here.</span></li>
+            <li><b>Check the assigned department</b><span>Accept coupons for {branchStaffBranch?.name || "this department"} from any branch of this business. Other departments cannot redeem them.</span></li>
             <li><b>Confirm once</b><span>A redeemed code is locked permanently and cannot be used again.</span></li>
           </ol>
         </article>
       </div>
       <article className="p-card">
         <div className="p-card-title"><div><h2>Recent redemptions</h2>
-          <p>Latest coupons completed at {branchStaffBranch?.name || "this branch"}.</p></div></div>
+          <p>Latest coupons completed at {branchStaffBranch?.name || "this department"}.</p></div></div>
         <Table columns={["Coupon code", "Reward", "Redeemed at", "Status"]}
-          empty={!cards.some((item) => item.staffRedeemedAt)}>
-          {cards.filter((item) => item.staffRedeemedAt).slice(0, 8).map((item) => <tr key={item.slug}>
+          empty={!completedHere.length}>
+          {completedHere.slice(0, 8).map((item) => <tr key={item.slug}>
             <td className="p-code">{item.couponCode}</td>
             <td>{item.offerTitle}</td>
             <td>{localizedDate(item.staffRedeemedAt)}</td>
@@ -2153,7 +2314,7 @@ export default function Portal({
             {global
               ? "Your rewards platform, at a glance."
               : branchStaff
-                ? `${branchStaffBranch?.name || "Assigned branch"} dashboard`
+                ? `${branchStaffBranch?.name || "Assigned department"} dashboard`
               : ui("{name} workspace", { name: business?.name || session.user.name })}
           </h1>
           <p>{branchStaff
@@ -2286,7 +2447,6 @@ export default function Portal({
             }}
             business={business}
             onCreated={() => refresh(true)}
-            onCreateBranch={admin ? (onSaved) => createBranch(true, onSaved) : undefined}
             onManageBranches={() => navigate("Branches")}
           />
         </div>
@@ -2323,8 +2483,8 @@ export default function Portal({
                 <td className="p-code">{item.loginId || item.loginEmail}</td>
                 <td>
                   <small>{item.limits.card || "Unlimited"} scratch cards</small>
-                  <small>{item.limits.branch || "Unlimited"} branches</small>
-                  <small>{item.limits.department || "Unlimited"} departments</small>
+                  <small>{item.limits.branch || "Unlimited"} departments</small>
+                  <small>{item.limits.department || "Unlimited"} branches</small>
                   <small>
                     {item.limits.account || "Unlimited"} business accounts
                   </small>
@@ -2408,31 +2568,25 @@ export default function Portal({
     if (tab === "Scratch cards" || tab === "Coupons")
       return <article className="p-card">{cardsTable(visibleCards, true)}</article>;
     if (tab === "Branches") {
-      const rows = visibleBranches;
-      return (
-        <article className="p-card">
-          {global && <div className="p-info">
-            Platform control shows branches across every business. Filter by business, review coupon performance, change access, or open the business workspace directly.
-          </div>}
-          {admin && visibleDepartments.length > 0 && <section className="p-department-controls" aria-label="Department controls">
-            <strong>Departments</strong>
-            <div>
-              {visibleDepartments.map((department) => <span className="p-department-control" key={`${department.businessId}:${department.departmentId}`}>
-                <span><b>{department.name}</b>{global && <small>{department.businessName}</small>}</span>
-                <Badge status={department.status || "active"} />
-                {department.status !== "deleted" && <button className="danger" disabled={busy} onClick={() => {
-                  if (window.confirm(`Delete department "${department.name}" and all branches under it? They will disappear from the business workspace but remain archived for super administrators.`))
-                    mutate(() => api(`/api/portal/businesses/${department.businessId}/departments/${department.departmentId}`, "DELETE"));
-                }}>{ui("Delete department")}</button>}
-                {department.status === "deleted" && platformAdmin && <button className="restore" disabled={busy} onClick={() =>
-                  mutate(() => api(`/api/portal/businesses/${department.businessId}/departments/${department.departmentId}/restore`, "POST", {}))
-                }>{ui("Restore department")}</button>}
-              </span>)}
-            </div>
-          </section>}
+      const groups = visibleDepartments.map((department) => ({
+        ...department,
+        key: `${department.businessId}:${department.departmentId}`,
+        rows: visibleBranches.filter((unit) => unit.businessId === department.businessId
+          && unit.departmentId === department.departmentId),
+      })).filter((group) => !search.trim() || group.rows.length || match(group));
+      // Older departments may have no physical branch, or reference an archived
+      // branch omitted from this workspace. Keep those records manageable too.
+      for (const unit of visibleBranches) {
+        if (groups.some((group) => !group.unassigned && group.businessId === unit.businessId && group.departmentId === unit.departmentId)) continue;
+        const key = `${unit.businessId}:${unit.departmentId || "unassigned"}`;
+        const existing = groups.find((group) => group.key === key);
+        if (existing) existing.rows.push(unit);
+        else groups.push({ key, businessId: unit.businessId, departmentId: unit.departmentId,
+          businessName: unit.businessName, name: unit.departmentName || ui("Unassigned"), unassigned: true, rows: [unit] });
+      }
+      const renderDepartments = (rows) => (
           <Table
             columns={[
-              "Department",
               "Branch",
               ...(global ? ["Business"] : []),
               "Scratch cards",
@@ -2450,7 +2604,6 @@ export default function Portal({
                 ?.departments?.find((department) => department.departmentId === item.departmentId);
               const canRestoreBranch = !item.departmentId || (branchDepartment?.status || "active") === "active";
               return <tr key={`${item.businessId}:${item.branchId}`}>
-                <td><b>{item.departmentName || "Unassigned"}</b></td>
                 <td>
                   <b>{item.name}</b>
                 </td>
@@ -2503,12 +2656,10 @@ export default function Portal({
                       >
                         {ui(item.status === "active" ? "Pause" : "Activate")}
                       </button>}
-                      {!deleted && <button className="danger" disabled={busy} onClick={() => {
-                        if (window.confirm(`Delete branch "${item.name}"? It will disappear from the business workspace but remain archived for super administrators.`))
-                          mutate(() => api(`/api/portal/businesses/${item.businessId}/branches/${item.branchId}`, "DELETE"));
-                      }}>{ui("Delete branch")}</button>}
+                      {!deleted && <button className="danger" disabled={busy}
+                        onClick={() => setStructureToDelete({ resource: "branches", item })}>{ui("Delete branch")}</button>}
                       {deleted && platformAdmin && <button disabled={busy || !canRestoreBranch}
-                        title={!canRestoreBranch ? "Restore this branch's department first" : undefined}
+                        title={!canRestoreBranch ? "Restore this department's branch first" : undefined}
                         onClick={() => mutate(() => api(
                           `/api/portal/businesses/${item.businessId}/branches/${item.branchId}/restore`, "POST", {},
                         ))}>{ui("Restore branch")}</button>}
@@ -2521,6 +2672,43 @@ export default function Portal({
               </tr>;
             })}
           </Table>
+      );
+      const scope = JSON.stringify([workspaceId, businessFilter, locationFilter, departmentFilter, search]);
+      return (
+        <article className="p-card">
+          {global && <div className="p-info">
+            Platform control shows departments across every business. Filter by business, review coupon performance, change access, or open the business workspace directly.
+          </div>}
+          <section className="p-department-controls" aria-label="Branch controls">
+            <strong>{ui("Departments")}</strong>
+            <div className="p-department-groups">
+              {groups.map((department) => {
+                const expansionKey = `${scope}:${department.key}`;
+                const expanded = expandedLocations[expansionKey] ?? Boolean(locationFilter || departmentFilter || search.trim());
+                const panelId = `p-location-${encodeURIComponent(department.key)}`;
+                return <div className="p-branch-group" key={department.key}>
+                  <div className="p-department-control">
+                    <button type="button" className="p-branch-toggle" aria-expanded={expanded} aria-controls={panelId}
+                      onClick={() => setExpandedLocations((current) => ({ ...current, [expansionKey]: !expanded }))}>
+                      <Icon name="chevron" size={18} />
+                      <span><b>{department.name}</b>{global && <small>{department.businessName}</small>}</span>
+                      <small className="p-branch-count">{department.rows.length} {ui(department.rows.length === 1 ? "Branch" : "Branches")}</small>
+                    </button>
+                    {!department.unassigned && <Badge status={department.status || "active"} />}
+                    {admin && !department.unassigned && department.status !== "deleted" && <button className="danger" disabled={busy}
+                      onClick={() => setStructureToDelete({ resource: "departments", item: department })}>{ui("Delete department")}</button>}
+                    {admin && !department.unassigned && department.status === "deleted" && platformAdmin && <button className="restore" disabled={busy} onClick={() =>
+                      mutate(() => api(`/api/portal/businesses/${department.businessId}/departments/${department.departmentId}/restore`, "POST", {}))
+                    }>{ui("Restore department")}</button>}
+                  </div>
+                  <div id={panelId} hidden={!expanded} className="p-branch-departments">
+                    {expanded && renderDepartments(department.rows)}
+                  </div>
+                </div>;
+              })}
+              {!groups.length && renderDepartments([])}
+            </div>
+          </section>
         </article>
       );
     }
@@ -2569,14 +2757,33 @@ export default function Portal({
       );
     }
     if (tab === "Branch staff" && admin) {
-      const rows = accounts.filter((item) => item.role === "branch-staff"
-        && (!businessFilter || item.businessId === businessFilter)
-        && match(item));
-      return (
-        <article className="p-card">
-          <div className="p-info">
-            Create and monitor staff logins for individual branches. Branch staff can redeem scratched coupons by code for their assigned business, but cannot create, edit, disable, or manage cards.
-          </div>
+      const rows = accounts.filter((item) => {
+        if (item.role !== "branch-staff" || !inSelectedBusiness(item)) return false;
+        const unit = branches.find((branch) => branch.businessId === item.businessId && branch.branchId === item.branchId);
+        return matchesStructureFilters(unit) && match({ ...item,
+          businessName: unit?.businessName,
+          locationName: unit?.departmentName,
+          departmentName: unit?.name,
+        });
+      });
+      const groups = new Map();
+      for (const item of rows) {
+        const unit = branches.find((branch) => branch.businessId === item.businessId && branch.branchId === item.branchId);
+        const location = departments.find((department) => department.businessId === item.businessId
+          && department.departmentId === unit?.departmentId);
+        // Group by persisted IDs, never by a location's display name. Keep
+        // staff with deleted/missing assignments accessible under a fallback.
+        const key = JSON.stringify([item.businessId, unit?.departmentId || null]);
+        if (!groups.has(key)) groups.set(key, {
+          key,
+          name: location?.name || (unit?.departmentId ? "Unavailable branch" : "Unassigned"),
+          businessName: businesses.find((business) => business.businessId === item.businessId)?.name || "Unavailable business",
+          status: location?.status,
+          rows: [],
+        });
+        groups.get(key).rows.push(item);
+      }
+      const renderStaff = (rows) => (
           <Table
             columns={["Staff", "Business", "Branch", "Login ID", "Last login", "Logins", "Access", "Actions"]}
             empty={!rows.length}
@@ -2585,19 +2792,54 @@ export default function Portal({
               const staffBusiness = businesses.find((value) => value.businessId === item.businessId);
               const staffBranch = staffBusiness?.branches?.find((value) => value.branchId === item.branchId);
               return <tr key={item.id}>
-                <td><b>{item.name}</b><small>Branch staff</small></td>
+                <td><b>{item.name}</b><small>Department staff</small></td>
                 <td>{staffBusiness?.name || "Unavailable business"}</td>
-                <td>{staffBranch?.name || "Unavailable branch"}</td>
+                <td>{staffBranch?.name || "Unavailable department"}</td>
                 <td className="p-code">{item.loginId || item.email}</td>
                 <td>{item.lastLoginAt ? localizedDate(item.lastLoginAt) : "Never"}</td>
                 <td>{item.loginCount || 0}</td>
                 <td><Badge status={item.status} /></td>
-                <td><button className="p-button small" disabled={busy} onClick={() => editBranchStaff(item)}>
-                  Manage staff
-                </button></td>
+                <td><div className="p-staff-actions">
+                  <button className="p-button small" disabled={busy} onClick={() => editBranchStaff(item)}>
+                    Manage staff
+                  </button>
+                  <button className="p-button small danger" disabled={busy} onClick={() => setStaffToDelete(item)}>{ui("Delete staff")}</button>
+                </div></td>
               </tr>;
             })}
           </Table>
+      );
+      const scope = JSON.stringify([workspaceId, businessFilter, locationFilter, departmentFilter, search]);
+      return (
+        <article className="p-card">
+          <div className="p-info">
+            Create and monitor staff logins for individual departments. Department staff can redeem scratched coupons by code for their assigned business, but cannot create, edit, disable, or manage cards.
+          </div>
+          <section className="p-department-controls" aria-label="Staff by branch">
+            <strong>{ui("Departments")}</strong>
+            <div className="p-department-groups">
+              {[...groups.values()].map((group) => {
+                const expansionKey = `staff:${scope}:${group.key}`;
+                const expanded = expandedLocations[expansionKey] ?? Boolean(locationFilter || departmentFilter || search.trim());
+                const panelId = `p-staff-location-${encodeURIComponent(group.key)}`;
+                return <div className="p-branch-group" key={group.key}>
+                  <div className="p-department-control">
+                    <button type="button" className="p-branch-toggle" aria-expanded={expanded} aria-controls={panelId}
+                      onClick={() => setExpandedLocations((current) => ({ ...current, [expansionKey]: !expanded }))}>
+                      <Icon name="chevron" size={18} />
+                      <span><b>{group.name}</b>{global && <small>{group.businessName}</small>}</span>
+                      <small className="p-branch-count">{group.rows.length} {ui("Staff")}</small>
+                    </button>
+                    {group.status && <Badge status={group.status} />}
+                  </div>
+                  <div id={panelId} hidden={!expanded} className="p-branch-departments">
+                    {expanded && renderStaff(group.rows)}
+                  </div>
+                </div>;
+              })}
+              {!groups.size && renderStaff([])}
+            </div>
+          </section>
         </article>
       );
     }
@@ -2632,7 +2874,7 @@ export default function Portal({
         <article className="p-card">
           <div className="p-info">
             {global
-              ? "Platform control compares campaign performance across businesses and branches. Filter by business or open its workspace for card creation and detailed management."
+              ? "Platform control compares campaign performance across businesses and departments. Filter by business or open its workspace for card creation and detailed management."
               : ui("Campaign results are grouped by business and branch. All branches counts cards without a specific branch.")}
           </div>
           <Table
@@ -2671,18 +2913,29 @@ export default function Portal({
     if (tab === "Analytics")
       return (
         <>
-          <div className="p-metrics">
-            {stats.map((item) => (
-              <article key={item.title}>
-                <span>{item.title}</span>
+          <div className="p-metrics p-analytics-metrics" aria-label={ui("Analytics summary")}>
+            {analyticsStats.map((item) => (
+              <article key={item.title} data-status={item.status}>
+                <span>{ui(item.title)}</span>
                 <strong>{item.value}</strong>
-                <small>{item.caption}</small>
+                <small>{ui(item.caption)}</small>
               </article>
             ))}
           </div>
+          <div className="p-info p-analytics-breakdown" role="status">
+            <p>{ui("Coupon breakdown")}: {COUPON_STATUSES.map((status, index) => <React.Fragment key={status}>
+              {index > 0 && " + "}{ui(status)} {couponCounts[status]}
+            </React.Fragment>)} = {couponCounts.total} {ui("Total coupons")}</p>
+            <p>{couponCounts.total
+              ? ui("Redemption rate: {redeemed} ÷ {total} × 100 = {rate}% (rounded).", {
+                redeemed: couponCounts.redeemed, total: couponCounts.total, rate: couponCounts.redemptionRate,
+              })
+              : ui("No coupons yet. Redemption rate is 0%.")}</p>
+            <p>{ui("Each coupon appears in one status only. Redeemed coupons remain redeemed; other disabled or expired coupons are excluded from opened and scratched counts.")}</p>
+          </div>
           <article className="p-card">
             <div className="p-card-title">
-              <h2>Branch performance</h2>
+              <h2>Department performance</h2>
               <button
                 className="p-button"
                 onClick={exportCards}
@@ -2731,7 +2984,7 @@ export default function Portal({
             {rows.map((item) => (
               <tr key={item.id}>
                 <td>
-                  <b>{item.action}</b>
+                  <b>{ui(item.action)}</b>
                 </td>
                 <td>{item.actor}</td>
                 <td>
@@ -2739,7 +2992,7 @@ export default function Portal({
                     (value) => value.businessId === item.businessId,
                   )?.name || "Platform"}
                 </td>
-                <td>{item.detail || "—"}</td>
+                <td>{item.detail ? ui(item.detail) : "—"}</td>
                 <td>{date(item.createdAt)}</td>
               </tr>
             ))}
@@ -2889,7 +3142,7 @@ export default function Portal({
               <fieldset className="p-setting-group">
                 <legend>New business defaults</legend>
                 <p className="p-setting-wide">Prefills the Create business form. Existing businesses are not changed. Use 0 for unlimited; accounts include the owner login.</p>
-                {[["card", "Default scratch-card limit"], ["branch", "Default branch limit"], ["department", "Default department limit"], ["account", "Default business account limit"]].map(([key, label]) => (
+                {[["card", "Default scratch-card limit"], ["branch", "Default department limit"], ["department", "Default branch limit"], ["account", "Default business account limit"]].map(([key, label]) => (
                   <label key={key}>{label}
                     <input type="number" min="0" max="1000000000" step="1" required
                       value={config.defaultLimits?.[key] ?? ""}
@@ -3091,8 +3344,8 @@ export default function Portal({
             <h2>Workspace usage & limits</h2>
             <dl className="p-business-usage">
               <div><dt>Scratch cards</dt><dd>{cards.length} / {business?.limits?.card || "Unlimited"}</dd></div>
-              <div><dt>Branches</dt><dd>{activeCount(business?.branches)} / {business?.limits?.branch || "Unlimited"}</dd></div>
-              <div><dt>Departments</dt><dd>{activeCount(business?.departments)} / {business?.limits?.department || "Unlimited"}</dd></div>
+              <div><dt>Departments</dt><dd>{activeCount(business?.branches)} / {business?.limits?.branch || "Unlimited"}</dd></div>
+              <div><dt>Branches</dt><dd>{activeCount(business?.departments)} / {business?.limits?.department || "Unlimited"}</dd></div>
               <div><dt>Business accounts</dt><dd>{accounts.length} / {business?.limits?.account || "Unlimited"}</dd></div>
             </dl>
             <p>Only a super administrator can change workspace limits.</p>
@@ -3149,6 +3402,9 @@ export default function Portal({
           <Icon name={global ? "security" : "business"} />
           <div>
             <b>{global ? "Platform control" : business?.name || ui("Workspace")}</b>
+            {branchStaff && branchStaffBranch && <small className="p-workspace-assignment">
+              {ui("Department")}: {branchStaffLocationName} · {branchStaffBranch.name}
+            </small>}
             <small>
               {global
                 ? `${businesses.length} business workspaces`
@@ -3167,7 +3423,7 @@ export default function Portal({
               onClick={() => navigate(name)}
             >
               <Icon name={icon} />
-              <span>{ui(name)}</span>
+              <span>{ui(name === "Branches" ? "Departments & Branches" : name)}</span>
             </button>
           ))}
         </nav>
@@ -3264,7 +3520,7 @@ export default function Portal({
               {admin && tab === "Branches" && (
                 <button className="p-button" onClick={createDepartmentHierarchy}
                   disabled={hierarchyCreationDisabled}
-                  title={hierarchyCreationDisabled ? "Department or branch limit reached" : undefined}>
+                  title={hierarchyCreationDisabled ? ui("Department or branch limit reached") : undefined}>
                   <Icon name="plus" />
                   {ui("Add departments & branches")}
                 </button>
@@ -3274,9 +3530,9 @@ export default function Portal({
                   disabled={(tab === "Branches" && branchCreationDisabled)
                     || (tab === "Branch staff" && !branches.some((branch) => branch.status === "active"))}
                   title={tab === "Branches" && branchCreationDisabled
-                    ? "Branch limit reached"
+                    ? ui("Branch limit reached")
                     : tab === "Branch staff" && !branches.some((branch) => branch.status === "active")
-                      ? "Create an active business branch first"
+                      ? ui("Create an active business branch first")
                       : undefined}>
                   <Icon name="plus" />
                   {ui(tab === "Businesses"
@@ -3316,8 +3572,8 @@ export default function Portal({
               <div className="p-search">
                 <Icon name="search" />
                 <input
-                  placeholder={ui("Search {section}…", { section: language === "en" ? tab.toLowerCase() : ui(tab) })}
-                  aria-label={ui("Search {section}", { section: ui(tab) })}
+                  placeholder={ui("Search {section}…", { section: tab.toLowerCase() })}
+                  aria-label={ui("Search {section}", { section: tab })}
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
                 />
@@ -3335,6 +3591,26 @@ export default function Portal({
                     ))}
                   </select>
                 )}
+                {(tab === "Branches" || (tab === "Branch staff" && admin)) && <>
+                  <select className="p-structure-filter" aria-label={ui("Filter by department")} value={locationFilter}
+                    onChange={(event) => {
+                      setLocationFilter(event.target.value);
+                      setDepartmentFilter("");
+                    }}>
+                    <option value="">{ui("All departments")}</option>
+                    <option value="unassigned">{ui("Unassigned")}</option>
+                    {locationOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                  <select className="p-structure-filter" aria-label={ui("Filter by branch")} value={departmentFilter}
+                    onChange={(event) => setDepartmentFilter(event.target.value)}>
+                    <option value="">{ui("All branches")}</option>
+                    {departmentOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </>}
                 {tab === "Campaigns" && (
                   <button className="p-button" disabled={busy || loading || !campaignRows.length} onClick={exportCampaigns}>
                     <Icon name="download" />{busy ? ui("Working…") : ui("Export campaigns")}
@@ -3506,6 +3782,29 @@ export default function Portal({
         />
       )}
       {credentials && <CredentialsDialog credentials={credentials} onClose={() => setCredentials(null)} />}
+      {staffToDelete && <DeleteConfirmationDialog title="Delete staff account?"
+        message="Delete staff account for {name}? They will lose login access immediately. Coupon redemption history will be kept."
+        values={{ name: staffToDelete.name }} confirmLabel="Delete staff" onClose={() => setStaffToDelete(null)}
+        onDelete={async () => {
+          await api(`/api/portal/users/${staffToDelete.id}`, "DELETE", { confirmName: staffToDelete.name });
+          setStaffToDelete(null);
+          setNotice("Staff account deleted.");
+          await refresh();
+        }} />}
+      {structureToDelete && <DeleteConfirmationDialog
+        title={structureToDelete.resource === "departments" ? "Delete department?" : "Delete branch?"}
+        message={structureToDelete.resource === "departments"
+          ? "Delete department “{name}” and all branches under it? They will be removed from this workspace and archived for super administrators."
+          : "Delete branch “{name}”? It will be removed from this workspace and archived for super administrators."}
+        values={{ name: structureToDelete.item.name }}
+        confirmLabel={structureToDelete.resource === "departments" ? "Delete department" : "Delete branch"}
+        onClose={() => setStructureToDelete(null)} onDelete={async () => {
+          const { resource, item } = structureToDelete;
+          await api(`/api/portal/businesses/${item.businessId}/${resource}/${resource === "departments" ? item.departmentId : item.branchId}`, "DELETE");
+          setStructureToDelete(null);
+          setNotice("Changes saved successfully.");
+          await refresh();
+        }} />}
       {redemptionFeedback && <RedemptionResultDialog feedback={redemptionFeedback}
         onClose={() => setRedemptionFeedback(null)} />}
       {branchStaff && scannerOpen && <CouponScannerDialog

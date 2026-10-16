@@ -148,22 +148,20 @@ export function useBulkGeneration({ form, setForm, business, token, user, onCrea
       setRows(freshRows); setPreviewId(freshRows[0].branchId); setResult(null); setMessage(""); setStatus("idle");
     }, active };
 }
-export function BranchQuantities({ bulk, business, onCreateBranch, onManageBranches }) {
+export function BranchQuantities({ bulk, business, onManageBranches }) {
   const ui = useWorkspaceText();
   const departmentNames = new Map((business?.departments || []).map((item) => [item.departmentId, item.name]));
   const branchLabel = (branch) => branch?.departmentId && departmentNames.has(branch.departmentId)
     ? `${departmentNames.get(branch.departmentId)} · ${branch.name}` : branch?.name;
   const unused = unusedBulkBranches(bulk.rows, bulk.active);
   const emptyRow = bulk.rows.some((row) => !row.branchId);
-  const branchLimit = Number(business?.limits?.branch || 0);
-  const limitReached = branchLimit > 0 && (business?.branches?.length || 0) >= branchLimit;
   const generated = generatedByBranch(bulk.result?.coupons);
   return <section className="bulk-branches" aria-labelledby="branch-quantities-title">
     <h3 id="branch-quantities-title">{ui("Branch-wise Quantity")}</h3>
     <p className="p-builder-note">{ui("Choose distinct branches. Maximum 1,000 new coupons per generation.")}</p>
     <p className="p-builder-note">{ui("Quantity is the total wanted for this branch in this draft. Increasing it generates only the difference. Changing offer fields affects new coupons only.")}</p>
     {bulk.rows.map((row, index) => <div className="bulk-branch-row" key={index}>
-      <label>Branch {index + 1}<select aria-label={`Bulk branch ${index + 1}`} required value={row.branchId}
+      <label>Department {index + 1}<select aria-label={`Bulk department ${index + 1}`} required value={row.branchId}
         onChange={(event) => { const branchId = event.target.value; bulk.setRows((rows) => rows.map((item, i) => i === index ? { ...item, branchId } : item)); bulk.setPreviewId(branchId); }}>
         <option value="">{ui("Select branch")}</option>
         {bulk.active.map((branch) => <option key={branch.branchId} value={branch.branchId}
@@ -174,7 +172,7 @@ export function BranchQuantities({ bulk, business, onCreateBranch, onManageBranc
       <div className="bulk-row-actions">
         <button type="button" className="p-button small" aria-pressed={bulk.previewId === row.branchId}
           onClick={() => bulk.setPreviewId(row.branchId)}>{ui("Preview")}</button>
-        <button type="button" className="p-button small" aria-label={`Remove branch row ${index + 1}`}
+        <button type="button" className="p-button small" aria-label={`Remove department row ${index + 1}`}
           onClick={() => { bulk.setRows((rows) => rows.filter((_, i) => i !== index)); if (bulk.previewId === row.branchId) bulk.setPreviewId(bulk.rows.find((_, i) => i !== index)?.branchId || ""); }}>{ui("Remove")}</button>
       </div>
       {(generated.get(row.branchId) || 0) > 0 && <small className="bulk-row-progress">{ui("{saved} generated · {remaining} remaining", { saved: generated.get(row.branchId), remaining: Math.max(0, Number(row.quantity) - generated.get(row.branchId)) || 0 })}</small>}
@@ -184,18 +182,12 @@ export function BranchQuantities({ bulk, business, onCreateBranch, onManageBranc
         bulk.setRows((rows) => rows.some((row) => !row.branchId) ? rows
           : addBulkBranch(rows, unusedBulkBranches(rows, bulk.active)[0]?.branchId));
       }}>{ui("+ Add Branch")}</button>
-      {onCreateBranch && <button type="button" className="p-button" disabled={limitReached} onClick={() => onCreateBranch((result) => {
-        if (!result?.branch?.branchId) return;
-        bulk.setRows((rows) => addBulkBranch(rows, result.branch.branchId));
-        bulk.setPreviewId(result.branch.branchId);
-      })}>{ui("Create new branch")}</button>}
       {onManageBranches && <button type="button" className="p-button" onClick={onManageBranches}>{ui("Manage branches")}</button>}
     </div>
     <p className="p-builder-note">{ui("Adds an existing branch to this batch. Each branch can appear only once.")}</p>
     {!!bulk.active.length && !unused.length && <p className="p-builder-note">{ui("All active branches are already in this batch. Create or activate another branch to add a row.")}</p>}
     {!!unused.length && emptyRow && <p className="p-builder-note">{ui("Choose a branch in the empty row before adding another row.")}</p>}
-    {onCreateBranch && limitReached && <p className="p-builder-note">{ui("Branch limit reached ({limit}). Contact your administrator to increase it.", { limit: branchLimit })}</p>}
-    {!bulk.active.length && <p role="alert">Create an active branch before generating bulk coupons.</p>}
+    {!bulk.active.length && <p role="alert">Create an active department before generating bulk coupons.</p>}
     <div className="bulk-summary" aria-live="polite">
       {bulk.rows.map((row, index) => <span key={index}>{ui("{name}: {count} coupons", { name: branchLabel(bulk.active.find((branch) => branch.branchId === row.branchId)) || ui("Select branch"), count: row.quantity || 0 })}</span>)}
       <strong>{ui("Total: {count} coupons", { count: bulk.targetTotal })}</strong>
@@ -234,7 +226,7 @@ export function BulkResults({ result, onReset, locked, token, businessId }) {
       <button className="p-button" onClick={download} disabled={busy || locked}><Icon name="download" />{ui(busy ? "Preparing Excel…" : "Download Excel")}</button>
       <button className="p-button primary" onClick={() => setSendOpen(true)} disabled={busy || locked || !coupons.length}>{ui("Send via WhatsApp")}</button>
       <button className="p-button" onClick={onReset} disabled={locked || busy}>{ui("Start new draft")}</button></div>
-    <label className="bulk-filter">{ui("Filter results by branch")}<select aria-label="Filter batch by branch" value={branch} onChange={(event) => { setBranch(event.target.value); setPage(0); }}>
+    <label className="bulk-filter">{ui("Filter results by branch")}<select aria-label="Filter batch by department" value={branch} onChange={(event) => { setBranch(event.target.value); setPage(0); }}>
       <option value="">{ui("All branches")}</option>{branches.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
     </select></label>
     <p className="p-builder-note">{ui("Download Excel includes every coupon generated in this draft, across all branches and generations, regardless of this filter or page.")}</p>
