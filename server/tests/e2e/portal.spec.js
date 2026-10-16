@@ -69,6 +69,40 @@ test("favicon follows live browser theme changes without refreshing the page", a
   await expect(page.locator("#app-favicon")).toHaveAttribute("href", /favicon-dark\.png/);
 });
 
+test("expired coupon links show a disabled reward card without exposing the code", async ({ page }) => {
+  await page.route("**/api/cards/expired-ui", route => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      slug: "expired-ui",
+      senderName: "Dev Technologies",
+      headline: "A little surprise for you",
+      offerTitle: "25% OFF",
+      description: "On your next order",
+      branchId: "marketing",
+      branchName: "Marketing",
+      language: "en",
+      accentColor: "#f6a800",
+      pageColor: "#002b5c",
+      textColor: "#ffffff",
+      expiresAt: "2020-01-01T00:00:00.000Z",
+      expired: true,
+      used: false,
+    }),
+  }));
+  await page.goto("/card/expired-ui");
+  await expect(page.locator(".scratch-shell")).toHaveClass(/is-expired/);
+  await expect(page.locator(".scratch-card canvas")).toHaveCount(0);
+  await expect(page.locator(".scratch-card .offer-content strong")).toHaveText("25% OFF");
+  await expect(page.locator(".expired-coupon-label")).toHaveText("COUPON IS EXPIRED");
+  await expect(page.getByRole("heading", { name: "A little surprise for you" })).toHaveCount(0);
+  await expect(page.getByText("A surprise was sent to you")).toHaveCount(0);
+  await expect(page.locator(".scratch-shell .progress")).toHaveCount(1);
+  await expect(page.getByText("This coupon has expired and can no longer be redeemed.")).toHaveCount(0);
+  await expect(page.locator(".recipient-actions")).toHaveCount(0);
+  await expect(page.locator("body")).not.toContainText("LUCKY-");
+});
+
 test("compact typography stays readable and sidebar navigation remains accessible", async ({ page }, info) => {
   await page.goto("/");
   await expect(page.locator(".p-login")).toHaveCSS("font-size", "14px");
@@ -283,10 +317,13 @@ test("super admin can manage workspaces, create rewards, and export English work
   await expect(page.locator(".modal")).toHaveCSS("background-color", "rgb(27, 35, 50)");
   await expect(page.locator(".modal h2")).toHaveCSS("color", "rgb(237, 240, 247)");
   await page.screenshot({ path: info.outputPath("dark-share-popup.png"), fullPage: true });
+  const createdCouponCode = (await page.locator(".created-code strong").textContent()).trim();
   const shareUrl = await page
     .getByRole("textbox", { name: "Share link", exact: true })
     .inputValue();
   await page.getByRole("button", { name: "Create another" }).click();
+  await expect(page.getByRole("button", { name: "Single Card", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByLabel("Coupon code")).not.toHaveValue(createdCouponCode);
   await themeToggle.click();
   await nav(page, "Coupons");
   await page.reload();
@@ -402,6 +439,18 @@ test("super admin can manage workspaces, create rewards, and export English work
   await expect(page.locator(".scratch-card .offer-branch")).toHaveText("Hyderabad");
   await expect(page.locator(".scratch-card canvas")).toBeVisible();
   await expect(page.getByRole("button", { name: "Go back", exact: true })).toBeVisible();
+  const openedSlug = new URL(shareUrl).pathname.split("/").filter(Boolean).at(-1);
+  const openedRootLogin = await page.request.post("/api/auth/login", {
+    data: { loginId: "platform@example.test", password: "Platform-Test-Password" },
+  });
+  const openedRootHeaders = { Authorization: `Bearer ${(await openedRootLogin.json()).token}` };
+  const openedCards = await page.request.get("/api/portal/cards?business=impact-vibes", {
+    headers: openedRootHeaders,
+  });
+  const openedCard = (await openedCards.json()).cards.find((item) => item.slug === openedSlug);
+  expect(openedCard.status).toBe("opened");
+  expect(openedCard.openedAt).toBeTruthy();
+  expect(openedCard.scratchedAt).toBeFalsy();
   const box = await page.locator(".scratch-card canvas").boundingBox();
   await page.mouse.move(box.x + 10, box.y + 10);
   await page.mouse.down();
@@ -415,7 +464,9 @@ test("super admin can manage workspaces, create rewards, and export English work
   await expect(page.locator(".scratch-card .offer-branch")).toHaveText("Hyderabad");
   await page.reload();
   await expect(page.locator(".scratch-card canvas")).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "This coupon has already been used." })).toBeVisible();
+  await expect(page.locator(".scratch-card .offer-content strong")).toHaveText("25% OFF");
+  await expect(page.locator(".scratch-card .offer-content b")).toContainText(createdCouponCode);
+  await expect(page.getByRole("link", { name: "Create a new scratch card" })).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 
@@ -585,7 +636,8 @@ test("business login stays scoped and mobile navigation fits the screen", async 
     "Campaigns",
     "Coupons",
     "Branches",
-     "Business settings",
+    "Branch staff",
+    "Business settings",
   ]);
   await page.getByRole("button", { name: "View all", exact: true }).click();
   await expect(page.locator(".p-page-heading h1")).toHaveText("Coupons");
@@ -648,14 +700,14 @@ test("business languages translate the whole workspace without changing cards or
   await login(page, "owner@example.test", "Owner-Test-Password");
   const languagePicker = page.locator(".p-topbar select");
   for (const locale of [
-    { code: "hi", nav: ["अवलोकन", "स्क्रैच कार्ड बनाएँ", "अभियान", "कूपन", "शाखाएँ", "व्यवसाय सेटिंग्स"],
+    { code: "hi", nav: ["अवलोकन", "स्क्रैच कार्ड बनाएँ", "अभियान", "कूपन", "शाखाएँ", "शाखा स्टाफ", "व्यवसाय सेटिंग्स"],
       workspace: "Impact Vibes कार्यक्षेत्र", available: "उपलब्ध इनाम", signOut: "साइन आउट",
       cardLanguage: "कार्ड की भाषा", campaign: "अभियान का नाम", branch: "शाखा", allBranches: "सभी शाखाएँ",
       preview: "पूर्वावलोकन", previewTitle: "स्क्रैच-कार्ड पूर्वावलोकन", closePreview: "पूर्वावलोकन बंद करें",
       add: "शाखा जोड़ें", branchName: "शाखा का नाम", address: "पता", save: "बदलाव सहेजें", cancel: "रद्द करें",
       branchError: "शाखा का नाम ज़रूरी है।", edit: "संपादित करें", editTitle: "शाखा संपादित करें",
       success: "बदलाव सफलतापूर्वक सहेजे गए।", empty: "कोई रिकॉर्ड नहीं मिला", header: "इनाम और कूपन", exportHeader: "कूपन कोड" },
-    { code: "te", nav: ["అవలోకనం", "స్క్రాచ్ కార్డ్ సృష్టించండి", "ప్రచారాలు", "కూపన్లు", "శాఖలు", "వ్యాపార సెట్టింగ్‌లు"],
+    { code: "te", nav: ["అవలోకనం", "స్క్రాచ్ కార్డ్ సృష్టించండి", "ప్రచారాలు", "కూపన్లు", "శాఖలు", "శాఖ సిబ్బంది", "వ్యాపార సెట్టింగ్‌లు"],
       workspace: "Impact Vibes కార్యస్థలం", available: "అందుబాటులో ఉన్న బహుమతులు", signOut: "సైన్ అవుట్",
       cardLanguage: "కార్డ్ భాష", campaign: "ప్రచారం పేరు", branch: "శాఖ", allBranches: "అన్ని శాఖలు",
       preview: "ప్రివ్యూ", previewTitle: "స్క్రాచ్ కార్డ్ ప్రివ్యూ", closePreview: "ప్రివ్యూను మూసివేయండి",
@@ -1079,7 +1131,7 @@ test("customer phones stay private while campaigns report cards by branch", asyn
   await expect(campaignRows).toHaveCount(2);
   const assignedRow = campaignRows.filter({ hasText: "Hyderabad" });
   await expect(assignedRow.locator('[data-label="Scratch cards"]')).toHaveText("2");
-  await expect(assignedRow.locator('[data-label="Redeemed"]')).toHaveText("1");
+  await expect(assignedRow.locator('[data-label="Redeemed"]')).toHaveText("0");
   await expect(campaignRows.filter({ hasText: "All branches" }).locator('[data-label="Scratch cards"]')).toHaveText("1");
   const cardsResponse = await page.request.get("/api/portal/cards", { headers });
   const { cards } = await cardsResponse.json();
@@ -1288,6 +1340,7 @@ test("coupon filters combine numbers, branches, campaigns, custom dates and filt
   const campaignFilter = page.getByLabel("Filter by campaign", { exact: true });
   const dateFilter = page.getByLabel("Created date range", { exact: true });
   const sampleRows = page.getByRole("row").filter({ hasText: "FILTER-TEST-" });
+  await expect(page.getByLabel("Coupon status", { exact: true }).locator('option[value="opened"]')).toHaveCount(1);
   await textSearch.fill("FILTER-TEST-");
   await expect(sampleRows).toHaveCount(4);
   await numberSearch.fill("5002");
@@ -1430,7 +1483,7 @@ test("branch export matches searched rows in all languages and works for super a
   expect((adminWorkbook.sheet.match(/<row\b/g) || []).length).toBe(visibleRows + 1);
 });
 
-test("bulk creator recovers retries, previews branches, redeems on scratch and exports every page", async ({ page }, info) => {
+test("bulk creator recovers retries, marks scratches pending and exports every page", async ({ page }, info) => {
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   const rootLogin = await page.request.post("/api/auth/login", { data: { loginId: "platform@example.test", password: "Platform-Test-Password" } });
@@ -1520,16 +1573,18 @@ test("bulk creator recovers retries, previews branches, redeems on scratch and e
   expect((await page.request.post(`/api/cards/${card.slug}/claim`, { data: {} })).status()).toBe(200);
   expect((await page.request.post(`/api/portal/cards/${card.slug}/redeem`, { headers, data: { branchId: branches[1].branchId } })).status()).toBe(410);
   // The list updates from server activity without reloading or clicking Refresh.
-  await expect(row.locator(".p-badge")).toHaveText("redeemed", { timeout: 15000 });
+  await expect(row.locator(".p-badge")).toHaveText("scratched", { timeout: 15000 });
   await expect(row.getByRole("button", { name: "Redeem", exact: true })).toHaveCount(0);
-  await expect(page.getByLabel("Coupon status").locator('option[value="scratched"]')).toHaveCount(0);
-  await expect(row.locator(".p-badge")).toHaveText("redeemed");
+  await expect(page.getByLabel("Coupon status").locator('option[value="scratched"]')).toHaveCount(1);
+  await expect(row.locator(".p-badge")).toHaveText("scratched");
   expect((await page.request.get("/api/portal/cards", { headers })).ok()).toBe(true);
   const cards = (await (await page.request.get("/api/portal/cards", { headers })).json()).cards;
   expect(cards).toHaveLength(75);
-  expect(cards.find((item) => item.slug === card.slug).redeemedBranchId).toBe(branches[0].branchId);
+  expect(cards.find((item) => item.slug === card.slug).redeemedBranchId || "").toBe("");
   await page.goto(`/card/${card.slug}`);
-  await expect(page.getByRole("heading", { name: "This coupon has already been used." })).toBeVisible();
+  await expect(page.locator(".scratch-card canvas")).toHaveCount(0);
+  await expect(page.locator(".scratch-card .offer-content b")).toContainText(card.couponCode);
+  await expect(page.getByRole("link", { name: "Create a new scratch card" })).toHaveCount(0);
   await page.getByRole("button", { name: "Go back", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Coupons", exact: true })).toBeVisible();
   expect(errors).toEqual([]);
@@ -1691,7 +1746,7 @@ test("batch WhatsApp sharing exports every coupon and opens one chat for manual 
     expect(row.values[headerIndex["Scratch Link"]]).toBe(`http://127.0.0.1:5099/card/${card.slug}`);
     for (const name of ["Coupon Code", "Scratch Link", "WhatsApp Number"]) expect(row.types[headerIndex[name]]).toMatch(/^(s|inlineStr)$/);
   }
-  expect(workbook.rows.find(row => row.values[headerIndex["Coupon Code"]] === firstCard.couponCode).values[headerIndex.Status].toLowerCase()).toBe("redeemed");
+  expect(workbook.rows.find(row => row.values[headerIndex["Coupon Code"]] === firstCard.couponCode).values[headerIndex.Status].toLowerCase()).toBe("scratched");
   const calls = await page.evaluate(() => window.__batchChatCalls);
   expect(calls.map(call => call.action)).toEqual(["open", "navigate"]);
   expect(calls[0].url).toBe("about:blank");
@@ -1906,6 +1961,8 @@ test("bulk branch controls continue the same draft across generations, refreshes
   await expect(page.getByLabel("Coupon quantity 1", { exact: true })).toBeDisabled();
   await expect(page.getByLabel("Remove branch row 2", { exact: true })).toBeDisabled();
   await page.reload();
+  await expect(page.getByRole("button", { name: "Single Card", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Bulk Generate", exact: true }).click();
   await expect(results.locator("tbody tr")).toHaveCount(3);
   await expect(page.getByLabel("Main offer", { exact: true })).toHaveValue("30% OFF");
   await expect(page.getByLabel("Campaign name", { exact: true })).toHaveValue("Branch draft remains intact");
@@ -1941,6 +1998,8 @@ test("bulk branch controls continue the same draft across generations, refreshes
     return route.continue();
   });
   await page.reload();
+  await expect(page.getByRole("button", { name: "Single Card", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "Bulk Generate", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("Draft recovery unavailable");
   await expect(page.getByLabel("Coupon quantity 1", { exact: true })).toBeDisabled();
   await expect(page.locator('button[value="create-link"]')).toBeDisabled();
@@ -2018,8 +2077,158 @@ test("bulk branch controls continue the same draft across generations, refreshes
   expect(savedCards).toHaveLength(7);
   expect(savedCards.every(card => card.offerTitle === "30% OFF" && card.campaignName === "Branch draft remains intact")).toBe(true);
   expect(errors).toEqual([]);
+  const cleanupLogin = await page.request.post("/api/auth/login", { data: { loginId: "platform@example.test", password: "Platform-Test-Password" } });
+  const cleanupHeaders = { Authorization: `Bearer ${(await cleanupLogin.json()).token}` };
   expect((await page.request.delete(`/api/portal/businesses/${business.businessId}`, {
-    headers: rootHeaders, data: { confirmName: business.name },
+    headers: cleanupHeaders, data: { confirmName: business.name },
+  })).status()).toBe(200);
+});
+
+test("business creates branch staff with a mandatory manual login ID and super admin monitors it", async ({ page }) => {
+  const rootLogin = await page.request.post("/api/auth/login", { data: { loginId: "platform@example.test", password: "Platform-Test-Password" } });
+  const rootHeaders = { Authorization: `Bearer ${(await rootLogin.json()).token}` };
+  const createdResponse = await page.request.post("/api/portal/businesses", { headers: rootHeaders, data: {
+    name: "Branch Portal Retail", loginId: "BRPORT58", password: "Branch-Portal-Owner",
+    limits: { card: 10, branch: 2, department: 2, account: 2 }, generateCredentials: true,
+  } });
+  expect(createdResponse.status()).toBe(201);
+  const business = (await createdResponse.json()).business;
+  const ownerLogin = await page.request.post("/api/auth/login", { data: { loginId: "BRPORT58", password: "Branch-Portal-Owner" } });
+  const ownerHeaders = { Authorization: `Bearer ${(await ownerLogin.json()).token}` };
+  const northResponse = await page.request.post(`/api/portal/businesses/${business.businessId}/branches`, { headers: ownerHeaders, data: { name: "North Showroom" } });
+  const southResponse = await page.request.post(`/api/portal/businesses/${business.businessId}/branches`, { headers: ownerHeaders, data: { name: "South Showroom" } });
+  const north = (await northResponse.json()).branch, south = (await southResponse.json()).branch;
+  const cardData = { businessId: business.businessId, headline: "Branch reward", offerTitle: "15% OFF",
+    description: "Branch staff test", campaignName: "Branch campaign", customerPhone: "9876543210" };
+  const northCard = await (await page.request.post("/api/cards", { headers: ownerHeaders, data: { ...cardData, branchId: north.branchId, couponCode: "STAFF-NORTH" } })).json();
+  const southCard = await (await page.request.post("/api/cards", { headers: ownerHeaders, data: { ...cardData, branchId: south.branchId, couponCode: "STAFF-SOUTH" } })).json();
+
+  await login(page, "BRPORT58", "Branch-Portal-Owner");
+  await nav(page, "Branch staff");
+  await page.getByRole("button", { name: "Add branch staff", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Create branch staff login", exact: true });
+  await dialog.getByLabel("Staff name", { exact: true }).fill("Nina North");
+  const loginIdField = dialog.getByLabel("Login ID", { exact: true });
+  await expect(loginIdField).toHaveAttribute("required", "");
+  await loginIdField.fill("NINANORTH58");
+  await dialog.locator("select").selectOption(north.branchId);
+  await dialog.getByLabel("Password", { exact: true }).fill("Nina-Branch-Password");
+  await dialog.getByLabel("Confirm password", { exact: true }).fill("Nina-Branch-Password");
+  await dialog.getByRole("button", { name: "Save changes", exact: true }).click();
+  const credentials = await createdCredentials(page);
+  expect(credentials.loginId).toBe("NINANORTH58");
+  const staffRow = page.getByRole("row").filter({ hasText: "Nina North" });
+  await expect(staffRow).toContainText("Branch Portal Retail");
+  await expect(staffRow).toContainText("North Showroom");
+  await expect(staffRow).toContainText("Never");
+  await expect(staffRow).toContainText(credentials.loginId);
+  expect((await page.request.post(`/api/cards/${northCard.slug}/claim`)).status()).toBe(200);
+  const scratchedCard = (await (await page.request.get("/api/portal/cards", { headers: ownerHeaders })).json()).cards
+    .find((card) => card.slug === northCard.slug);
+  expect(scratchedCard.status).toBe("scratched");
+  expect(scratchedCard.used).toBe(false);
+  expect(scratchedCard.revealed).toBe(true);
+
+  await page.goto(`/card/${northCard.slug}`);
+  await expect(page.getByRole("button", { name: "Copy code", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "QR Code", exact: true }).click();
+  const customerQrDialog = page.getByRole("dialog", { name: "Scan to redeem", exact: true });
+  const qrDataUrl = await customerQrDialog.getByRole("img").getAttribute("src");
+  expect(qrDataUrl).toMatch(/^data:image\/png;base64,/);
+  const qrImage = Buffer.from(qrDataUrl.split(",")[1], "base64");
+  await customerQrDialog.locator(".coupon-qr-done").click();
+  await page.goto("/");
+
+  await page.locator(".p-topbar").getByRole("button", { name: "Sign out" }).click();
+  await login(page, credentials.loginId, credentials.password);
+  await expect(page.getByRole("heading", { name: "North Showroom", exact: true })).toBeVisible();
+  await expect(page.locator(".p-sidebar nav").getByRole("button")).toHaveCount(4);
+  await expect(page.locator(".p-sidebar nav").getByRole("button")).toHaveText([
+    "Overview", "Redeem coupon", "Branch coupons", "Redemption history",
+  ]);
+  await expect(page.locator(".p-sidebar nav").getByRole("button", { name: "Create scratch card", exact: true })).toHaveCount(0);
+  await expect(page.locator(".p-metrics article").filter({ hasText: "Ready to redeem" }).locator("strong")).toHaveText("1");
+  await nav(page, "Branch coupons");
+  await expect(page.getByRole("heading", { name: "Branch coupons", exact: true })).toBeVisible();
+  await expect(page.getByRole("row").filter({ hasText: "STAFF-NORTH" })).toBeVisible();
+  await expect(page.getByRole("row").filter({ hasText: "STAFF-SOUTH" })).toHaveCount(0);
+  await nav(page, "Redeem coupon");
+  await page.getByLabel("Coupon code", { exact: true }).fill("staff-south");
+  await page.getByRole("main").getByRole("button", { name: "Redeem coupon", exact: true }).click();
+  const wrongBranchPopup = page.getByRole("alertdialog");
+  await expect(wrongBranchPopup.getByRole("heading", { name: "Wrong branch" })).toBeVisible();
+  await expect(wrongBranchPopup).toContainText("Not redeemed");
+  await expect(wrongBranchPopup).toContainText("South Showroom");
+  await expect(wrongBranchPopup).not.toContainText("Staff member");
+  await wrongBranchPopup.getByRole("button", { name: "Try another code", exact: true }).click();
+  await page.getByRole("main").getByRole("button", { name: "Scan QR code", exact: true }).click();
+  const scannerDialog = page.getByRole("dialog", { name: "Scan coupon QR code", exact: true });
+  await expect(scannerDialog).toContainText("Upload QR image");
+  await scannerDialog.locator('input[type="file"]').setInputFiles({
+    name: "staff-north-qr.png",
+    mimeType: "image/png",
+    buffer: qrImage,
+  });
+  const successPopup = page.getByRole("alertdialog");
+  await expect(successPopup).toHaveClass(/is-success/);
+  const successPopupBox = await successPopup.boundingBox();
+  expect(successPopupBox?.width).toBeGreaterThan(350);
+  expect(successPopupBox?.height).toBeGreaterThan(300);
+  await expect(successPopup.getByRole("heading", { name: "Coupon redeemed" })).toBeVisible();
+  await expect(successPopup).toContainText("STAFF-NORTH");
+  await expect(successPopup).toContainText("North Showroom");
+  await expect(successPopup).toContainText("Nina North");
+  await expect(successPopup).toContainText("Date & time");
+  await expect(successPopup.locator(".p-result-symbol svg")).toBeVisible();
+  await successPopup.getByRole("button", { name: "Done", exact: true }).click();
+  await expect(successPopup).toHaveCount(0);
+  await page.getByLabel("Coupon code", { exact: true }).fill("staff-north");
+  await page.getByRole("main").getByRole("button", { name: "Redeem coupon", exact: true }).click();
+  const errorPopup = page.getByRole("alertdialog");
+  await expect(errorPopup).toHaveClass(/is-error/);
+  await expect(errorPopup.getByRole("heading", { name: "Coupon cannot be redeemed" })).toBeVisible();
+  await expect(errorPopup).toContainText("already been redeemed");
+  await expect(errorPopup).toContainText("North Showroom");
+  await expect(errorPopup).toContainText("Nina North");
+  await expect(errorPopup).toContainText("Date & time");
+  await expect(errorPopup.locator(".p-result-symbol svg")).toBeVisible();
+  await expect(page.locator(".p-content > .p-alert.error")).toHaveCount(0);
+  await errorPopup.getByRole("button", { name: "Try another code", exact: true }).click();
+  const redeemedCard = (await (await page.request.get(`/api/portal/cards?business=${business.businessId}`, { headers: rootHeaders })).json()).cards
+    .find((card) => card.slug === northCard.slug);
+  expect(redeemedCard.status).toBe("redeemed");
+  expect(redeemedCard.used).toBe(true);
+  await page.goto(`/card/${northCard.slug}`);
+  await expect(page.locator(".scratch-shell")).toHaveClass(/is-redeemed/);
+  await expect(page.getByText("COUPON REDEEMED", { exact: true })).toBeVisible();
+  await expect(page.getByText("STAFF-NORTH", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Copy code", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "QR Code", exact: true })).toHaveCount(0);
+  await page.goto("/");
+  await nav(page, "Overview");
+  await expect(page.locator(".p-metrics article").filter({ hasText: "Ready to redeem" }).locator("strong")).toHaveText("0");
+  await expect(page.locator(".p-metrics article").filter({ hasText: "Total redeemed" }).locator("strong")).toHaveText("1");
+  await nav(page, "Branch coupons");
+  await expect(page.getByRole("row").filter({ hasText: "STAFF-NORTH" })).toContainText("redeemed");
+  await nav(page, "Redemption history");
+  await expect(page.getByRole("row").filter({ hasText: "STAFF-NORTH" })).toContainText("redeemed");
+
+  await page.locator(".p-topbar").getByRole("button", { name: "Sign out" }).click();
+  await login(page, "platform@example.test", "Platform-Test-Password");
+  await nav(page, "Branch staff");
+  const businessFilter = page.getByLabel("Filter by business", { exact: true });
+  await expect(businessFilter).toBeVisible();
+  await businessFilter.selectOption(business.businessId);
+  const monitoredRow = page.getByRole("row").filter({ hasText: "Nina North" });
+  await expect(monitoredRow).not.toContainText("Never");
+  await expect(monitoredRow).toContainText("1");
+  await expect(monitoredRow.getByRole("button", { name: "Manage staff", exact: true })).toBeVisible();
+  expect((await page.request.get(`/api/cards/${northCard.slug}`)).status()).toBe(200);
+  expect((await page.request.get(`/api/cards/${southCard.slug}`)).status()).toBe(200);
+  const finalRootLogin = await page.request.post("/api/auth/login", { data: { loginId: "platform@example.test", password: "Platform-Test-Password" } });
+  const finalRootHeaders = { Authorization: `Bearer ${(await finalRootLogin.json()).token}` };
+  expect((await page.request.delete(`/api/portal/businesses/${business.businessId}`, {
+    headers: finalRootHeaders, data: { confirmName: business.name },
   })).status()).toBe(200);
 });
 
@@ -2040,11 +2249,40 @@ test("super admin can delete all coupons for one verified business only", async 
   } });
   expect(cardResponse.status()).toBe(201);
   const card = await cardResponse.json();
+  const secondCardResponse = await page.request.post("/api/cards", { headers: ownerHeaders, data: {
+    businessId: business.businessId, headline: "Second cleanup reward", offerTitle: "30% OFF",
+    description: "Cleanup test two", campaignName: "Cleanup", customerPhone: "9876543211",
+  } });
+  expect(secondCardResponse.status()).toBe(201);
+  const secondCard = await secondCardResponse.json();
 
   await login(page, "platform@example.test", "Platform-Test-Password");
   await nav(page, "Businesses");
   const row = page.getByRole("row").filter({ hasText: business.name });
-  await row.getByRole("button", { name: "Delete all coupons", exact: true }).click();
+  await row.getByRole("button", { name: "Manage coupons", exact: true }).click();
+  const manager = page.getByRole("dialog", { name: `Manage coupons · ${business.name}`, exact: true });
+  await expect(manager).toBeVisible();
+  await expect(manager.getByText("Total coupons").locator("..").locator("strong")).toHaveText("2");
+  await expect(manager.getByText("Available", { exact: true }).locator("..").locator("strong")).toHaveText("2");
+  await manager.getByLabel("Search coupons", { exact: true }).fill(card.couponCode);
+  await expect(manager.getByRole("row").filter({ hasText: card.couponCode })).toBeVisible();
+  await expect(manager.getByRole("row").filter({ hasText: secondCard.couponCode })).toHaveCount(0);
+  await manager.getByLabel("Search coupons", { exact: true }).fill("");
+  await manager.getByLabel("Coupon status", { exact: true }).selectOption("redeemed");
+  await expect(manager.getByRole("row").filter({ hasText: card.couponCode })).toHaveCount(0);
+  await manager.getByLabel("Coupon status", { exact: true }).selectOption("all");
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await manager.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const firstCouponRow = manager.getByRole("row").filter({ hasText: card.couponCode });
+  await firstCouponRow.getByRole("button", { name: "Delete", exact: true }).click();
+  const singleDialog = page.getByRole("dialog", { name: `Delete coupon ${card.couponCode}`, exact: true });
+  await singleDialog.getByLabel(`Type ${card.couponCode} to confirm`).fill(card.couponCode);
+  await singleDialog.getByRole("button", { name: "Delete coupon permanently", exact: true }).click();
+  await expect(singleDialog).not.toBeVisible();
+  await expect(manager.getByText("Total coupons").locator("..").locator("strong")).toHaveText("1");
+  await expect(firstCouponRow).toHaveCount(0);
+  await manager.getByRole("button", { name: "Delete all coupons", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: `Delete all coupons for ${business.name}`, exact: true });
   await dialog.getByLabel(`Type ${business.name} to confirm`).fill("wrong");
   await dialog.getByRole("button", { name: "Delete all coupons", exact: true }).click();
@@ -2056,6 +2294,7 @@ test("super admin can delete all coupons for one verified business only", async 
   await expect(row).toBeVisible();
   await expect(row.getByRole("button", { name: "Delete all coupons", exact: true })).toBeDisabled();
   expect((await page.request.get(`/api/cards/${card.slug}`)).status()).toBe(404);
+  expect((await page.request.get(`/api/cards/${secondCard.slug}`)).status()).toBe(404);
   expect((await page.request.delete(`/api/portal/businesses/${business.businessId}`, {
     headers: rootHeaders, data: { confirmName: business.name },
   })).status()).toBe(200);

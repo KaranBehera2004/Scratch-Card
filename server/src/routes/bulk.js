@@ -45,8 +45,9 @@ export function validateRecipients(rows, branches, total) {
   return recipients;
 }
 export function couponStatus(card) {
-  return card.redeemedAt || card.scratchedAt ? "redeemed" : card.disabled ? "disabled"
+  return card.staffRedeemedAt ? "redeemed" : card.scratchedAt || card.redeemedAt ? "scratched" : card.disabled ? "disabled"
     : card.expiresAt && new Date(card.expiresAt) <= new Date() ? "expired"
+      : card.openedAt ? "opened"
       : "available";
 }
 export function batchFingerprint(base, branches, recipients = null) {
@@ -74,6 +75,7 @@ export function installBulkRoutes(app, context) {
   const { authenticate, validateCreate, businessLimits, buildCard, saveGeneration, findBatch, audit, scope, getBusiness } = context;
   app.get("/api/portal/batches/:id", authenticate, async (req, res, next) => {
     try {
+      if (req.user.role === "branch-staff") throw bad("Branch staff cannot access coupon batches.", 403);
       const selected = req.query.businessId;
       if (selected !== undefined && (typeof selected !== "string" || !selected.trim() || selected.length > 60))
         throw bad("Choose a valid business to recover this batch.");
@@ -96,7 +98,7 @@ export function installBulkRoutes(app, context) {
   });
   app.post("/api/cards/bulk", authenticate, async (req, res, next) => {
     try {
-      if (req.user.role === "viewer") throw bad("Viewer accounts cannot create scratch cards.", 403);
+      if (["viewer", "branch-staff"].includes(req.user.role)) throw bad("This account cannot create scratch cards.", 403);
       const business = await getBusiness(scope(req));
       const key = req.body.idempotencyKey;
       if (typeof key !== "string" || !/^[A-Za-z0-9_-]{16,100}$/.test(key))

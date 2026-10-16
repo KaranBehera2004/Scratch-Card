@@ -57,7 +57,11 @@ export async function portalApi(url, token, method = "GET", body) {
   if (!response.ok) {
     if (response.status === 401 && token)
       window.dispatchEvent(new Event("scratch:expired"));
-    throw Object.assign(new Error(result.message || "Unable to complete request."), { status: response.status, savedCount: result.savedCount });
+    throw Object.assign(new Error(result.message || "Unable to complete request."), {
+      status: response.status,
+      savedCount: result.savedCount,
+      details: result.details,
+    });
   }
   return result;
 }
@@ -476,6 +480,311 @@ function Editor({ editor, onClose, onSave }) {
   );
 }
 
+function RedemptionResultDialog({ feedback, onClose }) {
+  const buttonRef = useRef(null);
+  const success = feedback.type === "success";
+  const details = feedback.coupon || feedback.details;
+  useEffect(() => {
+    buttonRef.current?.focus();
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+  return (
+    <div className="p-backdrop p-result-backdrop" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) onClose();
+    }}>
+      <section className={`p-dialog p-redemption-result is-${feedback.type}`}
+        role="alertdialog" aria-modal="true" aria-labelledby="redemption-result-title">
+        <button className="p-icon-button p-result-close" type="button" onClick={onClose}
+          aria-label="Close result popup"><Icon name="close" /></button>
+        <div className="p-result-symbol" aria-hidden="true">
+          <Icon name={success ? "check" : "close"} size={34} />
+        </div>
+        <span className="p-eyebrow">{success ? "REDEMPTION SUCCESSFUL" : "REDEMPTION FAILED"}</span>
+        <h2 id="redemption-result-title">{feedback.title}</h2>
+        <p>{feedback.message}</p>
+        {details && <dl className="p-result-details">
+          {details.couponCode && <div><dt>Coupon code</dt><dd>{details.couponCode}</dd></div>}
+          {details.offerTitle && <div><dt>Reward</dt><dd>{details.offerTitle}</dd></div>}
+          {details.redemptionStatus && <div><dt>Status</dt><dd>{details.redemptionStatus}</dd></div>}
+          {details.assignedBranchName && <div><dt>Assigned branch</dt><dd>{details.assignedBranchName}</dd></div>}
+          {details.redeemedBranchName && <div><dt>Redeemed branch</dt><dd>{details.redeemedBranchName}</dd></div>}
+          {details.branchName && !details.redeemedBranchName && <div><dt>Branch</dt><dd>{details.branchName}</dd></div>}
+          {details.staffName && <div><dt>Staff member</dt><dd>{details.staffName}</dd></div>}
+          {details.redeemedAt && <div><dt>Date &amp; time</dt><dd>{new Date(details.redeemedAt).toLocaleString()}</dd></div>}
+        </dl>}
+        <button ref={buttonRef} className={`p-button ${success ? "primary" : "danger"}`}
+          type="button" onClick={onClose}>{success ? "Done" : "Try another code"}</button>
+      </section>
+    </div>
+  );
+}
+
+export function normalizeScannedCoupon(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  let candidate = raw;
+  try {
+    const parsed = JSON.parse(raw);
+    candidate = parsed.couponCode || parsed.code || raw;
+  } catch {
+    try {
+      const url = new URL(raw);
+      candidate = url.searchParams.get("coupon") || url.searchParams.get("code") || raw;
+    } catch {
+      // The customer QR intentionally contains only the coupon code.
+    }
+  }
+  const normalized = String(candidate).trim().toUpperCase();
+  return /^[A-Z0-9][A-Z0-9_-]{5,23}$/.test(normalized) ? normalized : "";
+}
+
+function CouponScannerDialog({ onClose, onScan }) {
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const decoderRef = useRef(null);
+  const streamRef = useRef(null);
+  const frameRef = useRef(0);
+  const completedRef = useRef(false);
+  const mountedRef = useRef(true);
+  const [message, setMessage] = useState("Starting camera…");
+  const [cameraStatus, setCameraStatus] = useState("starting");
+  const finish = (value) => {
+    if (completedRef.current) return;
+    const code = normalizeScannedCoupon(value);
+    if (!code) {
+      setMessage("That QR code does not contain a valid coupon code.");
+      return;
+    }
+    completedRef.current = true;
+    onScan(code);
+  };
+  const decodeImage = (image) => {
+    if (!decoderRef.current) return null;
+    const canvas = canvasRef.current;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    canvas.width = image.videoWidth || image.naturalWidth;
+    canvas.height = image.videoHeight || image.naturalHeight;
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+    const result = decoderRef.current(pixels.data, pixels.width, pixels.height, { inversionAttempts: "attemptBoth" });
+    if (result?.data) finish(result.data);
+    return completedRef.current;
+  };
+  const stopCamera = () => {
+    cancelAnimationFrame(frameRef.current);
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
+  };
+  const scanFrame = () => {
+    if (!mountedRef.current || completedRef.current) return;
+    const video = videoRef.current;
+    if (video?.readyState >= 2 && decodeImage(video)) return;
+    frameRef.current = requestAnimationFrame(scanFrame);
+  };
+  const cameraErrorMessage = (error) => {
+    if (!window.isSecureContext)
+      return "Live camera requires HTTPS. On a computer, http://localhost is also allowed.";
+    if (error?.name === "NotAllowedError" || error?.name === "SecurityError")
+      return "Camera permission is blocked. Allow camera access in your browser's site settings, then click Retry camera.";
+    if (error?.name === "NotFoundError" || error?.name === "DevicesNotFoundError")
+      return "No camera was found on this device. Connect a camera or upload a QR image.";
+    if (error?.name === "NotReadableError" || error?.name === "TrackStartError")
+      return "The camera is being used by another app. Close that app, then click Retry camera.";
+    return "The camera could not start. Check browser permission and click Retry camera.";
+  };
+  const startCamera = async () => {
+    stopCamera();
+    completedRef.current = false;
+    setCameraStatus("starting");
+    setMessage("Requesting camera access…");
+    try {
+      if (!window.isSecureContext) throw Object.assign(new Error("Insecure context"), { name: "SecurityError" });
+      if (!navigator.mediaDevices?.getUserMedia)
+        throw Object.assign(new Error("Camera API unavailable"), { name: "NotSupportedError" });
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: "environment" } },
+          audio: false,
+        });
+      } catch (error) {
+        if (["NotAllowedError", "SecurityError"].includes(error?.name)) throw error;
+        // Desktop webcams often do not expose a rear/environment camera.
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      }
+      if (!mountedRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      streamRef.current = stream;
+      videoRef.current.srcObject = stream;
+      await videoRef.current.play();
+      setCameraStatus("live");
+      setMessage("Camera is live. Point it at the customer's coupon QR code.");
+      frameRef.current = requestAnimationFrame(scanFrame);
+    } catch (error) {
+      if (!mountedRef.current) return;
+      stopCamera();
+      setCameraStatus("error");
+      setMessage(cameraErrorMessage(error));
+    }
+  };
+  useEffect(() => {
+    mountedRef.current = true;
+    import("jsqr")
+      .then(({ default: decoder }) => {
+        if (mountedRef.current) decoderRef.current = decoder;
+      })
+      .catch(() => {
+        if (mountedRef.current) setMessage("The QR scanner could not load. Refresh the page and try again.");
+      });
+    startCamera();
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      mountedRef.current = false;
+      stopCamera();
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, []);
+  const upload = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const image = new Image();
+    image.onload = async () => {
+      if (!decoderRef.current) {
+        try {
+          decoderRef.current = (await import("jsqr")).default;
+        } catch {
+          setMessage("The QR scanner could not load. Refresh the page and try again.");
+          URL.revokeObjectURL(image.src);
+          return;
+        }
+      }
+      const decoded = decodeImage(image);
+      if (!decoded) setMessage("No coupon QR code was found in that image. Try a clearer photo.");
+      URL.revokeObjectURL(image.src);
+    };
+    image.src = URL.createObjectURL(file);
+  };
+  return <div className="p-backdrop p-scanner-backdrop" onMouseDown={(event) => {
+    if (event.target === event.currentTarget) onClose();
+  }}>
+    <section className="p-dialog p-qr-scanner" role="dialog" aria-modal="true" aria-labelledby="qr-scanner-title">
+      <div className="p-dialog-head">
+        <div><span className="p-eyebrow">QR REDEMPTION</span><h2 id="qr-scanner-title">Scan coupon QR code</h2></div>
+        <button type="button" className="p-icon-button" onClick={onClose} aria-label="Close scanner"><Icon name="close" /></button>
+      </div>
+      <div className="p-scanner-view"><video ref={videoRef} playsInline muted /><span>Place QR code inside the frame</span></div>
+      <canvas ref={canvasRef} className="p-scanner-canvas" aria-hidden="true" />
+      <p className="p-scanner-message" role="status">{message}</p>
+      {cameraStatus !== "live" && <button type="button" className="p-button primary p-camera-retry"
+        disabled={cameraStatus === "starting"} onClick={startCamera}>
+        {cameraStatus === "starting" ? "Starting camera…" : "Retry camera"}
+      </button>}
+      <label className="p-button p-scanner-upload">Upload QR image<input type="file" accept="image/*" capture="environment" onChange={upload} /></label>
+    </section>
+  </div>;
+}
+
+function CouponManagerDialog({ business, cards, busy, onClose, onPreview, onCopy,
+  onDeleteCoupon, onDeleteAll }) {
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState("all");
+  const closeRef = useRef(null);
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    closeRef.current?.focus();
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [onClose]);
+  const normalizedQuery = query.trim().toLowerCase();
+  const filtered = cards.filter((card) =>
+    (status === "all" || card.status === status)
+    && (!normalizedQuery || [card.couponCode, card.offerTitle, card.campaignName,
+      card.branchName, card.customerPhone].some((value) =>
+      String(value || "").toLowerCase().includes(normalizedQuery))));
+  const count = (value) => cards.filter((card) => card.status === value).length;
+  const used = cards.filter((card) => ["opened", "scratched", "redeemed"].includes(card.status)).length;
+  const metrics = [
+    ["Total coupons", cards.length],
+    ["Used / interacted", used],
+    ["Available", count("available")],
+    ["Opened", count("opened")],
+    ["Scratched", count("scratched")],
+    ["Redeemed", count("redeemed")],
+    ["Expired", count("expired")],
+    ["Disabled", count("disabled")],
+  ];
+  const branchName = (card) => business.branches?.find((branch) =>
+    branch.branchId === card.branchId)?.name || card.branchName || "All branches";
+  return (
+    <div className="p-backdrop p-coupon-manager-backdrop" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) onClose();
+    }}>
+      <section className="p-dialog p-coupon-manager" role="dialog" aria-modal="true"
+        aria-labelledby="coupon-manager-title">
+        <div className="p-dialog-head">
+          <div><span className="p-eyebrow">BUSINESS COUPON CONTROL</span>
+            <h2 id="coupon-manager-title">Manage coupons · {business.name}</h2></div>
+          <button ref={closeRef} className="p-icon-button" type="button" onClick={onClose}
+            aria-label="Close coupon manager"><Icon name="close" /></button>
+        </div>
+        <div className="p-coupon-manager-summary" aria-label="Coupon status summary">
+          {metrics.map(([label, value]) => <article key={label}><span>{label}</span><strong>{value}</strong></article>)}
+        </div>
+        <div className="p-coupon-manager-tools">
+          <label><span>Search coupons</span><input type="search" aria-label="Search coupons" value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Code, reward, campaign, branch or number" /></label>
+          <label><span>Coupon status</span><select aria-label="Coupon status" value={status}
+            onChange={(event) => setStatus(event.target.value)}>
+            {["all", "available", "opened", "scratched", "redeemed", "expired", "disabled"].map((value) =>
+              <option key={value} value={value}>{value === "all" ? "All statuses" : value[0].toUpperCase() + value.slice(1)}</option>)}
+          </select></label>
+          <button className="p-button danger" type="button" disabled={busy || !cards.length}
+            onClick={onDeleteAll}>Delete all coupons</button>
+        </div>
+        <div className="p-coupon-manager-count" aria-live="polite">
+          Showing {filtered.length} of {cards.length} coupons
+        </div>
+        <Table columns={["Reward & coupon", "Branch", "Campaign", "Status", "Created", "Expiry date", "Actions"]}
+          empty={!filtered.length}>
+          {filtered.map((card) => <tr key={card.slug}>
+            <td><b>{card.offerTitle}</b><small className="p-code">{card.couponCode}</small></td>
+            <td>{branchName(card)}</td>
+            <td>{card.campaignName || "General rewards"}</td>
+            <td><Badge status={card.status} /></td>
+            <td>{date(card.createdAt)}</td>
+            <td>{card.expiresAt ? date(card.expiresAt) : "No expiry"}</td>
+            <td><div className="p-row-actions">
+              <button type="button" onClick={() => onPreview(card)}>Preview</button>
+              <button type="button" disabled={busy} onClick={() => onCopy(card)}>Copy link</button>
+              <button type="button" className="danger" disabled={busy}
+                onClick={() => onDeleteCoupon(card)}>Delete</button>
+            </div></td>
+          </tr>)}
+        </Table>
+        <footer><button className="p-button" type="button" onClick={onClose}>Close</button></footer>
+      </section>
+    </div>
+  );
+}
+
 const newBranchDraft = () => ({ name: "", address: "" });
 const newDepartmentDraft = () => ({ name: "", branches: [newBranchDraft()] });
 const resizeDrafts = (items, count, factory) => [
@@ -761,6 +1070,7 @@ export default function Portal({
   setLanguage,
 }) {
   const platformAdmin = session.user.role === "super-admin";
+  const branchStaff = session.user.role === "branch-staff";
   const [theme, setTheme] = useState(() => {
     try { return localStorage.getItem("lucky-drop-theme") === "dark" ? "dark" : "light"; }
     catch { return "light"; }
@@ -796,6 +1106,7 @@ export default function Portal({
     [businessFilter, setBusinessFilter] = useState(""),
     [couponFilters, setCouponFilters] = useState(() => ({ ...EMPTY_COUPON_FILTERS })),
     [editor, setEditor] = useState(null),
+    [couponManagerBusinessId, setCouponManagerBusinessId] = useState(""),
     [departmentEditor, setDepartmentEditor] = useState(false),
     [credentials, setCredentials] = useState(null),
     [temporaryAdminPassword, setTemporaryAdminPassword] = useState(""),
@@ -804,7 +1115,10 @@ export default function Portal({
     [visibleOwnerPasswords, setVisibleOwnerPasswords] = useState({}),
     [previewCard, setPreviewCard] = useState(null),
     [menu, setMenu] = useState(false),
-    [busy, setBusy] = useState(false);
+    [busy, setBusy] = useState(false),
+    [redemptionCode, setRedemptionCode] = useState(""),
+    [redemptionFeedback, setRedemptionFeedback] = useState(null),
+    [scannerOpen, setScannerOpen] = useState(false);
   const [compactNavigation, setCompactNavigation] = useState(() => window.matchMedia("(max-width: 800px), (max-height: 500px) and (max-width: 1100px)").matches);
   const sidebarRef = useRef(null);
   const menuButtonRef = useRef(null);
@@ -847,6 +1161,9 @@ export default function Portal({
     };
   }, [compactNavigation, menu]);
   const business = businesses.find((item) => item.businessId === workspaceId);
+  const branchStaffBranch = branchStaff
+    ? business?.branches?.find((item) => item.branchId === session.user.branchId)
+    : null;
   useEffect(() => {
     try {
       sessionStorage.setItem("scratch-card-dashboard-return", location.href);
@@ -869,7 +1186,7 @@ export default function Portal({
   );
   const canManageWorkspace = ["super-admin", "business", "admin"].includes(session.user.role);
   const canRenameWorkspace = ["super-admin", "business"].includes(session.user.role);
-  const canCreate = session.user.role !== "viewer";
+  const canCreate = !["viewer", "branch-staff"].includes(session.user.role);
   const nav = global
     ? [
         ["Overview", "overview"],
@@ -878,23 +1195,30 @@ export default function Portal({
         ["Scratch cards", "cards"],
         ["Branches", "branches"],
         ["Business accounts", "team"],
+        ["Branch staff", "team"],
         ["Super admins", "security"],
         ["Analytics", "analytics"],
         ["Security", "security"],
         ["Audit", "audit"],
         ["Platform settings", "settings"],
       ]
-    : [
+    : branchStaff ? [
+        ["Overview", "overview"],
+        ["Redeem coupon", "check"],
+        ["Branch coupons", "cards"],
+        ["Redemption history", "audit"],
+      ] : [
         ["Overview", "overview"],
         ...(canCreate ? [["Create scratch card", "plus"]] : []),
         ["Campaigns", "campaign"],
         ["Coupons", "cards"],
         ["Branches", "branches"],
+        ...(admin ? [["Branch staff", "team"]] : []),
         ["Business settings", "settings"],
       ];
   useEffect(() => {
     if (!nav.some(([name]) => name === tab)) setTab("Overview");
-  }, [global, canCreate, tab]);
+  }, [global, canCreate, branchStaff, tab]);
   const api = useCallback(
     (url, method = "GET", body) => portalApi(url, session.token, method, body),
     [session.token],
@@ -912,7 +1236,7 @@ export default function Portal({
         const results = await Promise.all([
           api("/api/portal/businesses"),
           api(scoped("/api/portal/cards")),
-          global
+          admin
             ? api(scoped("/api/portal/users"))
             : Promise.resolve({ users: [] }),
           global
@@ -935,7 +1259,7 @@ export default function Portal({
         setLoading(false);
       }
     },
-    [api, scoped, global],
+    [api, scoped, global, admin],
   );
   useEffect(() => {
     refresh();
@@ -955,8 +1279,9 @@ export default function Portal({
         pending = false;
       }
     };
-    updateActivity();
-    const interval = window.setInterval(updateActivity, 10000);
+    // The main refresh already loads cards. Poll later instead of issuing an
+    // identical second request immediately after every page/navigation load.
+    const interval = window.setInterval(updateActivity, 15000);
     window.addEventListener("focus", updateActivity);
     document.addEventListener("visibilitychange", updateActivity);
     return () => {
@@ -1019,6 +1344,47 @@ export default function Portal({
     } finally {
       setBusy(false);
     }
+  };
+  const redeemBranchCouponCode = async (couponCode) => {
+    const normalizedCode = String(couponCode || "").trim().toUpperCase();
+    if (!normalizedCode) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    setRedemptionFeedback(null);
+    try {
+      const result = await api("/api/portal/redeem", "POST", { couponCode: normalizedCode });
+      setRedemptionFeedback({
+        type: "success",
+        title: "Coupon redeemed",
+        message: "This coupon was verified and redeemed successfully.",
+        coupon: result.coupon,
+      });
+      setRedemptionCode("");
+      await refresh(true);
+    } catch (err) {
+      const title = err.status === 403
+        ? "Wrong branch"
+        : err.status === 404
+          ? "Coupon not found"
+          : err.status === 409
+            ? "Coupon cannot be redeemed"
+            : err.status === 410
+              ? "Coupon unavailable"
+              : "Redemption failed";
+      setRedemptionFeedback({ type: "error", title, message: err.message, details: err.details });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const redeemBranchCoupon = (event) => {
+    event.preventDefault();
+    redeemBranchCouponCode(redemptionCode);
+  };
+  const redeemScannedCoupon = (couponCode) => {
+    setScannerOpen(false);
+    setRedemptionCode(couponCode);
+    redeemBranchCouponCode(couponCode);
   };
   const saved = async (values) => {
     const savedEditor = editor;
@@ -1129,6 +1495,27 @@ export default function Portal({
         return api("/api/portal/businesses", "POST", { ...businessPayload(payload), password: payload.password, generateCredentials: true });
       },
     });
+  const requestDeleteAllCoupons = (item) => {
+    const couponCount = cards.filter((card) => card.businessId === item.businessId).length;
+    setEditor({
+      title: `Delete all coupons for ${item.name}`,
+      danger: true,
+      submitLabel: "Delete all coupons",
+      successMessage: `All coupons for ${item.name} were permanently deleted. Their shared links no longer work.`,
+      description: `Permanently delete all ${couponCount} coupons belonging to ${item.name}. This cannot be undone. Type the exact business name to confirm.`,
+      fields: [{ key: "confirmName", label: `Type ${item.name} to confirm`, required: true }],
+      save: (values) => api(`/api/portal/businesses/${item.businessId}/cards`, "DELETE", values),
+    });
+  };
+  const requestDeleteCoupon = (item, card) => setEditor({
+    title: `Delete coupon ${card.couponCode}`,
+    danger: true,
+    submitLabel: "Delete coupon permanently",
+    successMessage: `${card.couponCode} was permanently deleted. Its shared link no longer works.`,
+    description: `Permanently delete this coupon from ${item.name}. This cannot be undone. Type the exact coupon code to confirm.`,
+    fields: [{ key: "confirmCode", label: `Type ${card.couponCode} to confirm`, required: true }],
+    save: (values) => api(`/api/portal/businesses/${item.businessId}/cards/${card.slug}`, "DELETE", values),
+  });
   const deleteAllBusinesses = () => setEditor({
     title: "Delete all businesses",
     danger: true,
@@ -1241,6 +1628,46 @@ export default function Portal({
       description: "Enter any password manually. A unique 12-character login ID containing letters and numbers will be created automatically.",
       save: (values) => api("/api/portal/users", "POST", { ...manualPasswordPayload(values), generateCredentials: true }),
     });
+  const createBranchStaff = () => {
+    const availableBranches = branches.filter((item) => item.status === "active");
+    setEditor({
+      title: "Create branch staff login",
+      fields: [
+        { key: "name", label: "Staff name", required: true },
+        {
+          ...businessLoginIdField,
+          label: "Login ID",
+          required: true,
+          title: "Use 6–16 letters and numbers, including at least one of each.",
+        },
+        {
+          key: "branchId",
+          label: "Business and branch",
+          type: "select",
+          required: true,
+          options: availableBranches.map((item) => ({
+            value: item.branchId,
+            label: `${item.businessName} · ${item.name}`,
+          })),
+        },
+        ...accountPasswordFields,
+      ],
+      values: { loginId: "", branchId: "" },
+      description: "Enter a unique Login ID using 6–16 letters and numbers, including at least one of each. Choose one branch for this login; the staff member will see only that branch's dashboard, coupons, and redemption activity.",
+      save: (values) => {
+        const branch = availableBranches.find((item) => item.branchId === values.branchId);
+        if (!branch) throw new Error("Choose an active business branch.");
+        return api("/api/portal/users", "POST", {
+          ...manualPasswordPayload(values),
+          businessId: branch.businessId,
+          branchId: branch.branchId,
+          role: "branch-staff",
+          loginId: String(values.loginId || "").trim(),
+          generateCredentials: true,
+        });
+      },
+    });
+  };
   const createSuperAdmin = () => setEditor({
     title: "Create super-admin account",
     fields: [{ key: "name", label: "Full name", required: true }, ...accountPasswordFields],
@@ -1279,6 +1706,32 @@ export default function Portal({
       save: (values) =>
         api(scoped(`/api/portal/users/${item.id}`), "PATCH", values),
     });
+  const editBranchStaff = (item) => {
+    const businessBranches = branches.filter((branch) =>
+      branch.businessId === item.businessId && branch.status === "active");
+    setEditor({
+      title: `Manage ${item.name}`,
+      fields: [
+        {
+          key: "branchId",
+          label: "Assigned branch",
+          type: "select",
+          required: true,
+          options: businessBranches.map((branch) => ({ value: branch.branchId, label: branch.name })),
+        },
+        {
+          key: "status",
+          label: "Account access",
+          type: "select",
+          options: ["active", "paused"].map((value) => ({ value, label: value })),
+        },
+        { key: "password", label: "Reset password (leave empty to keep)", type: "password" },
+      ],
+      values: { branchId: item.branchId, status: item.status, password: "" },
+      description: "Change this staff member's branch, pause access, or assign a new password. Saving changes revokes existing sessions.",
+      save: (values) => api(`/api/portal/users/${item.id}`, "PATCH", values),
+    });
+  };
   const exportCards = async () => {
     setBusy(true);
     setError("");
@@ -1290,11 +1743,9 @@ export default function Portal({
             item.couponCode,
             item.offerTitle,
             item.senderName,
-            item.used
-              ? t("used")
-              : item.status === "available"
+            item.status === "available"
                 ? t("waiting")
-                : {
+                : ui(item.status) || {
                     hi: { expired: "समाप्त", disabled: "निष्क्रिय" },
                     te: {
                       expired: "గడువు ముగిసింది",
@@ -1304,8 +1755,8 @@ export default function Portal({
             item.createdAt
               ? new Date(item.createdAt).toLocaleString(`${language}-IN`)
               : "—",
-            item.redeemedAt
-              ? new Date(item.redeemedAt).toLocaleString(`${language}-IN`)
+            item.staffRedeemedAt
+              ? new Date(item.staffRedeemedAt).toLocaleString(`${language}-IN`)
               : "—",
             scratchCardUrl(item.slug),
             item.expiresAt ? localizedDate(item.expiresAt) : ui("No expiry"),
@@ -1344,7 +1795,11 @@ export default function Portal({
     }
   };
   const used = cards.filter((item) => item.used).length,
-    available = cards.filter((item) => item.status === "available").length;
+    available = cards.filter((item) => item.status === "available").length,
+    readyToRedeem = cards.filter((item) => item.scratchedAt && !item.staffRedeemedAt).length,
+    staffRedeemed = cards.filter((item) => item.staffRedeemedAt).length,
+    redeemedToday = cards.filter((item) => item.staffRedeemedAt
+      && new Date(item.staffRedeemedAt).toDateString() === new Date().toDateString()).length;
   const campaigns = summarizeCampaigns(managedCards, businesses);
   const campaignRows = campaigns.flatMap((campaign) => campaign.branches.map((branch) => ({
     ...campaign,
@@ -1527,7 +1982,7 @@ export default function Portal({
               >
                 {ui("Copy link")}
               </button>
-              {canCreate && !item.used && (
+              {canCreate && !item.revealed && (
                 <button
                   disabled={busy}
                   onClick={() =>
@@ -1552,21 +2007,160 @@ export default function Portal({
       ))}
     </Table>
   );
+  const branchRedemptionDesk = () => (
+    <div className="p-staff-redemption-grid">
+      <article className="p-card p-redeem-desk">
+        <span className="p-eyebrow">COUPON VERIFICATION</span>
+        <h2>Redeem a scratched coupon</h2>
+        <p>Enter a scratched coupon assigned to {branchStaffBranch?.name || "your branch"}.</p>
+        <form onSubmit={redeemBranchCoupon}>
+          <label htmlFor="branch-redemption-code">Coupon code</label>
+          <div>
+            <input id="branch-redemption-code" name="couponCode" required maxLength="24"
+              autoComplete="off" autoCapitalize="characters" spellCheck="false"
+              placeholder="Example: LUCKY-71F37C66" value={redemptionCode}
+              onChange={(event) => setRedemptionCode(event.target.value.toUpperCase())} />
+            <button className="p-button primary" type="submit" disabled={busy || !redemptionCode.trim()}>
+              <Icon name="check" />{busy ? "Checking…" : "Redeem coupon"}
+            </button>
+            <button className="p-button p-scan-button" type="button" disabled={busy}
+              onClick={() => setScannerOpen(true)}>
+              <span className="p-scan-icon" aria-hidden="true" />Scan QR code
+            </button>
+          </div>
+        </form>
+      </article>
+      <article className="p-card p-redemption-guide">
+        <span className="p-eyebrow">SAFE REDEMPTION</span>
+        <h2>Before you redeem</h2>
+        <ol>
+          <li><b>Customer scratches the card</b><span>The reward and coupon code become visible.</span></li>
+          <li><b>Check the assigned branch</b><span>Only coupons assigned to {branchStaffBranch?.name || "this branch"} can be accepted here.</span></li>
+          <li><b>Confirm once</b><span>A redeemed code is locked permanently and cannot be used again.</span></li>
+        </ol>
+      </article>
+    </div>
+  );
+  const branchRedemptionHistory = (limit) => {
+    const rows = cards.filter((item) => item.staffRedeemedAt && match(item));
+    const displayed = Number.isFinite(limit) ? rows.slice(0, limit) : rows;
+    return <article className="p-card">
+      <div className="p-card-title"><div><h2>{limit ? "Recent redemptions" : "Redemption history"}</h2>
+        <p>Coupons completed by staff at {branchStaffBranch?.name || "this branch"}.</p></div></div>
+      <Table columns={["Coupon code", "Reward", "Campaign", "Redeemed at", "Status"]}
+        empty={!displayed.length}>
+        {displayed.map((item) => <tr key={item.slug}>
+          <td className="p-code">{item.couponCode}</td>
+          <td>{item.offerTitle}</td>
+          <td>{item.campaignName || ui("General rewards")}</td>
+          <td>{localizedDate(item.staffRedeemedAt)}</td>
+          <td><Badge status="redeemed" /></td>
+        </tr>)}
+      </Table>
+    </article>;
+  };
+  const branchCouponsTable = (
+    <article className="p-card">
+      <div className="p-info">
+        Only coupons assigned to {branchStaffBranch?.name || "your branch"} are shown. Coupons from other branches are not accessible or redeemable.
+      </div>
+      <Table columns={["Coupon code", "Reward", "Campaign", "Status", "Created", "Expiry date"]}
+        empty={!visibleCards.length}>
+        {visibleCards.map((item) => <tr key={item.slug}>
+          <td className="p-code">{item.couponCode}</td>
+          <td>{item.offerTitle}</td>
+          <td>{item.campaignName || ui("General rewards")}</td>
+          <td><Badge status={item.status} /></td>
+          <td>{localizedDate(item.createdAt)}</td>
+          <td>{item.expiresAt ? localizedDate(item.expiresAt) : ui("No expiry")}</td>
+        </tr>)}
+      </Table>
+    </article>
+  );
+  const branchStaffOverview = (
+    <>
+      <div className="p-welcome-row p-staff-welcome">
+        <div>
+          <span className="p-eyebrow">BRANCH REDEMPTION DESK</span>
+          <h1>{branchStaffBranch?.name || "Assigned branch"}</h1>
+          <p>Verify a customer's scratched coupon code and redeem it securely for {business?.name || "this business"}.</p>
+        </div>
+        <Badge status="active" />
+      </div>
+      <div className="p-metrics p-staff-metrics">
+        <article><div><span>Ready to redeem</span><Icon name="cards" /></div>
+          <strong>{readyToRedeem}</strong><small>Customers who revealed their reward</small></article>
+        <article><div><span>Redeemed today</span><Icon name="check" /></div>
+          <strong>{redeemedToday}</strong><small>Completed at this branch today</small></article>
+        <article><div><span>Total redeemed</span><Icon name="analytics" /></div>
+          <strong>{staffRedeemed}</strong><small>All completed branch redemptions</small></article>
+      </div>
+      <div className="p-staff-redemption-grid">
+        <article className="p-card p-redeem-desk">
+          <span className="p-eyebrow">COUPON VERIFICATION</span>
+          <h2>Redeem a scratched coupon</h2>
+          <p>Ask the customer for the coupon code shown after scratching their card.</p>
+          <form onSubmit={redeemBranchCoupon}>
+            <label htmlFor="branch-redemption-code">Coupon code</label>
+            <div>
+              <input id="branch-redemption-code" name="couponCode" required maxLength="24"
+                autoComplete="off" autoCapitalize="characters" spellCheck="false"
+                placeholder="Example: LUCKY-71F37C66" value={redemptionCode}
+                onChange={(event) => setRedemptionCode(event.target.value.toUpperCase())} />
+              <button className="p-button primary" type="submit" disabled={busy || !redemptionCode.trim()}>
+                <Icon name="check" />{busy ? "Checking…" : "Redeem coupon"}
+              </button>
+              <button className="p-button p-scan-button" type="button" disabled={busy}
+                onClick={() => setScannerOpen(true)}>
+                <span className="p-scan-icon" aria-hidden="true" />Scan QR code
+              </button>
+            </div>
+          </form>
+        </article>
+        <article className="p-card p-redemption-guide">
+          <span className="p-eyebrow">SAFE REDEMPTION</span>
+          <h2>Before you redeem</h2>
+          <ol>
+            <li><b>Customer scratches the card</b><span>The reward and coupon code become visible.</span></li>
+            <li><b>Check the assigned branch</b><span>Only coupons assigned to this branch can be accepted here.</span></li>
+            <li><b>Confirm once</b><span>A redeemed code is locked permanently and cannot be used again.</span></li>
+          </ol>
+        </article>
+      </div>
+      <article className="p-card">
+        <div className="p-card-title"><div><h2>Recent redemptions</h2>
+          <p>Latest coupons completed at {branchStaffBranch?.name || "this branch"}.</p></div></div>
+        <Table columns={["Coupon code", "Reward", "Redeemed at", "Status"]}
+          empty={!cards.some((item) => item.staffRedeemedAt)}>
+          {cards.filter((item) => item.staffRedeemedAt).slice(0, 8).map((item) => <tr key={item.slug}>
+            <td className="p-code">{item.couponCode}</td>
+            <td>{item.offerTitle}</td>
+            <td>{localizedDate(item.staffRedeemedAt)}</td>
+            <td><Badge status="redeemed" /></td>
+          </tr>)}
+        </Table>
+      </article>
+    </>
+  );
   const overview = (
     <>
       <div className="p-welcome-row">
         <div>
           <span className="p-eyebrow">
-            {ui(global ? "PLATFORM OVERVIEW" : "BUSINESS OVERVIEW")}
+            {ui(global ? "PLATFORM OVERVIEW" : branchStaff ? "BRANCH DASHBOARD" : "BUSINESS OVERVIEW")}
           </span>
           <h1>
             {global
               ? "Your rewards platform, at a glance."
+              : branchStaff
+                ? `${branchStaffBranch?.name || "Assigned branch"} dashboard`
               : ui("{name} workspace", { name: business?.name || session.user.name })}
           </h1>
-          <p>{ui("Manage rewards, monitor activity, and keep your team in sync.")}</p>
+          <p>{branchStaff
+            ? `Monitor coupons and redemption activity for ${business?.name || "your business"}.`
+            : ui("Manage rewards, monitor activity, and keep your team in sync.")}</p>
         </div>
-        <button
+        {!branchStaff && <button
           className="p-button primary"
           onClick={
             global ? createBusiness : () => navigate("Create scratch card")
@@ -1575,7 +2169,7 @@ export default function Portal({
         >
           <Icon name="plus" />
           {ui(global ? "New business" : "Create scratch card")}
-        </button>
+        </button>}
       </div>
       <div className={`p-metrics${global ? " p-metrics-platform" : ""}`}>
         {stats.map((item) => (
@@ -1601,8 +2195,8 @@ export default function Portal({
               day.setDate(day.getDate() - 6 + index);
               const count = cards.filter(
                 (item) =>
-                  item.redeemedAt &&
-                  new Date(item.redeemedAt).toDateString() ===
+                  item.staffRedeemedAt &&
+                  new Date(item.staffRedeemedAt).toDateString() ===
                     day.toDateString(),
               ).length;
               const max = Math.max(1, used);
@@ -1629,7 +2223,7 @@ export default function Portal({
               <b>{ui("{count} branches", { count: branches.length })}</b>
               <small>{ui("Manage your business locations")}</small>
             </span>
-            <button onClick={() => navigate("Branches")}>{ui("View")}</button>
+            {!branchStaff && <button onClick={() => navigate("Branches")}>{ui("View")}</button>}
           </div>
           {global && (
             <div>
@@ -1649,7 +2243,7 @@ export default function Portal({
               <b>{ui("{count} campaigns", { count: campaigns.length })}</b>
               <small>{ui("Grouped scratch-card rewards")}</small>
             </span>
-            <button onClick={() => navigate("Campaigns")}>{ui("View")}</button>
+            {!branchStaff && <button onClick={() => navigate("Campaigns")}>{ui("View")}</button>}
           </div>
         </article>
       </div>
@@ -1671,7 +2265,10 @@ export default function Portal({
     </>
   );
   const render = () => {
-    if (tab === "Overview") return overview;
+    if (tab === "Overview") return branchStaff ? branchStaffOverview : overview;
+    if (branchStaff && tab === "Redeem coupon") return branchRedemptionDesk();
+    if (branchStaff && tab === "Branch coupons") return branchCouponsTable;
+    if (branchStaff && tab === "Redemption history") return branchRedemptionHistory();
     if (tab === "Create scratch card")
       return (
         <div className="p-builder">
@@ -1764,6 +2361,9 @@ export default function Portal({
                     <button onClick={() => openWorkspace(item.businessId)}>
                       Open workspace <Icon name="arrow" size={14} />
                     </button>
+                    <button disabled={busy} onClick={() => setCouponManagerBusinessId(item.businessId)}>
+                      Manage coupons
+                    </button>
                     <button
                       disabled={busy}
                       onClick={() =>
@@ -1782,18 +2382,7 @@ export default function Portal({
                       {item.status === "active" ? "Pause" : "Activate"}
                     </button>
                     <button className="danger" disabled={busy || !cards.some((card) => card.businessId === item.businessId)}
-                      onClick={() => {
-                        const couponCount = cards.filter((card) => card.businessId === item.businessId).length;
-                        setEditor({
-                          title: `Delete all coupons for ${item.name}`,
-                          danger: true,
-                          submitLabel: "Delete all coupons",
-                          successMessage: `All coupons for ${item.name} were permanently deleted. Their shared links no longer work.`,
-                          description: `Permanently delete all ${couponCount} coupons belonging to ${item.name}. This cannot be undone. Type the exact business name to confirm.`,
-                          fields: [{ key: "confirmName", label: `Type ${item.name} to confirm`, required: true }],
-                          save: (values) => api(`/api/portal/businesses/${item.businessId}/cards`, "DELETE", values),
-                        });
-                      }}>
+                      onClick={() => requestDeleteAllCoupons(item)}>
                       Delete all coupons
                     </button>
                     <button className="danger" disabled={busy}
@@ -1936,7 +2525,7 @@ export default function Portal({
       );
     }
     if (tab === "Business accounts") {
-      const rows = accounts.filter(match);
+      const rows = accounts.filter((item) => item.role !== "branch-staff" && match(item));
       return (
         <article className="p-card">
           <div className="p-info">
@@ -1975,6 +2564,39 @@ export default function Portal({
                 </td>
               </tr>
             ))}
+          </Table>
+        </article>
+      );
+    }
+    if (tab === "Branch staff" && admin) {
+      const rows = accounts.filter((item) => item.role === "branch-staff"
+        && (!businessFilter || item.businessId === businessFilter)
+        && match(item));
+      return (
+        <article className="p-card">
+          <div className="p-info">
+            Create and monitor staff logins for individual branches. Branch staff can redeem scratched coupons by code for their assigned business, but cannot create, edit, disable, or manage cards.
+          </div>
+          <Table
+            columns={["Staff", "Business", "Branch", "Login ID", "Last login", "Logins", "Access", "Actions"]}
+            empty={!rows.length}
+          >
+            {rows.map((item) => {
+              const staffBusiness = businesses.find((value) => value.businessId === item.businessId);
+              const staffBranch = staffBusiness?.branches?.find((value) => value.branchId === item.branchId);
+              return <tr key={item.id}>
+                <td><b>{item.name}</b><small>Branch staff</small></td>
+                <td>{staffBusiness?.name || "Unavailable business"}</td>
+                <td>{staffBranch?.name || "Unavailable branch"}</td>
+                <td className="p-code">{item.loginId || item.email}</td>
+                <td>{item.lastLoginAt ? localizedDate(item.lastLoginAt) : "Never"}</td>
+                <td>{item.loginCount || 0}</td>
+                <td><Badge status={item.status} /></td>
+                <td><button className="p-button small" disabled={busy} onClick={() => editBranchStaff(item)}>
+                  Manage staff
+                </button></td>
+              </tr>;
+            })}
           </Table>
         </article>
       );
@@ -2495,6 +3117,8 @@ export default function Portal({
         ? createBranch
         : tab === "Business accounts"
           ? createAccount
+          : tab === "Branch staff" && admin
+            ? createBranchStaff
           : tab === "Super admins" && global ? createSuperAdmin
           : null;
   return (
@@ -2518,7 +3142,7 @@ export default function Portal({
         >
           <JustConnectLogo theme={theme} />
           <small>
-            {ui(global ? "Super administrator" : "Business workspace")}
+            {ui(global ? "Super administrator" : branchStaff ? "Branch staff workspace" : "Business workspace")}
           </small>
         </a>
         <div className="p-workspace-chip">
@@ -2556,7 +3180,7 @@ export default function Portal({
             <small>
               {ui(session.user.role === "business"
                 ? "Business owner"
-                : session.user.role)}
+                : branchStaff ? "Branch staff" : session.user.role)}
             </small>
           </div>
           <button onClick={onLogout} aria-label={ui("Sign out")} title={ui("Sign out")}>
@@ -2647,13 +3271,19 @@ export default function Portal({
               )}
               {add && (
                 <button className="p-button primary" onClick={add}
-                  disabled={tab === "Branches" && branchCreationDisabled}
-                  title={tab === "Branches" && branchCreationDisabled ? "Branch limit reached" : undefined}>
+                  disabled={(tab === "Branches" && branchCreationDisabled)
+                    || (tab === "Branch staff" && !branches.some((branch) => branch.status === "active"))}
+                  title={tab === "Branches" && branchCreationDisabled
+                    ? "Branch limit reached"
+                    : tab === "Branch staff" && !branches.some((branch) => branch.status === "active")
+                      ? "Create an active business branch first"
+                      : undefined}>
                   <Icon name="plus" />
                   {ui(tab === "Businesses"
                     ? "Create business"
                     : tab === "Branches"
                       ? "Add branch"
+                      : tab === "Branch staff" ? "Add branch staff"
                       : tab === "Super admins" ? "Create super admin" : "Add account")}
                 </button>
               )}
@@ -2693,7 +3323,7 @@ export default function Portal({
                 />
               </div>
               <div>
-                {global && ["Campaigns", "Scratch cards", "Branches"].includes(tab) && (
+                {global && ["Campaigns", "Scratch cards", "Branches", "Branch staff"].includes(tab) && (
                   <select aria-label="Filter by business" value={businessFilter}
                     onChange={(event) => {
                       setBusinessFilter(event.target.value);
@@ -2715,6 +3345,17 @@ export default function Portal({
                     <Icon name="download" />{busy ? ui("Working…") : ui("Export branches")}
                   </button>
                 )}
+                {branchStaff && tab === "Branch coupons" && (
+                  <select
+                    aria-label={ui("Coupon status")}
+                    value={status}
+                    onChange={(event) => setStatus(event.target.value)}
+                  >
+                    {["all", "available", "opened", "scratched", "redeemed", "disabled", "expired"].map((value) => (
+                      <option key={value} value={value}>{ui(value === "all" ? "All statuses" : value)}</option>
+                    ))}
+                  </select>
+                )}
                 {["Coupons", "Scratch cards"].includes(tab) && (
                   <>
                     <select
@@ -2725,6 +3366,8 @@ export default function Portal({
                       {[
                         "all",
                         "available",
+                        "opened",
+                        "scratched",
                         "redeemed",
                         "disabled",
                         "expired",
@@ -2831,6 +3474,19 @@ export default function Portal({
           )}
         </div>
       </main>
+      {couponManagerBusinessId && (() => {
+        const managedBusiness = businesses.find((item) => item.businessId === couponManagerBusinessId);
+        if (!managedBusiness) return null;
+        const managedCoupons = cards.filter((card) => card.businessId === managedBusiness.businessId);
+        return <CouponManagerDialog business={managedBusiness} cards={managedCoupons} busy={busy}
+          onClose={() => setCouponManagerBusinessId("")}
+          onPreview={setPreviewCard}
+          onCopy={(card) => navigator.clipboard.writeText(scratchCardUrl(card.slug))
+            .then(() => setNotice("Share link copied."))
+            .catch(() => setError("Unable to copy. Open the card to copy its URL."))}
+          onDeleteCoupon={(card) => requestDeleteCoupon(managedBusiness, card)}
+          onDeleteAll={() => requestDeleteAllCoupons(managedBusiness)} />;
+      })()}
       {editor && (
         <Editor
           key={editor.title}
@@ -2850,6 +3506,10 @@ export default function Portal({
         />
       )}
       {credentials && <CredentialsDialog credentials={credentials} onClose={() => setCredentials(null)} />}
+      {redemptionFeedback && <RedemptionResultDialog feedback={redemptionFeedback}
+        onClose={() => setRedemptionFeedback(null)} />}
+      {branchStaff && scannerOpen && <CouponScannerDialog
+        onClose={() => setScannerOpen(false)} onScan={redeemScannedCoupon} />}
     </div>
     </WorkspaceLocale.Provider>
   );
