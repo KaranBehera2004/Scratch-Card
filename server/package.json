@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "test": "node --test tests/control.test.js tests/indexes.test.js tests/bulk.test.js tests/runtime-config.test.js tests/deployment-config.test.js ../client/src/features/bulk/bulk-coupons.test.js ../client/src/features/portal/campaigns.test.js ../client/src/features/portal/coupon-filters.test.js shared/whatsapp.test.js shared/urls.test.js",
+    "test": "node --test tests/control.test.js tests/indexes.test.js tests/bulk.test.js tests/runtime-config.test.js tests/deployment-config.test.js ../client/src/features/bulk/bulk-coupons.test.js ../client/src/features/portal/campaigns.test.js ../client/src/features/portal/coupon-filters.test.js shared/whatsapp.test.js shared/urls.test.js shared/coupon-status.test.js shared/public-card-errors.test.js",
     "test:ui": "npm run build && playwright test --config tests/playwright.config.js",
     "dev": "node scripts/dev.js",
     "dev:client": "npm --prefix ../client run dev",

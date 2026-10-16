@@ -10,6 +10,15 @@ const text = (value, max = 120) =>
     .slice(0, max);
 const fail = (message, status = 400) =>
   Object.assign(new Error(message), { status });
+// Legacy storage: departments are location branches; branches are their departments.
+const checkDepartmentName = (branches, candidate) => {
+  if (!candidate.departmentId) return;
+  if (branches.some((item) => item.status !== "deleted"
+    && item.branchId !== candidate.branchId
+    && item.departmentId === candidate.departmentId
+    && text(item.name, 60).toLowerCase() === candidate.name.toLowerCase()))
+    throw fail(`Branch name already exists in this department: ${candidate.name}`);
+};
 const safe = (value) => {
   const { passwordHash, passwordVersion, ...result } = value;
   return result;
@@ -288,7 +297,7 @@ export function installControls(app, context) {
     ).toString("base64url");
     return `${body}.${crypto.createHmac("sha256", secret()).update(body).digest("base64url")}`;
   };
-  async function audit(req, action, businessId = "", detail = "") {
+  async function audit(req, action, businessId = "", detail = "", redemption = null) {
     const entry = {
       id: crypto.randomUUID(),
       actor: req.user?.loginId || req.user?.email || "System",
@@ -296,6 +305,7 @@ export function installControls(app, context) {
       businessId,
       detail,
       createdAt: new Date().toISOString(),
+      ...(redemption ? { redemption } : {}),
     };
     if (isMongo()) {
       await Meta.updateOne(
@@ -319,31 +329,34 @@ export function installControls(app, context) {
   }
   async function resolveRedemptionRecord(card) {
     const meta = await readMeta(["users", "audit"]);
-    const branchId = String(card.branchId || "");
     const branchStaff = (meta.users || []).filter((item) =>
       item.businessId === card.businessId
-      && item.role === "branch-staff"
-      && item.branchId === branchId);
+      && item.role === "branch-staff");
     const recordedStaff = branchStaff.find((item) => item.id === card.staffRedeemedBy);
     const couponCode = String(card.couponCode || "").toUpperCase();
     const auditEntry = (meta.audit || []).find((item) =>
       item.businessId === card.businessId
       && item.action === "Coupon redeemed by branch staff"
-      && String(item.detail || "").toUpperCase().startsWith(`${couponCode} · `));
+      && (item.redemption ? item.redemption.slug === card.slug
+        : String(item.detail || "").toUpperCase().startsWith(`${couponCode} · `)));
+    if (auditEntry?.redemption) return auditEntry.redemption;
     const auditedStaff = auditEntry
       ? branchStaff.find((item) =>
           String(item.loginId || item.email || "").toLowerCase()
           === String(auditEntry.actor || "").toLowerCase())
       : null;
-    const snapshotStaff = branchStaff.find((item) => item.name === card.staffRedeemedByName);
-    const staff = recordedStaff || auditedStaff || snapshotStaff
-      || (branchStaff.length === 1 ? branchStaff[0] : null);
-    const savedIdentityMatchesBranch = Boolean(recordedStaff)
-      && String(card.staffRedeemedBranchId || "") === branchId;
+    // Older records may contain the last viewer's identity. Their original audit
+    // actor takes precedence; never substitute the currently logged-in staff.
+    const staff = auditedStaff || recordedStaff;
+    const savedIdentityMatchesBranch = !auditedStaff || auditedStaff.id === card.staffRedeemedBy;
+    const branchId = savedIdentityMatchesBranch
+      ? String(card.staffRedeemedBranchId || card.redeemedBranchId || card.branchId || "")
+      : String(auditedStaff?.branchId || card.staffRedeemedBranchId || card.branchId || "");
     return {
       branchId,
-      staffName: staff?.name
-        || (savedIdentityMatchesBranch ? card.staffRedeemedByName : "")
+      branchName: savedIdentityMatchesBranch ? card.staffRedeemedBranchName : "",
+      locationName: savedIdentityMatchesBranch ? card.staffRedeemedLocationName : "",
+      staffName: (savedIdentityMatchesBranch ? card.staffRedeemedByName : "") || staff?.name
         || "Unknown staff member",
       redeemedAt: savedIdentityMatchesBranch
         ? card.staffRedeemedAt
@@ -1033,17 +1046,11 @@ export function installControls(app, context) {
       const limits = await businessLimits(business);
       if (limits.department > 0 && activeDepartments.length + input.length > limits.department)
         throw fail(`department limit reached (${limits.department}). Contact your administrator.`, 403);
-      const departmentNames = new Set(activeDepartments.map((item) => item.name.toLowerCase()));
-      const branchNames = new Set(activeBranches.map((item) => item.name.toLowerCase()));
       let totalBranches = 0;
       const createdDepartments = [], createdBranches = [];
       for (const row of input) {
         const name = text(row?.name, 60);
         if (!name) throw fail("Every department needs a name.");
-        const departmentKey = name.toLowerCase();
-        if (departmentNames.has(departmentKey))
-          throw fail(`Department name already exists: ${name}`);
-        departmentNames.add(departmentKey);
         if (!Array.isArray(row.branches) || row.branches.length < 1 || row.branches.length > 50)
           throw fail(`Add between 1 and 50 branches under ${name}.`);
         const department = { departmentId: crypto.randomUUID(), name, status: "active" };
@@ -1051,13 +1058,12 @@ export function installControls(app, context) {
         for (const item of row.branches) {
           const branchName = text(item?.name, 60);
           if (!branchName) throw fail(`Every branch under ${name} needs a name.`);
-          const branchKey = branchName.toLowerCase();
-          if (branchNames.has(branchKey)) throw fail(`Branch name already exists: ${branchName}`);
-          branchNames.add(branchKey);
-          createdBranches.push({
+          const branch = {
             branchId: crypto.randomUUID(), departmentId: department.departmentId,
             name: branchName, address: text(item?.address, 140), status: "active",
-          });
+          };
+          checkDepartmentName(createdBranches, branch);
+          createdBranches.push(branch);
           totalBranches++;
         }
       }
@@ -1084,8 +1090,6 @@ export function installControls(app, context) {
       await limit(business, "branch", branches.filter((item) => item.status !== "deleted").length);
       const name = text(req.body.name, 60);
       if (!name) throw fail("Branch name is required.");
-      if (branches.some((item) => item.status !== "deleted" && item.name.toLowerCase() === name.toLowerCase()))
-        throw fail(`Branch name already exists: ${name}`);
       const departmentId = text(req.body.departmentId, 60);
       if (departmentId && !(business.departments || []).some((item) =>
         item.departmentId === departmentId && (item.status || "active") === "active"))
@@ -1097,6 +1101,7 @@ export function installControls(app, context) {
         address: text(req.body.address, 140),
         status: "active",
       };
+      checkDepartmentName(branches, branch);
       await updateBusiness(id, { branches: [...branches, branch] });
       await audit(req, "Branch created", id, name);
       res.status(201).json({ branch });
@@ -1140,6 +1145,7 @@ export function installControls(app, context) {
           throw fail("Invalid branch status.");
         branch.status = req.body.status;
       }
+      checkDepartmentName(branches, branch);
       await updateBusiness(id, { branches });
       await audit(req, "Branch updated", id, branch.name);
       res.json({ branch });
@@ -1179,6 +1185,7 @@ export function installControls(app, context) {
         throw fail("Restore the branch's department first.", 409);
       const { deletedAt: _deletedAt, ...savedBranch } = branch;
       const restored = { ...savedBranch, status: "active" };
+      checkDepartmentName(branches, restored);
       await updateBusiness(id, { branches: branches.map((item) =>
         item.branchId === branch.branchId ? restored : item) });
       await audit(req, "Branch restored", id, branch.name);
@@ -1240,6 +1247,11 @@ export function installControls(app, context) {
         const { deletedAt: _branchDeletedAt, ...savedBranch } = item;
         return { ...savedBranch, status: "active" };
       });
+      const activeBranches = branches.filter((item) => item.status !== "deleted");
+      for (const branch of restoredBranches) {
+        checkDepartmentName(activeBranches, branch);
+        activeBranches.push(branch);
+      }
       const restoredById = new Map(restoredBranches.map((item) => [item.branchId, item]));
       await updateBusiness(id, {
         departments: departments.map((item) => item.departmentId === department.departmentId ? restoredDepartment : item),
@@ -1259,7 +1271,7 @@ export function installControls(app, context) {
       const visibleBusinesses = new Set((await listBusinesses()).map((business) => business.businessId));
       res.json({
         users: (await users())
-          .filter((item) => visibleBusinesses.has(item.businessId) && (!id || item.businessId === id))
+          .filter((item) => item.status !== "deleted" && visibleBusinesses.has(item.businessId) && (!id || item.businessId === id))
           .map(safe),
       });
     }),
@@ -1275,7 +1287,7 @@ export function installControls(app, context) {
       await limit(
         business,
         "account",
-        1 + items.filter((item) => item.businessId === id).length,
+        1 + items.filter((item) => item.businessId === id && item.status !== "deleted").length,
       );
       const name = text(req.body.name, 60);
       if (!name) throw fail("Full name is required.");
@@ -1339,7 +1351,7 @@ export function installControls(app, context) {
       owner(req);
       const id = scope(req),
         account = (await users()).find((item) => item.id === req.params.userId);
-      if (!account || (id && account.businessId !== id))
+      if (!account || account.status === "deleted" || (id && account.businessId !== id))
         throw fail("Account not found.", 404);
       if (account.id === req.user.id)
         throw fail("Use your account settings to update your own account.");
@@ -1368,11 +1380,13 @@ export function installControls(app, context) {
           throw fail("Use a password of 10–200 characters.");
         patch.passwordHash = hashPassword(req.body.password);
       }
-      await changeMeta("users", (records) =>
-        records.map((item) =>
+      await changeMeta("users", (records) => {
+        if (!records.some((item) => item.id === account.id && item.status !== "deleted"))
+          throw fail("Account not found.", 404);
+        return records.map((item) =>
           item.id === account.id ? { ...item, ...patch } : item,
-        ),
-      );
+        );
+      });
       await changeMeta("versions", (values) => ({
         ...values,
         [account.id]: (values?.[account.id] || 0) + 1,
@@ -1384,6 +1398,35 @@ export function installControls(app, context) {
         account.loginId || account.email,
       );
       res.json({ ok: true });
+    }),
+  );
+  app.delete(
+    "/api/portal/users/:userId",
+    auth,
+    route(async (req, res) => {
+      owner(req);
+      const id = scope(req);
+      let removed;
+      await changeMeta("users", (records = []) => {
+        const account = records.find((item) => item.id === req.params.userId);
+        if (!account || account.status === "deleted" || account.role !== "branch-staff"
+          || (id && account.businessId !== id)) throw fail("Staff account not found.", 404);
+        if (account.id === req.user.id) throw fail("You cannot delete your own account.", 403);
+        if (req.body?.confirmName !== account.name)
+          throw fail("Confirm the staff member's name before deleting this account.");
+        removed = account;
+        // Archive identity for historical/legacy redemption records. Deleted
+        // accounts are excluded from management lists, logins and allowances.
+        return records.map((item) => item.id === account.id
+          ? { ...item, status: "deleted", deletedAt: new Date().toISOString(), deletedBy: req.user.id }
+          : item);
+      });
+      await changeMeta("versions", (values) => ({
+        ...values, [removed.id]: (values?.[removed.id] || 0) + 1,
+      }));
+      await audit(req, "Staff account deleted", removed.businessId,
+        `${removed.name} · ${removed.loginId || removed.email} (archived; redemption history retained)`);
+      res.json({ ok: true, deleted: true, archived: true });
     }),
   );
   app.get(

@@ -1,6 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { branchQuantityError, bulkExcelRows, BULK_EXCEL_HEADERS, shareExcelRows, SHARE_EXCEL_HEADERS, unusedBulkBranches, addBulkBranch, mergeBulkResults, generatedByBranch, remainingBranchQuantities } from "./bulk-coupons.js";
+import { workspaceTranslator } from "../../i18n/workspace-i18n.js";
+
+test("workspace terminology presents places as branches and sales or service units as departments", () => {
+  const ui = workspaceTranslator("en");
+  assert.equal(ui("Add departments and branches"), "Add branches and departments");
+  assert.equal(ui("Department name"), "Branch name");
+  assert.equal(ui("Branch name"), "Department name");
+  assert.equal(ui("Branch staff workspace"), "Department staff workspace");
+  assert.equal(ui("BRANCH DASHBOARD"), "DEPARTMENT DASHBOARD");
+  assert.equal(workspaceTranslator("hi")("Branches"), "विभाग");
+  assert.equal(workspaceTranslator("te")("Branches"), "విభాగాలు");
+});
 import writeExcelFile from "write-excel-file/universal";
 import { unzipSync, strFromU8 } from "fflate";
 test("bulk client quantities require distinct branches and positive integers", () => {
@@ -74,7 +86,7 @@ test("sharing Excel contains every coupon and each private assigned number, with
   const rows = shareExcelRows(cards, "https://example.test");
   assert.equal(rows.length, 75);
   assert.equal(SHARE_EXCEL_HEADERS.length, 10);
-  assert.deepEqual(SHARE_EXCEL_HEADERS, ["Branch", "Coupon Code", "WhatsApp Number", "Main Offer", "Offer Details", "Campaign Name", "Scratch Link", "Expiry Date", "Status", "Created At"]);
+  assert.deepEqual(SHARE_EXCEL_HEADERS, ["Department", "Coupon Code", "WhatsApp Number", "Main Offer", "Offer Details", "Campaign Name", "Scratch Link", "Expiry Date", "Status", "Created At"]);
   assert.deepEqual(rows[0][1], { value: "0000", type: String, format: "@" });
   assert.deepEqual(rows[0][2], { value: cards[0].customerPhone, type: String, format: "@" });
   assert.deepEqual(rows[26][2], { value: cards[26].customerPhone, type: String, format: "@" });

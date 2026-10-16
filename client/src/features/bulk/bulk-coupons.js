@@ -1,6 +1,6 @@
 import { scratchCardUrl } from "../../../../server/shared/urls.js";
 
-export const BULK_EXCEL_HEADERS = ["Branch", "Coupon Code", "Main Offer", "Offer Details", "Campaign Name", "Scratch Link", "Expiry Date", "Status", "Created At"];
+export const BULK_EXCEL_HEADERS = ["Department", "Coupon Code", "Main Offer", "Offer Details", "Campaign Name", "Scratch Link", "Expiry Date", "Status", "Created At"];
 export function bulkExcelRows(coupons, origin) {
   return coupons.map((card) => [card.branchName, card.couponCode, card.offerTitle,
     card.description, card.campaignName, scratchCardUrl(card.slug, origin),
@@ -8,7 +8,7 @@ export function bulkExcelRows(coupons, origin) {
     card.createdAt ? new Date(card.createdAt).toISOString() : "",
   ].map((value) => ({ value: String(value ?? ""), type: String })));
 }
-export const SHARE_EXCEL_HEADERS = ["Branch", "Coupon Code", "WhatsApp Number", "Main Offer", "Offer Details", "Campaign Name", "Scratch Link", "Expiry Date", "Status", "Created At"];
+export const SHARE_EXCEL_HEADERS = ["Department", "Coupon Code", "WhatsApp Number", "Main Offer", "Offer Details", "Campaign Name", "Scratch Link", "Expiry Date", "Status", "Created At"];
 export function shareExcelRows(coupons, origin) {
   return bulkExcelRows(coupons, origin).map((row, index) => [
     row[0],

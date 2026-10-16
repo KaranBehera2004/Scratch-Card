@@ -375,6 +375,61 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
       )).status, 200);
     },
   );
+  await t.test("location names can repeat and department names are unique only within their location", async () => {
+    const created = await request("/api/portal/businesses", admin, "POST", {
+      name: "Repeated location names", password: "Location-Test-Password",
+      limits: { card: 0, branch: 0, department: 0, account: 0 },
+    });
+    assert.equal(created.status, 201, created.message);
+    const basePath = `/api/portal/businesses/${created.business.businessId}`;
+    const hierarchyPath = `${basePath}/departments/branches`;
+    const makeLocation = () => ({ name: "Ameerpet", branches: [{ name: "Sales" }, { name: "Service" }] });
+    // Both one submission and subsequent submissions may reuse location/unit names.
+    const hierarchy = await request(hierarchyPath, admin, "POST", {
+      departments: [makeLocation(), makeLocation()],
+    });
+    assert.equal(hierarchy.status, 201, hierarchy.message);
+    assert.equal(new Set(hierarchy.departments.map((item) => item.departmentId)).size, 2);
+    assert.equal(new Set(hierarchy.branches.map((item) => item.branchId)).size, 4);
+    assert.equal((await request(hierarchyPath, admin, "POST", { departments: [makeLocation()] })).status, 201);
+    const [first, second] = hierarchy.departments;
+    const firstSales = hierarchy.branches.find((item) => item.departmentId === first.departmentId && item.name === "Sales");
+    const firstService = hierarchy.branches.find((item) => item.departmentId === first.departmentId && item.name === "Service");
+    const before = (await request(`/api/portal/businesses?business=${created.business.businessId}`, admin)).businesses
+      .find((item) => item.businessId === created.business.businessId);
+    const duplicateHierarchy = await request(hierarchyPath, admin, "POST", {
+      departments: [{ name: "Another location", branches: [{ name: "Sales" }, { name: " sales " }] }],
+    });
+    assert.equal(duplicateHierarchy.status, 400);
+    const after = (await request(`/api/portal/businesses?business=${created.business.businessId}`, admin)).businesses
+      .find((item) => item.businessId === created.business.businessId);
+    assert.deepEqual(after.departments, before.departments);
+    assert.deepEqual(after.branches, before.branches);
+    const addUnit = (departmentId, name) => request(`${basePath}/branches`, admin, "POST", { departmentId, name });
+    assert.equal((await addUnit(first.departmentId, " SALES ")).status, 400);
+    const support = await addUnit(first.departmentId, "Support");
+    assert.equal(support.status, 201, support.message);
+    assert.equal((await addUnit(second.departmentId, "Support")).status, 201);
+    assert.equal((await addUnit("", "Unassigned name")).status, 201);
+    assert.equal((await addUnit("", "Unassigned name")).status, 201);
+    const unitPath = (unit) => `${basePath}/branches/${unit.branchId}`;
+    assert.equal((await request(unitPath(firstService), admin, "PATCH", { name: " sales " })).status, 400);
+    assert.equal((await request(unitPath(support.branch), admin, "PATCH", { departmentId: second.departmentId })).status, 400);
+    assert.equal((await request(unitPath(firstSales), admin, "PATCH", { name: " SALES " })).status, 200);
+    assert.equal((await request(unitPath(firstSales), admin, "DELETE")).status, 200);
+    const replacement = await addUnit(first.departmentId, "Sales");
+    assert.equal(replacement.status, 201, replacement.message);
+    assert.equal((await request(`${unitPath(firstSales)}/restore`, admin, "POST", {})).status, 400);
+    assert.equal((await request(unitPath(replacement.branch), admin, "DELETE")).status, 200);
+    assert.equal((await request(`${unitPath(firstSales)}/restore`, admin, "POST", {})).status, 200);
+    // Restoring a same-name location retains its own units and their original IDs.
+    const locationPath = `${basePath}/departments/${first.departmentId}`;
+    assert.equal((await request(locationPath, admin, "DELETE")).status, 200);
+    const restored = await request(`${locationPath}/restore`, admin, "POST", {});
+    assert.equal(restored.status, 200, restored.message);
+    assert.ok(restored.branches.some((item) => item.branchId === firstSales.branchId));
+    assert.equal((await request(basePath, admin, "DELETE", { confirmName: created.business.name })).status, 200);
+  });
   await t.test("WhatsApp numbers are mandatory and invalid values never save cards", async () => {
     const before = (await request("/api/portal/cards", owner)).cards.length;
     for (const customerPhone of [undefined, null, "", "   "]) {
@@ -712,6 +767,20 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
     const card = await request("/api/cards", ownerToken, "POST", { ...draft, businessId: id, branchId: branch.branch.branchId });
     assert.equal(card.status, 201);
     assert.equal((await request(`/api/cards/${card.slug}`)).status, 200);
+    // Expired WhatsApp links must still lead to the existing expired-card UI,
+    // not a generic "Card not found" page. Only this isolated fixture is edited.
+    const expiryCardsPath = path.join(temporary, "server/data/cards.json");
+    const expiryCards = JSON.parse(await fs.readFile(expiryCardsPath, "utf8"));
+    const expiring = expiryCards.find((item) => item.slug === card.slug);
+    const originalExpiry = expiring.expiresAt;
+    expiring.expiresAt = "2000-01-01T00:00:00.000Z";
+    await fs.writeFile(expiryCardsPath, JSON.stringify(expiryCards));
+    const expiredShare = await fetch(`${base}/share/${card.slug}?v=5`);
+    assert.equal(expiredShare.status, 200);
+    assert.match(await expiredShare.text(), new RegExp(`/card/${card.slug}`));
+    assert.equal((await request(`/api/cards/${card.slug}`)).expired, true);
+    expiring.expiresAt = originalExpiry;
+    await fs.writeFile(expiryCardsPath, JSON.stringify(expiryCards));
     assert.equal((await request(`/api/portal/businesses/${id}`, ownerToken, "DELETE", { confirmName: "Delete Test" })).status, 403);
     assert.equal((await request(`/api/portal/businesses/${id}`, admin, "DELETE", { confirmName: "wrong" })).status, 400);
     assert.equal((await request(`/api/cards/${card.slug}`)).status, 200);
@@ -723,6 +792,20 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
     assert.ok(!(await request("/api/portal/users", admin)).users.some((item) => item.businessId === id));
     assert.ok(!(await request("/api/admin/coupons", admin)).coupons.some((item) => item.businessId === id));
     assert.equal((await request(`/api/cards/${card.slug}`)).status, 404);
+    const missingBusiness = await request(`/api/cards/${card.slug}`);
+    assert.equal(missingBusiness.code, "BUSINESS_UNAVAILABLE");
+    const shareFailure = await fetch(`${base}/share/${card.slug}?v=5`);
+    assert.equal(shareFailure.status, 404);
+    assert.match(shareFailure.headers.get("content-type"), /text\/html/);
+    assert.match(shareFailure.headers.get("cache-control"), /no-store/);
+    const failureHtml = await shareFailure.text();
+    assert.match(failureHtml, /This coupon is no longer available/);
+    assert.doesNotMatch(failureHtml, /Business not found\.|window.location.replace|couponCode/);
+    for (const url of ["/share", "/share/bad", "/share/invalid/extra"]) {
+      const invalid = await fetch(`${base}${url}`);
+      assert.equal(invalid.status, 404);
+      assert.match(await invalid.text(), /We couldn’t find this coupon/);
+    }
     assert.equal((await request(`/api/cards/${card.slug}/claim`, null, "POST", {})).status, 404);
     assert.equal((await request("/api/auth/me", ownerToken)).status, 401);
     assert.equal((await request("/api/auth/me", editorToken)).status, 401);
@@ -851,7 +934,150 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
     assert.equal((await request("/api/portal/redeem", reassignedToken, "POST", { couponCode: "SOUTH-ONE" })).status, 409);
     monitored = (await request("/api/portal/users", admin)).users.find((user) => user.id === staff.user.id);
     assert.equal(monitored.loginCount, 2);
+    const deletePath = `/api/portal/users/${staff.user.id}`;
+    const confirmation = { confirmName: "North Staff" };
+    const beforeDeletion = (await request("/api/portal/cards", ownerToken)).cards;
+    assert.equal((await request(deletePath, null, "DELETE", confirmation)).status, 401);
+    assert.equal((await request(deletePath, reassignedToken, "DELETE", confirmation)).status, 403);
+    assert.equal((await request(deletePath, owner, "DELETE", confirmation)).status, 404);
+    assert.equal((await request(`${deletePath}?business=impact-vibes`, ownerToken, "DELETE", confirmation)).status, 403);
+    assert.equal((await request(deletePath, ownerToken, "DELETE", {})).status, 400);
+    assert.equal((await request(deletePath, ownerToken, "DELETE", { confirmName: "Wrong staff" })).status, 400);
+    assert.ok((await request("/api/portal/users", ownerToken)).users.some((item) => item.id === staff.user.id));
+    const deleted = await request(deletePath, ownerToken, "DELETE", confirmation);
+    assert.equal(deleted.status, 200, deleted.message);
+    assert.equal(deleted.archived, true);
+    assert.equal((await request("/api/auth/me", reassignedToken)).status, 401);
+    assert.equal((await request("/api/auth/login", null, "POST", {
+      loginId: "NORTHSTAFF58", password: "North-Staff-Password",
+    })).status, 401);
+    for (const token of [ownerToken, admin])
+      assert.ok(!(await request("/api/portal/users", token)).users.some((item) => item.id === staff.user.id));
+    assert.equal((await request(deletePath, ownerToken, "DELETE", confirmation)).status, 404);
+    assert.equal((await request(deletePath, ownerToken, "PATCH", { status: "active" })).status, 404);
+    assert.equal((await request(`/api/portal/users/${viewerId}`, admin, "DELETE", { confirmName: "Viewer" })).status, 404);
+    assert.deepEqual((await request("/api/portal/cards", ownerToken)).cards, beforeDeletion);
+    const stillRedeemed = await request("/api/portal/redeem", southStaffToken, "POST", { couponCode: "NORTH-ONE" });
+    assert.equal(stillRedeemed.details.staffName, "North Staff");
+    const deletedByAdmin = await request(`/api/portal/users/${automaticStaff.user.id}`, admin, "DELETE", { confirmName: "South Staff" });
+    assert.equal(deletedByAdmin.status, 200);
+    assert.equal((await request("/api/auth/me", southStaffToken)).status, 401);
+    // Deleting a staff login frees its allowance without reusing its identity.
+    const replacement = await request("/api/portal/users", ownerToken, "POST", {
+      ...staffPayload, name: "Replacement staff", loginId: "REPLACESTAFF58",
+    });
+    assert.equal(replacement.status, 201, replacement.message);
+    assert.equal((await request("/api/portal/users", ownerToken, "POST", staffPayload)).status, 409);
+    const savedMeta = JSON.parse(await fs.readFile(path.join(temporary, "server/data/control.json"), "utf8"));
+    const archived = savedMeta.users.find((item) => item.id === staff.user.id);
+    assert.equal(archived.status, "deleted");
+    assert.ok(archived.deletedAt);
+    assert.equal(archived.deletedBy, id);
+    assert.ok(savedMeta.audit.some((event) => event.action === "Staff account deleted" && event.businessId === id));
     assert.equal((await request(`/api/portal/businesses/${id}`, admin, "DELETE", { confirmName: "Branch Staff Test" })).status, 200);
+  });
+  await t.test("same departments redeem across locations exactly once and preserve the actual redemption record", async () => {
+    const created = await request("/api/portal/businesses", admin, "POST", {
+      name: "Cross-location sales", password: "Cross-Location-Password",
+      limits: { card: 0, branch: 0, department: 0, account: 0 },
+    });
+    assert.equal(created.status, 201, created.message);
+    const businessId = created.business.businessId;
+    const hierarchy = await request(`/api/portal/businesses/${businessId}/departments/branches`, admin, "POST", {
+      departments: [
+        { name: "Ameerpet", branches: [{ name: "Sales" }, { name: "Service" }] },
+        { name: "Punjagutta", branches: [{ name: " sales " }] },
+      ],
+    });
+    assert.equal(hierarchy.status, 201, hierarchy.message);
+    const [sourceSales, service, destinationSales] = hierarchy.branches;
+    const makeStaff = async (branch, name, loginId, id = businessId) => {
+      const staff = await request("/api/portal/users", admin, "POST", {
+        businessId: id, branchId: branch.branchId, role: "branch-staff", name, loginId,
+        password: "Cross-Staff-Password", generateCredentials: true,
+      });
+      assert.equal(staff.status, 201, staff.message);
+      return { ...staff, token: await login(loginId, "Cross-Staff-Password") };
+    };
+    const sourceStaff = await makeStaff(sourceSales, "Ameerpet staff", "AMEERSALES88");
+    const destinationStaff = await makeStaff(destinationSales, "Punjagutta staff", "PUNJSALES88");
+    const serviceStaff = await makeStaff(service, "Service staff", "SERVICESTAFF88");
+    const makeCoupon = async (couponCode) => {
+      const card = await request("/api/cards", admin, "POST", { ...draft, businessId, branchId: sourceSales.branchId, couponCode });
+      assert.equal(card.status, 201, card.message);
+      return card;
+    };
+    const redeem = (staff, code) => request("/api/portal/redeem", staff.token, "POST", { couponCode: code });
+    const card = await makeCoupon("CROSS-SALES-ONE");
+    assert.equal((await redeem(destinationStaff, card.couponCode)).status, 409);
+    assert.equal((await request(`/api/cards/${card.slug}/claim`, null, "POST", {})).status, 200);
+    assert.equal((await redeem(serviceStaff, card.couponCode)).status, 403);
+    const success = await redeem(destinationStaff, card.couponCode);
+    assert.equal(success.status, 200, success.message);
+    assert.equal(success.coupon.assignedBranchName, "Sales");
+    assert.equal(success.coupon.assignedLocationName, "Ameerpet");
+    assert.equal(success.coupon.redeemedLocationName, "Punjagutta");
+    assert.equal(success.coupon.staffName, "Punjagutta staff");
+    assert.ok(Date.now() - new Date(success.coupon.redeemedAt).getTime() < 10000);
+    const savedCards = (await request(`/api/portal/cards?business=${businessId}`, admin)).cards;
+    const saved = savedCards.find((item) => item.slug === card.slug);
+    assert.equal(saved.branchId, sourceSales.branchId);
+    assert.equal(saved.staffRedeemedBranchId, destinationSales.branchId);
+    assert.equal(saved.staffRedeemedDepartmentId, destinationSales.departmentId);
+    assert.equal(saved.staffRedeemedBy, destinationStaff.user.id);
+    assert.equal(saved.staffRedeemedByName, "Punjagutta staff");
+    assert.equal(saved.staffRedeemedLocationName, "Punjagutta");
+    assert.equal(saved.status, "redeemed");
+    assert.ok((await request("/api/portal/cards", destinationStaff.token)).cards.some((item) => item.slug === card.slug));
+    for (const staff of [sourceStaff, destinationStaff]) {
+      const repeat = await redeem(staff, card.couponCode);
+      assert.equal(repeat.status, 409);
+      assert.equal(repeat.details.assignedLocationName, "Ameerpet");
+      assert.equal(repeat.details.redeemedLocationName, "Punjagutta");
+      assert.equal(repeat.details.staffName, "Punjagutta staff");
+      assert.equal(new Date(repeat.details.redeemedAt).getTime(), new Date(saved.staffRedeemedAt).getTime());
+    }
+    const wrongDepartment = await redeem(serviceStaff, card.couponCode);
+    assert.equal(wrongDepartment.status, 403);
+    assert.equal(wrongDepartment.details.redeemedLocationName, "Punjagutta");
+    assert.equal(wrongDepartment.details.staffName, "Punjagutta staff");
+    const raceCard = await makeCoupon("CROSS-SALES-RACE");
+    assert.equal((await request(`/api/cards/${raceCard.slug}/claim`, null, "POST", {})).status, 200);
+    const race = await Promise.all(Array.from({ length: 6 }, (_, index) =>
+      redeem(index % 2 ? sourceStaff : destinationStaff, raceCard.couponCode)));
+    assert.equal(race.filter((result) => result.status === 200).length, 1);
+    assert.equal(race.filter((result) => result.status === 409).length, 5);
+    const winner = race.find((result) => result.status === 200).coupon;
+    for (const result of race.filter((item) => item.status === 409)) {
+      assert.equal(result.details.staffName, winner.staffName);
+      assert.equal(result.details.redeemedLocationName, winner.redeemedLocationName);
+    }
+    // A reward that expires after scratching, or is disabled, cannot be consumed.
+    const expired = await makeCoupon("CROSS-SALES-EXPIRED");
+    const disabled = await makeCoupon("CROSS-SALES-DISABLED");
+    for (const item of [expired, disabled])
+      assert.equal((await request(`/api/cards/${item.slug}/claim`, null, "POST", {})).status, 200);
+    const cardsPath = path.join(temporary, "server/data/cards.json");
+    const persisted = JSON.parse(await fs.readFile(cardsPath, "utf8"));
+    persisted.find((item) => item.slug === expired.slug).expiresAt = new Date(Date.now() - 1000).toISOString();
+    persisted.find((item) => item.slug === disabled.slug).disabled = true;
+    await fs.writeFile(cardsPath, JSON.stringify(persisted));
+    assert.equal((await redeem(destinationStaff, expired.couponCode)).status, 410);
+    assert.equal((await redeem(destinationStaff, disabled.couponCode)).status, 410);
+    const other = await request("/api/portal/businesses", admin, "POST", {
+      name: "Other sales business", password: "Other-Sales-Password", limits: { card: 0, branch: 0, department: 0, account: 0 },
+    });
+    assert.equal(other.status, 201);
+    const otherSales = await request(`/api/portal/businesses/${other.business.businessId}/branches`, admin, "POST", { name: "Sales" });
+    assert.equal(otherSales.status, 201);
+    const otherStaff = await makeStaff(otherSales.branch, "Other business staff", "OTHERSALES88", other.business.businessId);
+    assert.equal((await redeem(otherStaff, card.couponCode)).status, 404);
+    const finalCards = (await request(`/api/portal/cards?business=${businessId}`, admin)).cards;
+    assert.deepEqual(finalCards.find((item) => item.slug === card.slug), saved);
+    for (const item of [expired, disabled])
+      assert.equal(finalCards.find((row) => row.slug === item.slug).staffRedeemedAt, null);
+    for (const tenant of [created.business, other.business])
+      assert.equal((await request(`/api/portal/businesses/${tenant.businessId}`, admin, "DELETE", { confirmName: tenant.name })).status, 200);
   });
   await t.test("only super admins can permanently delete every coupon for one business", async () => {
     const created = await request("/api/portal/businesses", admin, "POST", {
