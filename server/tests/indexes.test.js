@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ensureUniqueIndex } from "../src/services/indexes.js";
+import { ensureIndex, ensureUniqueIndex } from "../src/services/indexes.js";
 
 const collection = (indexes) => {
   const created = [];
@@ -53,6 +53,32 @@ test("concurrent equivalent index creation is handled without dropping indexes",
   stub.listIndexes = () => ({ toArray: async () => ++reads === 1 ? [] : [{ name: "other_server_name", key: { businessId: 1 }, unique: true }] });
   stub.createIndex = async () => { throw Object.assign(new Error("Index name conflict"), { code: 85 }); };
   assert.equal(await ensureUniqueIndex(stub, "businessId", "unique_business_id"), "other_server_name");
+});
+
+test("listing indexes reuse any index with the same key pattern", async () => {
+  const stub = collection([{ name: "manual_business_listing", key: { businessId: 1, createdAt: -1 } }]);
+  assert.equal(await ensureIndex(stub, { businessId: 1, createdAt: -1 }), "manual_business_listing");
+  assert.deepEqual(stub.created, []);
+});
+
+test("listing indexes respect key order and direction", async () => {
+  const stub = collection([{ name: "createdAt_1_businessId_1", key: { createdAt: 1, businessId: 1 } },
+    { name: "businessId_1_createdAt_1", key: { businessId: 1, createdAt: 1 } }]);
+  stub.createIndex = async (key) => { stub.created.push(key); return "businessId_1_createdAt_-1"; };
+  assert.equal(await ensureIndex(stub, { businessId: 1, createdAt: -1 }), "businessId_1_createdAt_-1");
+  assert.deepEqual(stub.created, [{ businessId: 1, createdAt: -1 }]);
+});
+
+test("listing indexes tolerate concurrent creation and report other failures", async () => {
+  let reads = 0;
+  const stub = collection([]);
+  stub.listIndexes = () => ({ toArray: async () => ++reads === 1 ? [] : [{ name: "other_server", key: { createdAt: 1, _id: 1 } }] });
+  stub.createIndex = async () => { throw Object.assign(new Error("Index already exists with a different name"), { code: 85 }); };
+  assert.equal(await ensureIndex(stub, { createdAt: 1, _id: 1 }), "other_server");
+  const denied = new Error("not authorized to create index");
+  stub.listIndexes = () => ({ toArray: async () => [] });
+  stub.createIndex = async () => { throw denied; };
+  await assert.rejects(ensureIndex(stub, { createdAt: 1, _id: 1 }), denied);
 });
 
 test("incompatible indexes and duplicate data are not silently ignored", async () => {

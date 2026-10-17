@@ -1382,15 +1382,24 @@ export default function Portal({
   }, [refresh]);
   useEffect(() => {
     if (!["Overview", "Coupons", "Scratch cards", "Campaigns", "Analytics"].includes(tab)) return;
-    let stopped = false, pending = false;
+    let stopped = false, pending = false, pollError = "";
     const updateActivity = async () => {
       if (stopped || pending || document.visibilityState === "hidden") return;
       pending = true;
       try {
         const result = await api(scoped("/api/portal/cards"));
-        if (!stopped) setCards(result.cards);
+        if (!stopped) {
+          setCards(result.cards);
+          // A deploy or brief outage clears itself; remove only the banner a
+          // failed poll raised, never an error from the user's own action.
+          if (pollError) setError((current) => current === pollError ? "" : current);
+          pollError = "";
+        }
       } catch (err) {
-        if (!stopped) setError(err.message);
+        if (!stopped) {
+          pollError = err.message;
+          setError(err.message);
+        }
       } finally {
         pending = false;
       }
@@ -2430,6 +2439,15 @@ export default function Portal({
     if (branchStaff && tab === "Redeem coupon") return branchRedemptionDesk();
     if (branchStaff && tab === "Branch coupons") return branchCouponsTable;
     if (branchStaff && tab === "Redemption history") return branchRedemptionHistory();
+    // The creator needs the loaded workspace. When loading failed, offer Retry
+    // instead of rendering a form without a business (a blank-page crash).
+    if (tab === "Create scratch card" && !business)
+      return (
+        <article className="p-card">
+          <div className="p-info">{ui("This workspace could not be loaded. Retry to continue creating scratch cards.")}</div>
+          <button type="button" className="p-button" onClick={() => refresh()}>{ui("Retry")}</button>
+        </article>
+      );
     if (tab === "Create scratch card")
       return (
         <div className="p-builder">

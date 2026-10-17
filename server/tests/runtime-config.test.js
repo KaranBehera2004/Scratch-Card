@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isProductionRuntime, parseClientOrigins, validateRuntimeConfiguration } from "../src/services/runtime-config.js";
+import { isProductionRuntime, parseClientOrigins, trustProxySetting, validateRuntimeConfiguration } from "../src/services/runtime-config.js";
 
 const valid = {
   NODE_ENV: "production",
@@ -23,6 +23,16 @@ test("production refuses ephemeral storage and incomplete security configuration
   assert.throws(() => validateRuntimeConfiguration({ ...valid, CLIENT_ORIGIN: "https://example.com/path" }), /only HTTP/);
   assert.doesNotThrow(() => validateRuntimeConfiguration(valid));
   assert.doesNotThrow(() => validateRuntimeConfiguration({ NODE_ENV: "development" }));
+});
+
+test("hosted runtimes trust their proxy so visitors get separate addresses", () => {
+  assert.equal(trustProxySetting({}), false);
+  assert.equal(trustProxySetting({ NODE_ENV: "production" }), true);
+  assert.equal(trustProxySetting({ RENDER: "true" }), true);
+  assert.equal(trustProxySetting({ RENDER: "true", TRUST_PROXY: "false" }), false);
+  assert.equal(trustProxySetting({ TRUST_PROXY: "true" }), true);
+  assert.equal(trustProxySetting({ RENDER: "true", TRUST_PROXY: "2" }), 2);
+  assert.deepEqual(trustProxySetting({ TRUST_PROXY: "loopback, 10.0.0.0/8" }), ["loopback", "10.0.0.0/8"]);
 });
 
 test("client origins normalize trailing slashes and support explicit preview domains", () => {

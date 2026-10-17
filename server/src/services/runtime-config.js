@@ -16,6 +16,18 @@ export function isProductionRuntime(env = process.env) {
       .some((key) => Boolean(value(env[key])));
 }
 
+// Render, Vercel and Netlify always place a proxy in front of the API. Without
+// trusting it, every visitor shares the proxy's address and one rate-limit
+// bucket. TRUST_PROXY accepts true/false, a hop count, or Express proxy names.
+export function trustProxySetting(env = process.env) {
+  const raw = value(env.TRUST_PROXY);
+  if (!raw) return isProductionRuntime(env);
+  if (/^(true|yes|on)$/i.test(raw)) return true;
+  if (/^(false|no|off)$/i.test(raw)) return false;
+  if (/^\d+$/.test(raw)) return Number(raw);
+  return raw.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
 export function validateRuntimeConfiguration(env = process.env) {
   if (!isProductionRuntime(env)) return;
   if (!value(env.MONGODB_URI))

@@ -21,6 +21,29 @@ import "../styles/responsive.css";
 import "../styles/public-card-errors.css";
 import "../styles/brand.css";
 
+// Some in-app browsers and privacy modes block web storage, and touching it
+// throws. Sign-in, language and shared cards must keep working in memory.
+const storage = {
+  get(area, key) {
+    try { return window[area].getItem(key); } catch { return null; }
+  },
+  set(area, key, value) {
+    try { window[area].setItem(key, value); } catch { /* Kept in memory for this page only. */ }
+  },
+  remove(area, key) {
+    try { window[area].removeItem(key); } catch { /* Nothing was stored. */ }
+  },
+};
+
+// After a deploy, an open tab can request code-split files that the new build
+// no longer has. Reload once to pick up the current build instead of failing.
+window.addEventListener("vite:preloadError", () => {
+  const lastReload = Number(storage.get("sessionStorage", "scratch-card-chunk-reload") || 0);
+  if (Date.now() - lastReload < 60000) return;
+  storage.set("sessionStorage", "scratch-card-chunk-reload", String(Date.now()));
+  window.location.reload();
+});
+
 const TRANSLATIONS = {
   en: {
     branch: "Department",
@@ -1264,9 +1287,8 @@ function PublicCard({ slug, language: dashboardLanguage }) {
     }, 150);
   };
   useEffect(() => {
-    let current = true;
+    let current = true, timeout;
     const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 15000);
     setState("loading");
     setCard(null);
     setRevealed(false);
@@ -1275,10 +1297,30 @@ function PublicCard({ slug, language: dashboardLanguage }) {
     if (!/^[A-Za-z0-9_-]{6,32}$/.test(slug)) {
       setProblem(publicCardProblem({ code: "CARD_NOT_FOUND" }));
       setState("error");
-      window.clearTimeout(timeout);
       return () => { current = false; controller.abort(); };
     }
-    requestJson(`/api/cards/${encodeURIComponent(slug)}`, { signal: controller.signal })
+    // A sleeping or redeploying API can take up to a minute to answer. Retry
+    // temporary failures quietly before showing the customer an error page.
+    const load = async () => {
+      for (let attempt = 0; ; attempt++) {
+        const request = new AbortController();
+        const abort = () => request.abort();
+        controller.signal.addEventListener("abort", abort);
+        timeout = window.setTimeout(abort, 20000);
+        try {
+          return await requestJson(`/api/cards/${encodeURIComponent(slug)}`, { signal: request.signal });
+        } catch (error) {
+          const temporary = !error.status || error.status === 429 || error.status >= 500;
+          if (!current || !temporary || attempt >= 2) throw error;
+        } finally {
+          window.clearTimeout(timeout);
+          controller.signal.removeEventListener("abort", abort);
+        }
+        await new Promise((resolve) => { timeout = window.setTimeout(resolve, 2000 * 2 ** attempt); });
+        if (!current) throw new Error("The coupon request was cancelled.");
+      }
+    };
+    load()
       .then((data) => {
         if (!current) return;
         if (data.slug !== slug || typeof data.offerTitle !== "string")
@@ -1292,7 +1334,7 @@ function PublicCard({ slug, language: dashboardLanguage }) {
         if (!current) return;
         setProblem(publicCardProblem(error));
         setState("error");
-      }).finally(() => window.clearTimeout(timeout));
+      });
     return () => { current = false; controller.abort(); window.clearTimeout(timeout); };
   }, [slug, loadAttempt]);
   if (state === "loading")
@@ -1326,9 +1368,11 @@ function PublicCard({ slug, language: dashboardLanguage }) {
       "_blank",
       "noopener,noreferrer",
     );
-  const claimHost = card.claimUrl
-    ? new URL(card.claimUrl).hostname.replace(/^www\./, "")
-    : "";
+  // A malformed stored link must hide the claim button, not blank the card.
+  const claimHost = (() => {
+    try { return card.claimUrl ? new URL(card.claimUrl).hostname.replace(/^www\./, "") : ""; }
+    catch { return ""; }
+  })();
   const openClaimLink = () => window.location.assign(card.claimUrl);
   const claimCoupon = async () => {
     setState("claiming");
@@ -1371,13 +1415,15 @@ function PublicCard({ slug, language: dashboardLanguage }) {
       return false;
     }
   };
+  // In-app browsers may deny clipboard access; the link and code stay visible
+  // for manual copying.
   const copyShareLink = async () => {
-    await navigator.clipboard.writeText(location.href);
+    try { await navigator.clipboard.writeText(location.href); } catch { return; }
     setCopied(true);
     window.setTimeout(() => setCopied(false), 2500);
   };
   const copyCouponCode = async () => {
-    await navigator.clipboard.writeText(card.couponCode);
+    try { await navigator.clipboard.writeText(card.couponCode); } catch { return; }
     setCouponCopied(true);
     window.setTimeout(() => setCouponCopied(false), 2500);
   };
@@ -1427,7 +1473,7 @@ function PublicCard({ slug, language: dashboardLanguage }) {
           </p>
         )}
         {!card.expired && !card.redeemed && <div className="recipient-actions">
-          {revealed && card.claimUrl && (
+          {revealed && claimHost && (
             <button className="claim" onClick={openClaimLink}>
               {t("claimOn")} {claimHost}
             </button>
@@ -1460,14 +1506,14 @@ function App() {
   );
   const [session, setSession] = useState(() => {
     try {
-      return JSON.parse(sessionStorage.getItem("lucky-drop-session") || "null");
+      return JSON.parse(storage.get("sessionStorage", "lucky-drop-session") || "null");
     } catch {
       return null;
     }
   });
   const [checking, setChecking] = useState(Boolean(session?.token) && !slug);
   const [language, setLanguage] = useState(() => {
-    const saved = localStorage.getItem("lucky-drop-language");
+    const saved = storage.get("localStorage", "lucky-drop-language");
     return TRANSLATIONS[saved] ? saved : "en";
   });
   const interfaceLanguage = session && !slug && session.user.role !== "super-admin" ? language : "en";
@@ -1476,12 +1522,12 @@ function App() {
     [interfaceLanguage],
   );
   const clearSession = useCallback(() => {
-    sessionStorage.removeItem("lucky-drop-session");
+    storage.remove("sessionStorage", "lucky-drop-session");
     setSession(null);
     setChecking(false);
   }, []);
   useEffect(() => {
-    localStorage.setItem("lucky-drop-language", language);
+    storage.set("localStorage", "lucky-drop-language", language);
     // Signed-in pages set their own locale based on the active workspace,
     // not the account role. Login remains English.
     if (!session?.token) document.documentElement.lang = "en";
@@ -1497,15 +1543,14 @@ function App() {
       .then(({ user }) => {
         if (!cancelled) {
           const restored = { token: session.token, user };
-          sessionStorage.setItem(
-            "lucky-drop-session",
-            JSON.stringify(restored),
-          );
+          storage.set("sessionStorage", "lucky-drop-session", JSON.stringify(restored));
           setSession(restored);
         }
       })
-      .catch(() => {
-        if (!cancelled) clearSession();
+      .catch((error) => {
+        // Only a rejected session signs the user out. A network blip, cold
+        // start or deploy keeps it, and the workspace offers Retry instead.
+        if (!cancelled && [401, 403].includes(error.status)) clearSession();
       })
       .finally(() => {
         if (!cancelled) setChecking(false);
@@ -1546,7 +1591,7 @@ function App() {
     return (
       <PortalLogin
         onLogin={(data) => {
-          sessionStorage.setItem("lucky-drop-session", JSON.stringify(data));
+          storage.set("sessionStorage", "lucky-drop-session", JSON.stringify(data));
           setSession(data);
         }}
       />
@@ -1555,7 +1600,7 @@ function App() {
     <Portal
       session={session}
       onSessionChange={(data) => {
-        sessionStorage.setItem("lucky-drop-session", JSON.stringify(data));
+        storage.set("sessionStorage", "lucky-drop-session", JSON.stringify(data));
         setSession(data);
       }}
       language={language}
@@ -1568,8 +1613,35 @@ function App() {
     />
   );
 }
+// Without a boundary, one unexpected render error blanks the whole page.
+class AppErrorBoundary extends React.Component {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  componentDidCatch(error, info) {
+    console.error("Unexpected page error:", error, info.componentStack);
+  }
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <main className="recipient status">
+        <RecipientTopbar brand="JustConnect" />
+        <section className="public-card-problem" role="alert" aria-labelledby="page-error-title">
+          <div className="broken" aria-hidden="true">!</div>
+          <h1 id="page-error-title">Something went wrong</h1>
+          <p>This page hit an unexpected problem. Reload it to continue; anything already saved is safe.</p>
+          <button type="button" onClick={() => window.location.reload()}>Reload page</button>
+          <small>Secure rewards by JustConnect</small>
+        </section>
+      </main>
+    );
+  }
+}
 createRoot(document.getElementById("root")).render(
   <React.StrictMode>
-    <App />
+    <AppErrorBoundary>
+      <App />
+    </AppErrorBoundary>
   </React.StrictMode>,
 );

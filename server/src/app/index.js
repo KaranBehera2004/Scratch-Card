@@ -1,5 +1,6 @@
 import "dotenv/config";
 import crypto from "node:crypto";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,8 +9,9 @@ import express from "express";
 import mongoose from "mongoose";
 import sharp from "sharp";
 import { installControls } from "../routes/control.js";
-import { ensureUniqueIndex } from "../services/indexes.js";
-import { isProductionRuntime, parseClientOrigins, validateRuntimeConfiguration } from "../services/runtime-config.js";
+import { errorMessage, errorStatus } from "../services/http-errors.js";
+import { ensureIndex, ensureUniqueIndex } from "../services/indexes.js";
+import { isProductionRuntime, parseClientOrigins, trustProxySetting, validateRuntimeConfiguration } from "../services/runtime-config.js";
 import { normalizeWhatsAppNumber } from "../../shared/whatsapp.js";
 import { PRODUCTION_APP_URL } from "../../shared/urls.js";
 import { publicCardProblem } from "../../shared/public-card-errors.js";
@@ -26,6 +28,7 @@ export const app = express();
 const port = Number(process.env.PORT) || 5051;
 
 app.disable("x-powered-by");
+app.set("trust proxy", trustProxySetting());
 app.use((_req, res, next) => {
   res.setHeader("Permissions-Policy", "camera=(self)");
   next();
@@ -53,9 +56,17 @@ app.use("/api", (req, res, next) => {
   next();
 });
 // Single-card requests may contain one bounded image used by WhatsApp's link
-// preview. Other API requests retain the smaller default parsing limit.
+// preview. Bulk batches never carry images, and other API requests retain the
+// smaller default parsing limit.
+app.use("/api/cards/bulk", express.json({ limit: "1mb" }));
 app.use("/api/cards", express.json({ limit: "8mb" }));
 app.use(express.json({ limit: "256kb" }));
+// Express 5 leaves req.body undefined without a JSON body. Handlers read
+// optional fields directly, so give them an empty object instead of a TypeError.
+app.use((req, _res, next) => {
+  if (req.body === undefined) req.body = {};
+  next();
+});
 
 const schema = new mongoose.Schema(
   {
@@ -135,6 +146,11 @@ const CouponBatch = mongoose.model("CouponBatch", new mongoose.Schema({
 let atlasConnected = false;
 let databasePromise = null;
 let localCardQueue = Promise.resolve();
+// The driver reconnects on its own. Logging these events explains brief
+// 503 responses in the host logs instead of leaving them unexplained.
+mongoose.connection.on("disconnected", () => console.warn("MongoDB disconnected; reconnecting automatically."));
+mongoose.connection.on("reconnected", () => console.log("MongoDB reconnected."));
+mongoose.connection.on("error", (error) => console.error("MongoDB connection error:", error.message));
 
 const generateCouponCode = () =>
   `LUCKY-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
@@ -242,13 +258,24 @@ async function initializeDatabase() {
     // Prefer IPv4 because several local/hosting networks expose an unusable
     // IPv6 route first, making every cold connection wait for a timeout.
     family: 4,
-    serverSelectionTimeoutMS: 5000,
+    // Atlas maintenance and failover elect a new primary in roughly 10–12
+    // seconds. Wait that long instead of failing requests during routine events.
+    serverSelectionTimeoutMS: 15000,
     connectTimeoutMS: 5000,
-    socketTimeoutMS: 15000,
+    socketTimeoutMS: 45000,
     maxPoolSize: 20,
     minPoolSize: isProductionRuntime() ? 1 : 0,
     maxIdleTimeMS: 60000,
   });
+  // Dashboards list cards newest first, per business or across the platform.
+  // Without these, every poll scans the whole collection and sorts it in memory.
+  // They only speed up queries, so a failure must not stop the API starting.
+  const listingIndexes = await Promise.allSettled([
+    ensureIndex(Card.collection, { businessId: 1, createdAt: -1 }),
+    ensureIndex(Card.collection, { createdAt: 1, _id: 1 }),
+  ]);
+  for (const result of listingIndexes)
+    if (result.status === "rejected") console.warn("Card listing index unavailable:", result.reason?.message);
   await normalizeMongoCoupons();
   const ControlRecord = mongoose.model("ControlRecord");
   await Promise.all([
@@ -316,7 +343,20 @@ async function normalizeLocalCoupons() {
   }
   if (changed) await fs.writeFile(dataFile, JSON.stringify(cards, null, 2));
 }
+// Codes are saved trimmed and uppercase, and the unique index rejects
+// duplicates. Once it exists, only a legacy code needing repair justifies
+// reading every card during startup.
+async function couponCodesNeedRepair() {
+  const indexes = await Card.collection.indexes().catch(() => []);
+  const unique = indexes.some((index) => index.unique && !index.sparse && !index.partialFilterExpression
+    && Object.keys(index.key).length === 1 && index.key.couponCode === 1);
+  if (!unique) return true;
+  return Boolean(await Card.exists({ $or: [
+    { couponCode: null }, { couponCode: "" }, { couponCode: /[a-z]|^\s|\s$|^[\s\S]{25}/ },
+  ] }));
+}
 async function normalizeMongoCoupons() {
+  if (!(await couponCodesNeedRepair())) return;
   // Startup only needs identifiers and coupon codes. Some cards contain large
   // WhatsApp preview images, so loading complete documents here made every
   // local restart download the entire card collection before the API listened.
@@ -444,9 +484,9 @@ async function claimCard(slug) {
     },
     { $set: { scratchedAt } },
     { new: true },
-  ).lean();
+  ).select("-shareImageBase64").lean();
   if (card) return { status: "claimed", card };
-  const existing = await Card.findOne({ slug }).lean();
+  const existing = await Card.findOne({ slug }).select("-shareImageBase64").lean();
   return {
     status: !existing
       ? "missing"
@@ -480,15 +520,25 @@ const clean = (value, max) =>
 const safeUrl = (value) => {
   const raw = clean(value, 500);
   if (!raw) return "";
-  const parsed = new URL(raw);
+  let parsed;
+  try { parsed = new URL(raw); }
+  catch { throw bad("Enter a complete link starting with http:// or https://."); }
   if (!["http:", "https:"].includes(parsed.protocol))
-    throw new Error("Claim link must use http or https.");
+    throw bad("Claim link must use http or https.");
   return parsed.toString();
 };
+const whatsAppNumber = (value) => {
+  try { return normalizeWhatsAppNumber(value); }
+  catch (error) { throw bad(error.message); }
+};
 const MAX_SHARE_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_SHARE_IMAGE_PIXELS = 50_000_000;
 const SHARE_PREVIEW_VERSION = "5";
 const SHARE_PREVIEW_WIDTH = 1200;
 const SHARE_PREVIEW_HEIGHT = 630;
+// Each preview renders a different stored image, so libvips' operation cache
+// would only hold memory on a small hosting instance.
+sharp.cache(false);
 function safeShareImage(value) {
   if (value == null || value === "") return {};
   if (typeof value !== "string" || value.length > Math.ceil(MAX_SHARE_IMAGE_BYTES * 4 / 3) + 128)
@@ -506,6 +556,19 @@ function safeShareImage(value) {
         && buffer.subarray(8, 12).toString("ascii") === "WEBP";
   if (!validSignature) throw bad("The uploaded file does not contain a valid JPG, PNG or WebP image.");
   return { shareImageMime: match[1], shareImageBase64: match[2] };
+}
+// Previews are rendered from the stored original on demand. A small file can
+// still declare enormous dimensions, turning every render into a slow,
+// memory-heavy job, so check the header before saving.
+async function checkShareImageDimensions(base64) {
+  if (!base64) return;
+  let metadata;
+  try { metadata = await sharp(Buffer.from(base64, "base64")).metadata(); }
+  catch { throw bad("The uploaded file does not contain a valid JPG, PNG or WebP image."); }
+  if (!metadata.width || !metadata.height)
+    throw bad("The uploaded file does not contain a valid JPG, PNG or WebP image.");
+  if (metadata.width * metadata.height > MAX_SHARE_IMAGE_PIXELS)
+    throw bad("Choose an image of at most 50 megapixels (for example 8000 × 6000 pixels).");
 }
 const html = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -543,7 +606,7 @@ function buildCard(body, business, bulk = false, allowExpired = false) {
     headline: clean(body.headline, 80),
     offerTitle: clean(body.offerTitle, 30), description: clean(body.description, 80),
     customerPhone: bulk && (body.customerPhone == null || (typeof body.customerPhone === "string" && !body.customerPhone.trim()))
-      ? "" : normalizeWhatsAppNumber(body.customerPhone),
+      ? "" : whatsAppNumber(body.customerPhone),
     claimUrl: safeUrl(body.claimUrl), campaignName: clean(body.campaignName, 80), expiresAt,
     disabled: false, openedAt: null, redeemedAt: null, scratchedAt: null,
     staffRedeemedAt: null, staffRedeemedBranchId: "",
@@ -569,7 +632,8 @@ async function findBatch(key) {
   if (atlasConnected) {
     const batch = await CouponBatch.findOne({ key }).lean();
     if (!batch) return null;
-    return batchResult(key, batch.fingerprint, await Card.find({ batchKey: key }).sort({ createdAt: 1, _id: 1 }).lean());
+    return batchResult(key, batch.fingerprint, await Card.find({ batchKey: key })
+      .select("-shareImageBase64").sort({ createdAt: 1, _id: 1 }).lean());
   }
   const cards = (await readLocalCards()).filter((card) => card.batchKey === key);
   return cards.length ? batchResult(key, cards[0].batchFingerprint, cards) : null;
@@ -614,7 +678,8 @@ async function saveGeneration({ base, branches, total, maximum, batchKey, finger
         if (batchKey) {
           const prior = await CouponBatch.findOne({ key: batchKey }).session(session).lean();
           if (prior) {
-            const cards = await Card.find({ batchKey }).sort({ createdAt: 1, _id: 1 }).session(session).lean();
+            const cards = await Card.find({ batchKey }).select("-shareImageBase64")
+              .sort({ createdAt: 1, _id: 1 }).session(session).lean();
             result = replay(cards);
             return;
           }
@@ -698,7 +763,7 @@ app.post("/api/portal/redeem", authenticate, async (req, res, next) => {
         },
         { $set: redemption },
         { new: true },
-      ).lean();
+      ).select("-shareImageBase64").lean();
     } else {
       redeemed = await mutateLocalCards((cards) => {
         const card = cards.find((item) =>
@@ -713,7 +778,7 @@ app.post("/api/portal/redeem", authenticate, async (req, res, next) => {
     }
     if (!redeemed) {
       const card = atlasConnected
-        ? await Card.findOne({ businessId, couponCode }).lean()
+        ? await Card.findOne({ businessId, couponCode }).select("-shareImageBase64").lean()
         : (await readLocalCards()).find((item) =>
           (item.businessId || "impact-vibes") === businessId
           && String(item.couponCode || "").toUpperCase() === couponCode);
@@ -860,6 +925,7 @@ app.post("/api/cards", authenticate, async (req, res, next) => {
         60,
       ),
     };
+    await checkShareImageDimensions(card.shareImageBase64);
     const generation = await saveGeneration({ base: card,
       branches: [{ branchId: card.branchId, branchName: card.branchName, quantity: 1 }],
       total: 1, maximum: (await businessLimits(business)).card, requestedCode: requestedCouponCode });
@@ -1028,20 +1094,28 @@ app.post("/api/cards/:slug/claim", async (req, res, next) => {
   }
 });
 
+// Unknown API paths answer in JSON, never with the SPA page or an HTML 404.
+app.use("/api", (_req, res) => res.status(404).json({ message: "This API route does not exist." }));
+
 const isLocalServer =
   !process.env.NETLIFY &&
   !process.env.VERCEL &&
   !process.env.AWS_LAMBDA_FUNCTION_NAME &&
   process.argv[1] &&
   path.resolve(process.argv[1]) === path.join(rootDir, "server", "src", "app", "index.js");
-if (isLocalServer) {
-  app.use(express.static(path.join(rootDir, "client", "dist")));
-  app.get("/*splat", (_req, res) =>
-    res.sendFile(path.join(rootDir, "client", "dist", "index.html")),
-  );
+// Render hosts only the API. Serve the SPA when a local build exists, instead
+// of answering every unknown path with a missing-file error and server path.
+const clientDist = path.join(rootDir, "client", "dist");
+if (isLocalServer && existsSync(path.join(clientDist, "index.html"))) {
+  app.use(express.static(clientDist));
+  app.get("/*splat", (_req, res) => res.sendFile(path.join(clientDist, "index.html")));
 }
 app.use((error, req, res, _next) => {
-  console.error(error.message);
+  const status = errorStatus(error);
+  // Unexpected failures need their stack in the host logs. Deliberate API
+  // errors (validation, permissions, expired sessions) need only one line.
+  if (status >= 500) console.error(`${req.method} ${req.path} failed (${status}):`, error);
+  else console.warn(`${req.method} ${req.path} -> ${status}: ${error.message}`);
   if (/^\/share(?:\/|$)/.test(req.path)) {
     const problem = publicCardProblem(error);
     return res.status(problem.status).set({
@@ -1060,8 +1134,9 @@ app.use((error, req, res, _next) => {
   }
   if (req.path === "/api/cards/bulk") {
     const uncertain = error.hasErrorLabel?.("UnknownTransactionCommitResult");
-    return res.status(error.status || 503).json({
-      message: `${error.message || "Batch generation failed."} ${uncertain
+    // Any unexpected batch failure stays retryable with the same batch key.
+    return res.status(status === 500 ? 503 : status).json({
+      message: `${errorMessage(error, status)} ${uncertain
         ? "Commit confirmation was lost. Retry the same batch to recover the actual saved count."
         : "No coupons were saved by this request. Retry with the same batch key."}`,
       savedCount: uncertain ? null : 0,
@@ -1075,20 +1150,38 @@ app.use((error, req, res, _next) => {
           "This coupon code already exists. Choose another code or leave it blank.",
       });
   res
-    .status(error.status || 400)
+    .status(status)
     .json({
-      message: error.message || "Something went wrong.",
+      message: errorMessage(error, status),
       ...(error.details ? { details: error.details } : {}),
     });
 });
 
 if (isLocalServer) {
   connectDatabase()
-    .then(() =>
-      app.listen(port, () =>
+    .then(() => {
+      const server = app.listen(port, () =>
         console.log(`JustConnect Rewards API: http://localhost:${port}`),
-      ),
-    )
+      );
+      // Hosting proxies reuse idle upstream connections. Keep them open longer
+      // than the proxy does, so it never sends a request on a socket Node has
+      // just closed, which surfaces as an intermittent 502.
+      server.keepAliveTimeout = 120000;
+      server.headersTimeout = 121000;
+      // Deploys and restarts send SIGTERM. Finish in-flight requests (bulk
+      // generation, redemptions) instead of dropping them, then exit.
+      let stopping = false;
+      const stop = (signal) => {
+        if (stopping) return;
+        stopping = true;
+        console.log(`${signal} received; finishing in-flight requests before exiting.`);
+        setTimeout(() => process.exit(1), 25000).unref();
+        server.close(() => mongoose.disconnect().finally(() => process.exit(0)));
+        server.closeIdleConnections();
+      };
+      process.once("SIGTERM", () => stop("SIGTERM"));
+      process.once("SIGINT", () => stop("SIGINT"));
+    })
     .catch((error) => {
       console.error("Database connection failed:", error.message);
       process.exit(1);

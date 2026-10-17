@@ -103,8 +103,11 @@ export function installBulkRoutes(app, context) {
       const retryBusiness = previous ? { branches: previous.coupons.map((card) => ({ branchId: card.branchId, name: card.branchName, status: "active" })) } : business;
       const { branches, total } = validateBranchQuantities(req.body.branches, retryBusiness);
       const recipients = validateRecipients(req.body.recipients, branches, total);
+      // Preview images belong to single-card shares. Copying one into every
+      // coupon would store up to 1,000 copies of a multi-megabyte image.
+      const shared = { ...req.body, shareImage: undefined, ...(recipients ? { customerPhone: "" } : {}) };
       let base;
-      try { base = buildCard(recipients ? { ...req.body, customerPhone: "" } : req.body, business, true, Boolean(previous)); }
+      try { base = buildCard(shared, business, true, Boolean(previous)); }
       catch (error) { throw bad(error.message); }
       delete base.slug;
       const fingerprint = batchFingerprint(base, branches, recipients);

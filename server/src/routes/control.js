@@ -307,18 +307,24 @@ export function installControls(app, context) {
       createdAt: new Date().toISOString(),
       ...(redemption ? { redemption } : {}),
     };
-    if (isMongo()) {
-      await Meta.updateOne(
-        { key: "audit" },
-        {
-          $push: { value: { $each: [entry], $position: 0, $slice: 2000 } },
-          $inc: { revision: 1 },
-        },
-        { upsert: true },
-      );
-      return;
+    // Callers audit after their change is saved. A failed log write must not
+    // turn that success into an error response that invites a duplicate retry.
+    try {
+      if (isMongo()) {
+        await Meta.updateOne(
+          { key: "audit" },
+          {
+            $push: { value: { $each: [entry], $position: 0, $slice: 2000 } },
+            $inc: { revision: 1 },
+          },
+          { upsert: true },
+        );
+        return;
+      }
+      await changeMeta("audit", (records) => [entry, ...(records || [])].slice(0, 2000));
+    } catch (error) {
+      console.error(`Audit log write failed for "${action}":`, error.message);
     }
-    await changeMeta("audit", (records) => [entry, ...(records || [])].slice(0, 2000));
   }
   async function getBusiness(id) {
     const business = isMongo()
@@ -550,85 +556,53 @@ export function installControls(app, context) {
       });
     }),
   );
-  const attempts = new Map();
+  // Count failed sign-ins per address and per login ID. The address bucket
+  // slows password spraying; the login ID bucket protects each account even
+  // if a client rotates addresses. Successful sign-ins use neither allowance.
+  const LOGIN_WINDOW_MS = 15 * 60000;
+  const LOGIN_FAILURE_LIMITS = { ip: 30, id: 10 };
+  const loginFailures = new Map();
+  const loginKeys = (req, loginId) =>
+    [`ip:${req.ip || "unknown"}`, ...(loginId ? [`id:${loginId}`] : [])];
+  const loginRetryAfter = (keys, now = Date.now()) => Math.max(0, ...keys.map((key) => {
+    const bucket = loginFailures.get(key);
+    return bucket && bucket.until > now && bucket.count >= LOGIN_FAILURE_LIMITS[key.split(":")[0]]
+      ? bucket.until - now : 0;
+  }));
+  const recordLoginFailure = (keys, now = Date.now()) => {
+    if (loginFailures.size >= 20000) {
+      for (const [key, bucket] of loginFailures) if (bucket.until <= now) loginFailures.delete(key);
+      // Random login IDs must not grow memory without bound; drop the oldest.
+      for (const key of loginFailures.keys()) {
+        if (loginFailures.size < 19000) break;
+        loginFailures.delete(key);
+      }
+    }
+    for (const key of keys) {
+      const bucket = loginFailures.get(key);
+      if (bucket && bucket.until > now) bucket.count++;
+      else loginFailures.set(key, { count: 1, until: now + LOGIN_WINDOW_MS });
+    }
+  };
   app.post(
     "/api/auth/login",
     route(async (req, res) => {
-      const bucket = attempts.get(req.ip) || {
-        count: 0,
-        until: Date.now() + 60000,
-      };
-      if (bucket.until < Date.now()) {
-        bucket.count = 0;
-        bucket.until = Date.now() + 60000;
-      }
-      if (++bucket.count > 12)
-        throw fail("Too many sign-in attempts. Try again in one minute.", 429);
-      attempts.set(req.ip, bucket);
       const email = text(req.body.loginId ?? req.body.email).toLowerCase(),
-        password = String(req.body.password || "");
-      if (!password || password.length > 200)
-        throw fail("Invalid login ID or password.", 401);
-      const meta = await readMeta(["adminPasswordHash", "superAdmins", "users", "versions", "settings"]),
-        adminEmail = primaryLogin();
-      let user;
-      if (
-        email === adminEmail &&
-        !meta.adminPasswordHash &&
-        secret() &&
-        equal(
-          password,
-          String(
-            process.env.SUPER_ADMIN_PASSWORD ||
-              process.env.SUPER_ADMIN_KEY ||
-              "",
-          ),
-        )
-      )
-        user = {
-          id: "super-admin",
-          role: "super-admin",
-          name: "Super admin",
-          email,
-        };
-      if (
-        email === adminEmail &&
-        meta.adminPasswordHash &&
-        verifyPassword(password, meta.adminPasswordHash)
-      )
-        user = {
-          id: "super-admin",
-          role: "super-admin",
-          name: "Super admin",
-          email,
-        };
-      if (!user) {
-        const account = (meta.superAdmins || []).find((item) =>
-          String(item.loginId || "").toLowerCase() === email && item.status === "active");
-        if (account && verifyPassword(password, account.passwordHash)) user = safe(account);
+        password = String(req.body.password || ""),
+        throttleKeys = loginKeys(req, email);
+      const wait = loginRetryAfter(throttleKeys);
+      if (wait) {
+        const minutes = Math.ceil(wait / 60000);
+        res.set("Retry-After", String(Math.ceil(wait / 1000)));
+        throw fail(`Too many sign-in attempts. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}.`, 429);
       }
+      const meta = await readMeta(["adminPasswordHash", "superAdmins", "users", "versions", "settings"]);
+      let user = password && password.length <= 200 ? await matchLogin(email, password, meta) : null;
       if (!user) {
-        const business = (await listBusinesses()).find(
-          (item) => String(item.loginId || item.loginEmail || "").toLowerCase() === email,
-        );
-        if (business && verifyPassword(password, business.passwordHash))
-          user = {
-            id: business.businessId,
-            role: "business",
-            businessId: business.businessId,
-            name: business.name,
-            email,
-            passwordVersion: business.passwordVersion || "",
-            ...(business.loginId ? { loginId: business.loginId } : {}),
-          };
-        else {
-          const account = (meta.users || []).find(
-            (item) => String(item.loginId || item.email || "").toLowerCase() === email && item.status === "active",
-          );
-          if (account && verifyPassword(password, account.passwordHash))
-            user = safe(account);
-        }
-        if (!user) throw fail("Invalid login ID or password.", 401);
+        recordLoginFailure(throttleKeys);
+        throw fail("Invalid login ID or password.", 401);
+      }
+      if (user.role !== "super-admin") {
         const loginBusiness = await getBusiness(user.businessId);
         const loginSettings = { ...defaults, ...(meta.settings || {}) };
         if (loginBusiness.status !== "active" || !loginSettings.memberAccess)
@@ -637,20 +611,53 @@ export function installControls(app, context) {
           item.branchId === user.branchId && item.status === "active"))
           throw fail("Branch access is paused or unavailable.", 403);
       }
+      loginFailures.delete(`id:${email}`);
       if (user.role === "branch-staff") {
         const lastLoginAt = new Date().toISOString();
         user = { ...user, lastLoginAt, loginCount: Number(user.loginCount || 0) + 1 };
+        // Login statistics are informational; never refuse a valid sign-in for them.
         await changeMeta("users", (records = []) => records.map((item) =>
-          item.id === user.id ? { ...item, lastLoginAt, loginCount: user.loginCount } : item));
+          item.id === user.id ? { ...item, lastLoginAt, loginCount: user.loginCount } : item))
+          .catch((error) => console.error("Could not record branch staff sign-in:", error.message));
       }
       user.version = meta.versions?.[user.id] || 0;
-      attempts.delete(req.ip);
       req.user = user;
       await audit(req, "Signed in", user.businessId);
       const sessionHours = Number(meta.settings?.sessionHours) || defaults.sessionHours;
       res.set("Cache-Control", "no-store").json({ token: await sign(user, sessionHours), user });
     }),
   );
+  // Returns the account whose credentials match, or null. Access rules are
+  // checked by the caller, so a correct password never counts as a failure.
+  async function matchLogin(loginId, password, meta) {
+    if (loginId === primaryLogin()) {
+      const valid = meta.adminPasswordHash
+        ? verifyPassword(password, meta.adminPasswordHash)
+        : Boolean(secret()) && equal(password,
+          String(process.env.SUPER_ADMIN_PASSWORD || process.env.SUPER_ADMIN_KEY || ""));
+      if (valid) return { id: "super-admin", role: "super-admin", name: "Super admin", email: loginId };
+    }
+    const admin = (meta.superAdmins || []).find((item) =>
+      String(item.loginId || "").toLowerCase() === loginId && item.status === "active");
+    if (admin && verifyPassword(password, admin.passwordHash)) return safe(admin);
+    const business = (await listBusinesses()).find(
+      (item) => String(item.loginId || item.loginEmail || "").toLowerCase() === loginId,
+    );
+    if (business && verifyPassword(password, business.passwordHash))
+      return {
+        id: business.businessId,
+        role: "business",
+        businessId: business.businessId,
+        name: business.name,
+        email: loginId,
+        passwordVersion: business.passwordVersion || "",
+        ...(business.loginId ? { loginId: business.loginId } : {}),
+      };
+    const account = (meta.users || []).find(
+      (item) => String(item.loginId || item.email || "").toLowerCase() === loginId && item.status === "active",
+    );
+    return account && verifyPassword(password, account.passwordHash) ? safe(account) : null;
+  }
   app.get(
     "/api/auth/me",
     auth,
@@ -1376,7 +1383,7 @@ export function installControls(app, context) {
         patch.status = req.body.status;
       }
       if (req.body.password) {
-        if (req.body.password.length < 10 || req.body.password.length > 200)
+        if (typeof req.body.password !== "string" || req.body.password.length < 10 || req.body.password.length > 200)
           throw fail("Use a password of 10–200 characters.");
         patch.passwordHash = hashPassword(req.body.password);
       }

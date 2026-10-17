@@ -75,6 +75,8 @@ test("favicon follows live browser theme changes without refreshing the page", a
 });
 
 test("public coupon links show safe error screens and recover from temporary failures", async ({ page }, info) => {
+  // Persistent failures wait through the card loader's automatic retries.
+  test.slow();
   const auth = await page.request.post("/api/auth/login", { data: { loginId: "platform@example.test", password: "Platform-Test-Password" } });
   const headers = { Authorization: `Bearer ${(await auth.json()).token}` };
   const created = await page.request.post("/api/portal/businesses", { headers, data: {
@@ -105,20 +107,33 @@ test("public coupon links show safe error screens and recover from temporary fai
   await page.goto(`/card/${card.slug}`);
   await expect(page.getByText(card.couponCode, { exact: false })).toBeVisible();
   await expect(page.locator(".scratch-card canvas")).toHaveCount(0);
-  // HTML gateway responses, private server exceptions and offline failures
-  // must all show the safe temporary screen, never technical details.
+  // A sleeping or redeploying API is retried quietly: one temporary failure
+  // must recover without the customer ever seeing an error screen.
   const apiPath = `**/api/cards/${card.slug}`;
+  let coldStartRequests = 0;
+  await page.route(apiPath, route => ++coldStartRequests > 1 ? route.fallback()
+    : route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ message: "Cold start" }) }));
+  await page.goto(`/card/${card.slug}`);
+  await expect(page.getByText(card.couponCode, { exact: false })).toBeVisible({ timeout: 15000 });
+  await expect(page.getByRole("heading", { name: "We couldn’t load your coupon", exact: true })).toHaveCount(0);
+  expect(coldStartRequests).toBe(2);
+  await page.unroute(apiPath);
+  // HTML gateway responses, private server exceptions and offline failures
+  // that persist through every retry must show the safe temporary screen,
+  // never technical details. Unexpected response shapes are not retried.
   for (const kind of ["html", "private-error", "offline", "invalid-json"]) {
     let requests = 0;
+    const failures = kind === "invalid-json" ? 1 : 3;
     await page.route(apiPath, route => {
-      if (++requests > 1) return route.fallback();
+      if (++requests > failures) return route.fallback();
       if (kind === "offline") return route.abort("failed");
       if (kind === "html") return route.fulfill({ status: 502, contentType: "text/html", body: "<h1>Internal proxy details</h1>" });
       return route.fulfill({ status: kind === "invalid-json" ? 200 : 503, contentType: "application/json",
         body: JSON.stringify({ message: "mongodb://private-password@internal-host" }) });
     });
     await page.goto(`/card/${card.slug}`);
-    await expect(page.getByRole("heading", { name: "We couldn’t load your coupon", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "We couldn’t load your coupon", exact: true })).toBeVisible({ timeout: 15000 });
+    expect(requests).toBe(failures);
     await expect(page.locator("body")).not.toContainText("private-password");
     await expect(page.locator("body")).not.toContainText("Internal proxy details");
     await expect(page.locator("body")).not.toContainText(card.couponCode);
@@ -671,7 +686,10 @@ test("hierarchy defaults populate every branch and removing panels preserves the
   expect(response.status()).toBe(201);
   expect(response.request().postDataJSON().departments).toEqual([{ name: "SR Nagar", branches: [{ name: "Sales", address: "" }, { name: "Service", address: "" }] }]);
   await expect(dialog).not.toBeVisible();
-  await expect(page.getByRole("row").filter({ has: page.getByRole("cell", { name: "SR Nagar", exact: true }) })).toHaveCount(2);
+  // Saved branches are collapsed groups; open SR Nagar to see both departments.
+  const savedBranch = page.locator(".p-branch-group").filter({ has: page.locator(".p-branch-toggle", { hasText: "SR Nagar" }) });
+  await savedBranch.locator(".p-branch-toggle").click();
+  await expect(savedBranch.getByRole("row").filter({ has: page.getByRole("cell", { name: /^(Sales|Service)$/ }) })).toHaveCount(2);
   const cleanup = await page.request.post("/api/auth/login", { data: { loginId: "platform@example.test", password: "Platform-Test-Password" } });
   expect((await page.request.delete(`/api/portal/businesses/${business.businessId}`, { headers: { Authorization: `Bearer ${(await cleanup.json()).token}` }, data: { confirmName: business.name } })).status()).toBe(200);
 });
@@ -980,6 +998,7 @@ test("business languages translate the whole workspace without changing cards or
     await dialog.getByRole("button", { name: locale.save, exact: true }).click();
     await expect(dialog.getByRole("alert")).toHaveText(locale.branchError);
     await dialog.getByRole("button", { name: locale.cancel, exact: true }).click();
+    await expandBranchGroups(page);
     await page.getByRole("row").filter({ hasText: "Hyderabad" }).getByRole("button", { name: locale.edit, exact: true }).click();
     await expect(dialog).toHaveAccessibleName(locale.editTitle);
     await expect(dialog.getByLabel(locale.branchName, { exact: true })).toHaveValue("Hyderabad");
