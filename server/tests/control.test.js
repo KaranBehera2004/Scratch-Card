@@ -42,7 +42,9 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
   t.after(async () => {
     await new Promise((resolve) => server.close(resolve));
     const resolved = await fs.realpath(temporary);
-    assert.equal(resolved.toLowerCase(), path.resolve(temporary).toLowerCase());
+    // Compare real paths: Windows can report TEMP as an 8.3 short name.
+    assert.equal(resolved.toLowerCase(),
+      path.join(await fs.realpath(os.tmpdir()), path.basename(temporary)).toLowerCase());
     assert.ok(path.basename(resolved).startsWith("scratch-control-test-"));
     await fs.rm(resolved, { recursive: true, force: true });
   });

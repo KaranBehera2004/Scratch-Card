@@ -33,8 +33,10 @@ export const ready = new Promise((resolve, reject) => {
 export async function close() {
   await new Promise((resolve) => server.close(resolve));
   const resolved = await fs.realpath(fixture);
+  // Compare real paths: Windows can report TEMP as an 8.3 short name.
+  const expected = path.join(await fs.realpath(os.tmpdir()), path.basename(fixture));
   if (
-    resolved.toLowerCase() === path.resolve(fixture).toLowerCase() &&
+    resolved.toLowerCase() === expected.toLowerCase() &&
     path.basename(resolved).startsWith("scratch-browser-test-")
   )
     await fs.rm(resolved, { recursive: true, force: true });

@@ -5,7 +5,8 @@
 
 [functions]
   node_bundler = "esbuild"
-  external_node_modules = ["express", "mongoose", "serverless-http"]
+  # sharp loads a platform-specific native binary that esbuild cannot bundle.
+  external_node_modules = ["express", "mongoose", "serverless-http", "sharp"]
 
 [[redirects]]
   from = "/api/*"
