@@ -68,8 +68,10 @@
 .p-button.primary { background: var(--brand-navy); border-color: var(--brand-navy); box-shadow: 0 8px 20px #002b5c24; }
 .p-button.primary:hover { background: #06447d; border-color: #06447d; }
 .p-eyebrow, .p-metrics article > div, .p-bars b, .p-quick > div { color: var(--brand-blue); }
-.p-sidebar nav button:hover { color: var(--brand-blue); background: #edf5fb; }
-.p-sidebar nav button.active { color: var(--brand-navy); background: #e7f2fa; box-shadow: inset 3px 0 var(--brand-orange); }
+.p-sidebar nav button:hover { color: var(--brand-navy); background: #f0f4f8; }
+.p-sidebar nav button.active { color: #fff; background: var(--brand-navy); box-shadow: none; }
+.p-sidebar nav button.active > svg { color: var(--brand-orange); }
+.p-sidebar nav button.active:focus-visible { outline-color: #ffd36a; }
 .p-workspace-chip { color: var(--brand-blue); background: #f1f7fb; border-color: #d6e4ef; }
 .p-avatar, .p-business-name > span { color: var(--brand-navy); background: #e6f1f8; }
 .p-bars span { background: linear-gradient(var(--brand-orange), #ffd46d); }
@@ -85,6 +87,11 @@
 .p-shell[data-theme="dark"] .p-button.primary { background: #f6a800; color: #002b5c; border-color: #ffc342; }
 .p-shell[data-theme="dark"] .p-button.primary:hover { background: #ffbb2e; }
 .p-shell[data-theme="dark"] :is(.p-sidebar nav button.active, .p-sidebar nav button:hover, .p-avatar, .p-business-name > span, .p-row-actions button, .p-row-actions a, .p-quick button) { background: #0b365d; color: #ffd36a; border-color: #18517f; }
+.p-shell[data-theme="dark"] .p-sidebar nav button:hover { background: #29364a; color: var(--ink); }
+.p-shell[data-theme="dark"] .p-sidebar nav button.active { background: var(--brand-orange); color: var(--brand-navy); }
+.p-shell[data-theme="dark"] .p-sidebar nav button.active > svg { color: var(--brand-navy); }
+.p-shell[data-theme="dark"] .p-sidebar nav button:focus-visible { outline-color: #ffd36a; }
+.p-shell[data-theme="dark"] .p-sidebar nav button.active:focus-visible { outline-color: var(--brand-navy); }
 .p-shell[data-theme="dark"] :is(.p-eyebrow, .p-bars b, .p-metrics article > div, .p-security-grid dt) { color: #ffc342; }
 .p-shell[data-theme="dark"] .p-department-list fieldset,
 .p-shell[data-theme="dark"] .p-hierarchy-summary > div { background: #15283b; border-color: var(--border); }

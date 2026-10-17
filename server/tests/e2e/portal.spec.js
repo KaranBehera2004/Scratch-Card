@@ -41,6 +41,42 @@ const createdCredentials = async (page) => {
   return credentials;
 };
 
+test("sidebar selected section stays distinct from hover in both themes", async ({ page }, info) => {
+  await login(page, "platform@example.test", "Platform-Test-Password");
+  const sidebar = page.locator(".p-sidebar");
+  const selected = sidebar.locator('nav button[aria-current="page"]');
+  const overview = sidebar.getByRole("button", { name: "Overview", exact: true });
+  const businesses = sidebar.getByRole("button", { name: "Businesses", exact: true });
+  const shell = page.locator(".p-shell");
+  const themeSwitch = page.getByRole("switch", { name: "Dark mode", exact: true });
+  if (await shell.getAttribute("data-theme") === "dark") await themeSwitch.click();
+
+  for (const theme of ["light", "dark"]) {
+    if (theme === "dark") await themeSwitch.click();
+    await expect(shell).toHaveAttribute("data-theme", theme);
+    const selectedBackground = theme === "light" ? "rgb(0, 43, 92)" : "rgb(246, 168, 0)";
+    const selectedText = theme === "light" ? "rgb(255, 255, 255)" : "rgb(0, 43, 92)";
+    await overview.click();
+    await expect(selected).toHaveCount(1);
+    await expect(overview).toHaveAttribute("aria-current", "page");
+    await expect(overview).toHaveCSS("background-color", selectedBackground);
+    await expect(overview).toHaveCSS("color", selectedText);
+    await businesses.hover();
+    await expect(businesses).not.toHaveCSS("background-color", selectedBackground);
+    await expect(overview).toHaveCSS("background-color", selectedBackground);
+    await businesses.click();
+    await expect(selected).toHaveCount(1);
+    await expect(businesses).toHaveAttribute("aria-current", "page");
+    await expect(overview).not.toHaveAttribute("aria-current", "page");
+    await expect(businesses).toHaveCSS("background-color", selectedBackground);
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Shift+Tab");
+    await expect(businesses).toBeFocused();
+    await expect(businesses).toHaveCSS("outline-style", "solid");
+    await sidebar.screenshot({ path: info.outputPath(`sidebar-selected-${theme}.png`) });
+  }
+});
+
 test("favicon follows live browser theme changes without refreshing the page", async ({ page }) => {
   await page.emulateMedia({ colorScheme: "light" });
   await page.goto("/");
