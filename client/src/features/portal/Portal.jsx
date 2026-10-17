@@ -3437,7 +3437,9 @@ export default function Portal({
           {nav.map(([name, icon]) => (
             <button
               key={name}
+              type="button"
               className={tab === name ? "active" : ""}
+              aria-current={tab === name ? "page" : undefined}
               onClick={() => navigate(name)}
             >
               <Icon name={icon} />

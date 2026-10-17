@@ -244,7 +244,7 @@
 }
 .p-sidebar nav {
   display: grid;
-  gap: 3px;
+  gap: 6px;
   overflow-y: auto;
   min-height: 0;
   flex: 1;
@@ -259,12 +259,21 @@
   gap: 12px;
   text-align: left;
   border: 0;
-  border-radius: 7px;
+  border-radius: 10px;
   color: #747d8b;
   background: transparent;
-  padding: 8px 13px;
+  min-height: 44px;
+  padding: 10px 13px;
+  line-height: 1.4;
   font-size: 13px;
   font-weight: 500;
+}
+.p-sidebar nav button > svg {
+  flex-shrink: 0;
+}
+.p-sidebar nav button:focus-visible {
+  outline: 2px solid var(--brand-blue, #075a9c);
+  outline-offset: -2px;
 }
 .p-sidebar nav button:hover {
   background: #f6f6fb;
