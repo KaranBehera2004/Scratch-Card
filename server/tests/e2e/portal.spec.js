@@ -296,6 +296,279 @@ test("coupon list shows the actual redemption staff, branch, department and time
   await expect(page.getByRole("row").filter({ hasText: "COLUMNS-REDEEMED" })).toContainText("Nisha Redeemer");
 });
 
+test("coupon views separate bulk from individual coupons and export only the selected view", async ({ page }, info) => {
+  const root = await page.request.post("/api/auth/login", { data: {
+    loginId: "platform@example.test", password: "Platform-Test-Password",
+  } });
+  const headers = { Authorization: `Bearer ${(await root.json()).token}` };
+  const response = await page.request.post("/api/portal/businesses", { headers, data: {
+    name: "Separate coupon views", loginId: "COUPONVIEW88", password: "Coupon-View-Password",
+    limits: { card: 0, branch: 0, department: 0, account: 0 },
+  } });
+  expect(response.status()).toBe(201);
+  const { business } = await response.json();
+  const branchResponse = await page.request.post(`/api/portal/businesses/${business.businessId}/branches`, {
+    headers, data: { name: "Sales" },
+  });
+  const { branch } = await branchResponse.json();
+  const draft = { businessId: business.businessId, headline: "Your reward", offerTitle: "25% OFF",
+    description: "Your next visit", campaignName: "View test", customerPhone: "9876543210", branchId: branch.branchId };
+  for (const couponCode of ["VIEW-SINGLE-ONE", "VIEW-SINGLE-TWO"]) {
+    expect((await page.request.post("/api/cards", { headers, data: { ...draft, couponCode } })).status()).toBe(201);
+  }
+  const batchResponse = await page.request.post("/api/cards/bulk", { headers, data: {
+    ...draft, idempotencyKey: "coupon-view-separation-001", branches: [{ branchId: branch.branchId, quantity: 3 }],
+  } });
+  expect(batchResponse.status()).toBe(201);
+  const batch = await batchResponse.json();
+  await login(page, "COUPONVIEW88", "Coupon-View-Password");
+  await nav(page, "Coupons");
+  const views = page.getByRole("group", { name: "Coupon type", exact: true });
+  const all = views.getByRole("button", { name: "All coupons", exact: true });
+  const individual = views.getByRole("button", { name: "Individual coupons", exact: true });
+  const bulk = views.getByRole("button", { name: "Bulk coupons", exact: true });
+  const couponRows = page.locator(".p-table-scroll tbody tr");
+  await expect(all).toHaveAttribute("aria-pressed", "true");
+  await expect(all).toContainText("(5)");
+  await expect(individual).toContainText("(2)");
+  await expect(bulk).toContainText("(3)");
+  await expect(couponRows).toHaveCount(5);
+  await bulk.click();
+  await expect(bulk).toHaveAttribute("aria-pressed", "true");
+  await expect(couponRows).toHaveCount(3);
+  await expect(page.getByRole("row").filter({ hasText: "VIEW-SINGLE" })).toHaveCount(0);
+  await page.getByLabel("Coupon status", { exact: true }).selectOption("available");
+  await page.getByLabel("Search WhatsApp number", { exact: true }).fill("43210");
+  await page.getByRole("combobox", { name: "Filter by department", exact: true }).selectOption({ label: "Sales" });
+  await page.getByRole("button", { name: "Refresh data", exact: true }).click();
+  await expect(bulk).toHaveAttribute("aria-pressed", "true");
+  await expect(couponRows).toHaveCount(3);
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export Excel", exact: true }).click();
+  const download = await downloadPromise;
+  const workbook = Object.values(unzipSync(await fs.readFile(await download.path()))).map(value => strFromU8(value)).join(" ");
+  expect(workbook).not.toContain("VIEW-SINGLE");
+  for (const card of batch.coupons) expect(workbook).toContain(card.couponCode);
+  await individual.click();
+  await expect(couponRows).toHaveCount(2);
+  await expect(couponRows).toContainText(["VIEW-SINGLE", "VIEW-SINGLE"]);
+  await page.getByRole("button", { name: "Clear filters", exact: true }).click();
+  await expect(all).toHaveAttribute("aria-pressed", "true");
+  await expect(couponRows).toHaveCount(5);
+  await bulk.click();
+  await page.screenshot({ path: info.outputPath("coupon-types-light.png"), fullPage: true, animations: "disabled" });
+  await page.getByRole("switch", { name: "Dark mode", exact: true }).click();
+  await expect(bulk).toHaveCSS("background-color", "rgb(246, 168, 0)");
+  await page.screenshot({ path: info.outputPath("coupon-types-dark.png"), fullPage: true, animations: "disabled" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(() => page.locator(".p-sidebar").evaluate(element => element.getBoundingClientRect().right)).toBeLessThanOrEqual(1);
+  await expectResponsiveFit(page);
+  await expect(bulk).toBeVisible();
+  await individual.click();
+  await expect(couponRows).toHaveCount(2);
+  await page.screenshot({ path: info.outputPath("coupon-types-mobile.png"), fullPage: true, animations: "disabled" });
+
+  // Deleting is explicit, cancellable, and affects only the selected coupon.
+  const singleRow = page.getByRole("row").filter({ hasText: "VIEW-SINGLE-ONE" });
+  await singleRow.getByRole("button", { name: "Delete coupon (1)", exact: true }).click();
+  const confirmation = page.getByRole("dialog", { name: "Delete coupon VIEW-SINGLE-ONE", exact: true });
+  await expect(confirmation.getByRole("note")).toContainText("Business: Separate coupon views");
+  await expect(confirmation.getByRole("note")).toContainText("Coupons to delete: 1");
+  await expect(confirmation).toContainText("A super administrator can restore it");
+  await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(singleRow).toBeVisible();
+  await singleRow.getByRole("button", { name: "Delete coupon (1)", exact: true }).click();
+  await confirmation.getByRole("textbox").fill("wrong-code");
+  await confirmation.getByRole("button", { name: "Delete coupon", exact: true }).click();
+  await expect(confirmation.getByRole("alert")).toContainText("Type the exact coupon code");
+  await expect(couponRows).toHaveCount(2);
+  await confirmation.getByRole("textbox").fill("VIEW-SINGLE-ONE");
+  await page.screenshot({ path: info.outputPath("coupon-delete-confirmation-mobile.png"), fullPage: true, animations: "disabled" });
+  await confirmation.getByRole("button", { name: "Delete coupon", exact: true }).click();
+  await expect(confirmation).toHaveCount(0);
+  await expect(singleRow).toHaveCount(0);
+  await expect(couponRows).toHaveCount(1);
+  await expect(all).toContainText("(4)");
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await bulk.click();
+  const bulkCard = batch.coupons[0];
+  await page.getByRole("row").filter({ hasText: bulkCard.couponCode })
+    .getByRole("button", { name: "Delete coupon (1)", exact: true }).click();
+  const bulkConfirmation = page.getByRole("dialog", { name: `Delete coupon ${bulkCard.couponCode}`, exact: true });
+  await bulkConfirmation.getByRole("textbox").fill(bulkCard.couponCode);
+  await bulkConfirmation.getByRole("button", { name: "Delete coupon", exact: true }).click();
+  await expect(bulkConfirmation).toHaveCount(0);
+  await expect(couponRows).toHaveCount(2);
+  expect((await page.request.get(`/api/cards/${bulkCard.slug}`)).status()).toBe(404);
+  expect((await page.request.get(`/api/cards/${batch.coupons[1].slug}`)).status()).toBe(200);
+  await page.locator(".p-topbar").getByRole("button", { name: "Sign out" }).click();
+  await login(page, "platform@example.test", "Platform-Test-Password");
+  await nav(page, "Scratch cards");
+  await page.getByLabel("Filter by business", { exact: true }).selectOption(business.businessId);
+  await page.getByLabel("Coupon status", { exact: true }).selectOption("deleted");
+  const removedSingle = page.getByRole("row").filter({ hasText: "VIEW-SINGLE-ONE" });
+  const removedBulk = page.getByRole("row").filter({ hasText: bulkCard.couponCode });
+  await expect(removedSingle.locator(".p-badge.deleted")).toBeVisible();
+  await expect(removedBulk.locator(".p-badge.deleted")).toBeVisible();
+  await page.screenshot({ path: info.outputPath("super-admin-deleted-coupons.png"), fullPage: true, animations: "disabled" });
+  await removedSingle.getByRole("button", { name: "Restore coupon", exact: true }).click();
+  const restore = page.getByRole("dialog", { name: "Restore coupon VIEW-SINGLE-ONE", exact: true });
+  await restore.getByRole("textbox").fill("VIEW-SINGLE-ONE");
+  await restore.getByRole("button", { name: "Restore coupon", exact: true }).click();
+  await expect(restore).toHaveCount(0);
+  await expect(removedSingle).toHaveCount(0);
+  const ownerCheck = await page.request.post("/api/auth/login", { data: {
+    loginId: "COUPONVIEW88", password: "Coupon-View-Password",
+  } });
+  const ownerHeaders = { Authorization: `Bearer ${(await ownerCheck.json()).token}` };
+  const ownerCards = (await (await page.request.get("/api/portal/cards", { headers: ownerHeaders })).json()).cards;
+  expect(ownerCards.some(card => card.couponCode === "VIEW-SINGLE-ONE")).toBe(true);
+  expect(ownerCards.some(card => card.slug === bulkCard.slug)).toBe(false);
+  await removedBulk.getByRole("button", { name: "Delete permanently (1)", exact: true }).click();
+  const permanent = page.getByRole("dialog", { name: `Delete coupon ${bulkCard.couponCode}`, exact: true });
+  await expect(permanent).toContainText("This cannot be undone");
+  await permanent.getByRole("textbox").fill(bulkCard.couponCode);
+  await permanent.getByRole("button", { name: "Delete coupon permanently", exact: true }).click();
+  await expect(permanent).toHaveCount(0);
+  await expect(removedBulk).toHaveCount(0);
+  const remaining = (await (await page.request.get(`/api/portal/cards?business=${business.businessId}`, { headers })).json()).cards;
+  expect(remaining.some(card => card.slug === bulkCard.slug)).toBe(false);
+  expect((await page.request.delete(`/api/portal/businesses/${business.businessId}`, {
+    headers, data: { confirmName: business.name },
+  })).status()).toBe(200);
+});
+
+test("matching deletion follows expiry, individual, bulk and search filters for owners and super admins", async ({ page }, info) => {
+  const root = await page.request.post("/api/auth/login", { data: {
+    loginId: "platform@example.test", password: "Platform-Test-Password",
+  } });
+  const rootHeaders = { Authorization: `Bearer ${(await root.json()).token}` };
+  const createBusiness = async (name, loginId) => {
+    const response = await page.request.post("/api/portal/businesses", { headers: rootHeaders, data: {
+      name, loginId, password: "Delete-All-Test-Password", limits: { card: 0, branch: 0, department: 0, account: 0 },
+    } });
+    expect(response.status()).toBe(201);
+    return (await response.json()).business;
+  };
+  const business = await createBusiness("Delete All Count Retail", "DELETEALL88");
+  const foreign = await createBusiness("Unaffected Coupon Retail", "SAFECOUPON88");
+  const owner = await page.request.post("/api/auth/login", { data: { loginId: "DELETEALL88", password: "Delete-All-Test-Password" } });
+  const ownerHeaders = { Authorization: `Bearer ${(await owner.json()).token}` };
+  const draft = { headline: "Reward", offerTitle: "25% OFF", description: "Your next visit", customerPhone: "9876543210" };
+  const createCard = async (businessId, couponCode) => {
+    const response = await page.request.post("/api/cards", { headers: rootHeaders, data: { ...draft, businessId, couponCode } });
+    expect(response.status()).toBe(201);
+    return response.json();
+  };
+  const first = await createCard(business.businessId, "DELETE-ALL-ONE");
+  const activeIndividual = await createCard(business.businessId, "DELETE-ALL-TWO");
+  const safe = await createCard(foreign.businessId, "DO-NOT-DELETE");
+  const branchResponse = await page.request.post(`/api/portal/businesses/${business.businessId}/branches`, {
+    headers: ownerHeaders, data: { name: "Sales" },
+  });
+  const { branch } = await branchResponse.json();
+  const batchResponse = await page.request.post("/api/cards/bulk", { headers: ownerHeaders, data: {
+    ...draft, businessId: business.businessId, idempotencyKey: "delete-all-count-batch-001",
+    branches: [{ branchId: branch.branchId, quantity: 2 }],
+  } });
+  expect(batchResponse.status()).toBe(201);
+  const batch = await batchResponse.json();
+  await fixture.expireCoupons([first.slug, batch.coupons[0].slug]);
+  await login(page, "DELETEALL88", "Delete-All-Test-Password");
+  await nav(page, "Coupons");
+  const deleteAll = page.locator(".p-toolbar .p-coupon-delete-all");
+  await expect(deleteAll).toHaveText(`Delete matching coupons (4) · ${business.name}`);
+  await page.getByLabel("Coupon status", { exact: true }).selectOption("expired");
+  await expect(deleteAll).toHaveText(`Delete matching coupons (2) · ${business.name}`);
+  await deleteAll.click();
+  const dialog = page.getByRole("dialog", { name: `Delete matching coupons for ${business.name}`, exact: true });
+  await expect(dialog.getByRole("note")).toContainText(business.name);
+  await expect(dialog.getByRole("note")).toContainText("Coupons to delete: 2");
+  await expect(dialog).toContainText("Other coupons will not be changed");
+  await expect(dialog).toContainText("A super administrator can restore them");
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.getByRole("button", { name: "Individual coupons", exact: true }).click();
+  await expect(deleteAll).toContainText("(1)");
+  await deleteAll.click();
+  await expect(dialog.getByRole("note")).toContainText("Coupons to delete: 1");
+  await dialog.getByRole("textbox").fill(business.name);
+  await dialog.getByRole("button", { name: "Delete matching coupons", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(deleteAll).toContainText("(0)");
+  await expect(deleteAll).toBeDisabled();
+  await page.getByRole("button", { name: "Bulk coupons", exact: true }).click();
+  await expect(deleteAll).toContainText("(1)");
+  await page.getByRole("textbox", { name: "Search Coupons", exact: true }).fill("NO-MATCH");
+  await expect(deleteAll).toContainText("(0)");
+  await expect(deleteAll).toBeDisabled();
+  await page.getByRole("textbox", { name: "Search Coupons", exact: true }).fill(batch.coupons[0].couponCode);
+  await page.getByLabel("Search WhatsApp number", { exact: true }).fill("43210");
+  await page.getByRole("combobox", { name: "Filter by department", exact: true }).selectOption({ label: "Sales" });
+  await expect(deleteAll).toContainText("(1)");
+  await deleteAll.click();
+  await expect(dialog.getByRole("note")).toContainText("Coupons to delete: 1");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(dialog).toBeVisible();
+  expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: info.outputPath("owner-delete-all-confirmation-mobile.png"), fullPage: true, animations: "disabled" });
+  await dialog.getByRole("textbox").fill(business.name);
+  await dialog.getByRole("button", { name: "Delete matching coupons", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(deleteAll).toContainText("(0)");
+  await expect(deleteAll).toBeDisabled();
+  await expect(page.getByRole("status")).toContainText("1 coupon");
+  await page.getByRole("button", { name: "Clear filters", exact: true }).click();
+  await expect(deleteAll).toContainText("(2)");
+  const active = (await (await page.request.get("/api/portal/cards", { headers: ownerHeaders })).json()).cards;
+  expect(active.map(card => card.slug).sort()).toEqual([activeIndividual.slug, batch.coupons[1].slug].sort());
+  expect((await page.request.get(`/api/cards/${safe.slug}`)).status()).toBe(200);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.locator(".p-topbar").getByRole("button", { name: "Sign out" }).click();
+  await login(page, "platform@example.test", "Platform-Test-Password");
+  await nav(page, "Scratch cards");
+  await expect(deleteAll).toBeDisabled();
+  await page.getByLabel("Filter by business", { exact: true }).selectOption(business.businessId);
+  await expect(deleteAll).toHaveText(`Delete matching coupons (4) · ${business.name}`);
+  await page.getByLabel("Coupon status", { exact: true }).selectOption("deleted");
+  await expect(deleteAll).toContainText("(2)");
+  await page.getByRole("button", { name: "Individual coupons", exact: true }).click();
+  await expect(deleteAll).toContainText("(1)");
+  await deleteAll.click();
+  await expect(dialog.getByRole("note")).toContainText("Coupons to delete: 1");
+  await expect(dialog).toContainText("matching the current filters");
+  await expect(dialog).toContainText("This cannot be undone");
+  await page.screenshot({ path: info.outputPath("super-admin-delete-all-count-business.png"), fullPage: true, animations: "disabled" });
+  await dialog.getByRole("textbox").fill(business.name);
+  await dialog.getByRole("button", { name: "Delete matching coupons", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(deleteAll).toContainText(`(0) · ${business.name}`);
+  await expect(deleteAll).toBeDisabled();
+  await page.getByRole("button", { name: "Bulk coupons", exact: true }).click();
+  await expect(deleteAll).toContainText("(1)");
+  await page.getByRole("row").filter({ hasText: batch.coupons[0].couponCode })
+    .getByRole("button", { name: "Restore coupon", exact: true }).click();
+  const restore = page.getByRole("dialog", { name: `Restore coupon ${batch.coupons[0].couponCode}`, exact: true });
+  await restore.getByRole("textbox").fill(batch.coupons[0].couponCode);
+  await restore.getByRole("button", { name: "Restore coupon", exact: true }).click();
+  await expect(restore).toHaveCount(0);
+  await expect(deleteAll).toContainText("(0)");
+  await page.getByLabel("Coupon status", { exact: true }).selectOption("expired");
+  await expect(deleteAll).toContainText("(1)");
+  await deleteAll.click();
+  await dialog.getByRole("textbox").fill(business.name);
+  await dialog.getByRole("button", { name: "Delete matching coupons", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(deleteAll).toBeDisabled();
+  expect((await page.request.get(`/api/cards/${safe.slug}`)).status()).toBe(200);
+  const permanent = (await (await page.request.get(`/api/portal/cards?business=${business.businessId}`, { headers: rootHeaders })).json()).cards;
+  expect(permanent.map(card => card.slug).sort()).toEqual([activeIndividual.slug, batch.coupons[1].slug].sort());
+  for (const tenant of [business, foreign]) {
+    expect((await page.request.delete(`/api/portal/businesses/${tenant.businessId}`, {
+      headers: rootHeaders, data: { confirmName: tenant.name },
+    })).status()).toBe(200);
+  }
+});
+
 test("deleted staff login IDs can be reused in the create staff form without reviving old sessions", async ({ page }) => {
   const root = await page.request.post("/api/auth/login", { data: { loginId: "platform@example.test", password: "Platform-Test-Password" } });
   const headers = { Authorization: `Bearer ${(await root.json()).token}` };
@@ -737,7 +1010,7 @@ test("super admin can manage workspaces, create rewards, and export English work
   await capacityDialog.getByRole("button", { name: "Cancel" }).click();
   await nav(page, "Businesses");
   const impactBusinessRow = page.getByRole("row").filter({ hasText: "Impact Vibes" });
-  await expect(impactBusinessRow.getByRole("button", { name: "Delete all coupons", exact: true })).toBeVisible();
+  await expect(impactBusinessRow.getByRole("button", { name: /^Delete all coupons \(/ })).toBeVisible();
   await impactBusinessRow.getByRole("button", { name: "Open workspace" }).click();
   await expect(page.locator(".p-workspace-banner")).toContainText(
     "Impact Vibes",
@@ -851,7 +1124,7 @@ test("super admin can manage workspaces, create rewards, and export English work
   await expect(page.locator(".p-topbar select")).toHaveValue("en");
   for (const [language, expected] of [["en", "Coupon"]]) {
     const pending = page.waitForEvent("download");
-    await page.locator(".p-toolbar .p-button").click();
+    await page.getByRole("button", { name: "Export Excel", exact: true }).click();
     const download = await pending;
     expect(download.suggestedFilename()).toContain(`coupons-${language}`);
     const archive = unzipSync(await fs.readFile(await download.path()));
@@ -1477,7 +1750,7 @@ test("business languages translate the whole workspace without changing cards or
     await expect(preview.locator(".p-reward-preview h2")).toHaveText("A little surprise for you");
     await preview.getByRole("button", { name: locale.closePreview, exact: true }).last().click();
     const pending = page.waitForEvent("download");
-    await page.locator(".p-toolbar .p-button").click();
+    await page.locator(".p-toolbar .p-button:not(.p-coupon-delete-all)").click();
     const download = await pending;
     expect(download.suggestedFilename()).toContain(`coupons-${locale.code}`);
     const archive = unzipSync(await fs.readFile(await download.path()));
@@ -3548,6 +3821,20 @@ test("super admin can delete all coupons for one verified business only", async 
   await expect(manager).toBeVisible();
   await expect(manager.getByText("Total coupons").locator("..").locator("strong")).toHaveText("2");
   await expect(manager.getByText("Available", { exact: true }).locator("..").locator("strong")).toHaveText("2");
+  expect((await page.request.delete(`/api/portal/businesses/${business.businessId}/cards/${card.slug}`, {
+    headers: ownerHeaders, data: { confirmCode: card.couponCode },
+  })).status()).toBe(200);
+  await manager.getByRole("button", { name: "Close coupon manager", exact: true }).click();
+  await page.getByRole("button", { name: "Refresh data", exact: true }).click();
+  await row.getByRole("button", { name: "Manage coupons", exact: true }).click();
+  await manager.getByLabel("Coupon status", { exact: true }).selectOption("deleted");
+  await manager.getByRole("row").filter({ hasText: card.couponCode })
+    .getByRole("button", { name: "Restore coupon", exact: true }).click();
+  const restoreDialog = page.getByRole("dialog", { name: `Restore coupon ${card.couponCode}`, exact: true });
+  await restoreDialog.getByRole("textbox").fill(card.couponCode);
+  await restoreDialog.getByRole("button", { name: "Restore coupon", exact: true }).click();
+  await expect(restoreDialog).toHaveCount(0);
+  await manager.getByLabel("Coupon status", { exact: true }).selectOption("all");
   await manager.getByLabel("Search coupons", { exact: true }).fill(card.couponCode);
   await expect(manager.getByRole("row").filter({ hasText: card.couponCode })).toBeVisible();
   await expect(manager.getByRole("row").filter({ hasText: secondCard.couponCode })).toHaveCount(0);
@@ -3559,24 +3846,25 @@ test("super admin can delete all coupons for one verified business only", async 
   expect(await manager.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   await page.setViewportSize({ width: 1440, height: 1000 });
   const firstCouponRow = manager.getByRole("row").filter({ hasText: card.couponCode });
-  await firstCouponRow.getByRole("button", { name: "Delete", exact: true }).click();
+  await firstCouponRow.getByRole("button", { name: "Delete (1)", exact: true }).click();
   const singleDialog = page.getByRole("dialog", { name: `Delete coupon ${card.couponCode}`, exact: true });
   await singleDialog.getByLabel(`Type ${card.couponCode} to confirm`).fill(card.couponCode);
   await singleDialog.getByRole("button", { name: "Delete coupon permanently", exact: true }).click();
   await expect(singleDialog).not.toBeVisible();
   await expect(manager.getByText("Total coupons").locator("..").locator("strong")).toHaveText("1");
   await expect(firstCouponRow).toHaveCount(0);
-  await manager.getByRole("button", { name: "Delete all coupons", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: `Delete all coupons for ${business.name}`, exact: true });
+  await manager.getByRole("button", { name: `Delete matching coupons (1) · ${business.name}`, exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: `Delete matching coupons for ${business.name}`, exact: true });
   await dialog.getByLabel(`Type ${business.name} to confirm`).fill("wrong");
-  await dialog.getByRole("button", { name: "Delete all coupons", exact: true }).click();
+  await dialog.getByRole("button", { name: "Delete matching coupons", exact: true }).click();
   await expect(dialog.getByRole("alert")).toContainText("Type the exact business name");
   await dialog.getByLabel(`Type ${business.name} to confirm`).fill(business.name);
-  await dialog.getByRole("button", { name: "Delete all coupons", exact: true }).click();
+  await dialog.getByRole("button", { name: "Delete matching coupons", exact: true }).click();
   await expect(dialog).not.toBeVisible();
-  await expect(page.getByRole("status")).toContainText("All coupons");
+  await expect(page.getByRole("status")).toContainText("1 coupon");
+  await expect(page.getByRole("status")).toContainText(business.name);
   await expect(row).toBeVisible();
-  await expect(row.getByRole("button", { name: "Delete all coupons", exact: true })).toBeDisabled();
+  await expect(row.getByRole("button", { name: `Delete all coupons (0) · ${business.name}`, exact: true })).toBeDisabled();
   expect((await page.request.get(`/api/cards/${card.slug}`)).status()).toBe(404);
   expect((await page.request.get(`/api/cards/${secondCard.slug}`)).status()).toBe(404);
   expect((await page.request.delete(`/api/portal/businesses/${business.businessId}`, {

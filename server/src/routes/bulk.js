@@ -68,6 +68,11 @@ export function checkCapacity(cards, businessId, total, maximum) {
 // atomic local JSON replacement. There is never a partially committed batch.
 export function installBulkRoutes(app, context) {
   const { authenticate, validateCreate, businessLimits, buildCard, saveGeneration, findBatch, audit, scope, getBusiness } = context;
+  const visibleBatch = (req, batch) => {
+    if (req.user.role === "super-admin") return batch;
+    const coupons = batch.coupons.filter(card => !card.deletedAt);
+    return { ...batch, coupons, savedCount: coupons.length };
+  };
   app.get("/api/portal/batches/:id", authenticate, async (req, res, next) => {
     try {
       if (req.user.role === "branch-staff") throw bad("Branch staff cannot access coupon batches.", 403);
@@ -88,7 +93,7 @@ export function installBulkRoutes(app, context) {
       const batch = await findBatch(id);
       if (!batch) throw bad("Batch not found.", 404);
       res.set("Cache-Control", "private, no-store");
-      res.json({ ...batch, recovered: true });
+      res.json({ ...visibleBatch(req, batch), recovered: true });
     } catch (error) { next(error); }
   });
   app.post("/api/cards/bulk", authenticate, async (req, res, next) => {
@@ -113,14 +118,14 @@ export function installBulkRoutes(app, context) {
       const fingerprint = batchFingerprint(base, branches, recipients);
       if (previous) {
         if (previous.fingerprint !== fingerprint) throw bad("This retry key belongs to different batch details.", 409);
-        return res.json({ ...previous, replayed: true });
+        return res.json({ ...visibleBatch(req, previous), replayed: true });
       }
       await validateCreate(req, false);
       const maximum = (await businessLimits(business)).card;
       const result = await saveGeneration({ base, branches, total, maximum, batchKey, fingerprint, recipients });
       // An audit failure must not disguise an already committed batch as a failed generation.
       await audit(req, "Bulk coupons generated", business.businessId, `${result.savedCount} coupons · ${result.batchId}`).catch(console.error);
-      res.status(result.replayed ? 200 : 201).json(result);
+      res.status(result.replayed ? 200 : 201).json(visibleBatch(req, result));
     } catch (error) {
       // No per-card partial commits. A network loss after commit is recovered by
       // resubmitting the same retry key, which returns the saved batch.

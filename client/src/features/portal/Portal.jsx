@@ -375,6 +375,10 @@ function Editor({ editor, onClose, onSave }) {
           </button>
         </div>
         {editor.description && <p>{ui(editor.description)}</p>}
+        {editor.deletionSummary && <div className="p-alert p-deletion-summary" role="note">
+          <span>{ui("Business")}: <strong>{editor.deletionSummary.businessName}</strong></span>
+          <span>{ui("Coupons to delete")}: <strong>{editor.deletionSummary.count}</strong></span>
+        </div>}
         <div className="p-editor-fields">
           {editor.fields.map((field) => (
             <label key={field.key}>
@@ -701,7 +705,7 @@ function CouponScannerDialog({ onClose, onScan }) {
 }
 
 function CouponManagerDialog({ business, cards, busy, onClose, onPreview, onCopy,
-  onDeleteCoupon, onDeleteAll }) {
+  onDeleteCoupon, onDeleteAll, onRestoreCoupon }) {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
   const closeRef = useRef(null);
@@ -720,7 +724,7 @@ function CouponManagerDialog({ business, cards, busy, onClose, onPreview, onCopy
   }, [onClose]);
   const normalizedQuery = query.trim().toLowerCase();
   const filtered = cards.filter((card) =>
-    (status === "all" || card.status === status)
+    (status === "all" || (status === "deleted" ? Boolean(card.deletedAt) : card.status === status))
     && (!normalizedQuery || [card.couponCode, card.offerTitle, card.campaignName,
       card.branchName, card.customerPhone].some((value) =>
       String(value || "").toLowerCase().includes(normalizedQuery))));
@@ -735,6 +739,7 @@ function CouponManagerDialog({ business, cards, busy, onClose, onPreview, onCopy
     ["Redeemed", count("redeemed")],
     ["Expired", count("expired")],
     ["Disabled", count("disabled")],
+    ["Deleted by business", cards.filter(card => card.deletedAt).length],
   ];
   const branchName = (card) => business.branches?.find((branch) =>
     branch.branchId === card.branchId)?.name || card.branchName || "All departments";
@@ -759,11 +764,11 @@ function CouponManagerDialog({ business, cards, busy, onClose, onPreview, onCopy
             placeholder="Code, reward, campaign, department or number" /></label>
           <label><span>Coupon status</span><select aria-label="Coupon status" value={status}
             onChange={(event) => setStatus(event.target.value)}>
-            {["all", "available", "opened", "scratched", "redeemed", "expired", "disabled"].map((value) =>
+            {["all", "available", "opened", "scratched", "redeemed", "expired", "disabled", "deleted"].map((value) =>
               <option key={value} value={value}>{value === "all" ? "All statuses" : value[0].toUpperCase() + value.slice(1)}</option>)}
           </select></label>
-          <button className="p-button danger" type="button" disabled={busy || !cards.length}
-            onClick={onDeleteAll}>Delete all coupons</button>
+          <button className="p-button danger p-coupon-delete-all" type="button" disabled={busy || !filtered.length}
+            onClick={() => onDeleteAll(filtered)}>Delete matching coupons ({filtered.length}) · {business.name}</button>
         </div>
         <div className="p-coupon-manager-count" aria-live="polite">
           Showing {filtered.length} of {cards.length} coupons
@@ -780,8 +785,10 @@ function CouponManagerDialog({ business, cards, busy, onClose, onPreview, onCopy
             <td><div className="p-row-actions">
               <button type="button" onClick={() => onPreview(card)}>Preview</button>
               <button type="button" disabled={busy} onClick={() => onCopy(card)}>Copy link</button>
+              {card.deletedAt && <button type="button" disabled={busy}
+                onClick={() => onRestoreCoupon(card)}>Restore coupon</button>}
               <button type="button" className="danger" disabled={busy}
-                onClick={() => onDeleteCoupon(card)}>Delete</button>
+                onClick={() => onDeleteCoupon(card)}>{card.deletedAt ? "Delete permanently (1)" : "Delete (1)"}</button>
             </div></td>
           </tr>)}
         </Table>
@@ -1521,7 +1528,8 @@ export default function Portal({
     const result = await savedEditor.save(values);
     setEditor(null);
     if (result?.credentials) setCredentials({ ...result.credentials, name: result.business?.name || result.user?.name });
-    setNotice(savedEditor.successMessage || "Changes saved successfully.");
+    setNotice(typeof savedEditor.successMessage === "function" ? savedEditor.successMessage(result)
+      : savedEditor.successMessage || "Changes saved successfully.");
     savedEditor.onSaved?.(result);
     if (!savedEditor.skipRefresh) await refresh(savedEditor.quietRefresh === true);
   };
@@ -1531,6 +1539,7 @@ export default function Portal({
   const couponSection = ["Coupons", "Scratch cards"].includes(tab);
   const inSelectedBusiness = (item) => !global || !businessFilter || item.businessId === businessFilter;
   const managedCards = cards.filter(inSelectedBusiness);
+  const couponDeletionBusiness = businesses.find(item => item.businessId === (global ? businessFilter : workspaceId));
   const couponDateError = couponDateBounds(couponFilters).error;
   const updateCouponFilter = (key, value) => setCouponFilters((current) => ({ ...current, [key]: value }));
   const clearCouponFilters = () => {
@@ -1603,8 +1612,11 @@ export default function Portal({
     addCouponDepartmentOption(card, name, card.senderName);
   }
   const visibleCards = filterCouponCards(managedCards.filter(
-    (item) => match(item) && (status === "all" || item.status === status),
+    (item) => match(item) && (status === "all" || (status === "deleted" ? Boolean(item.deletedAt) : item.status === status)),
   ), couponSection ? couponFilters : EMPTY_COUPON_FILTERS, new Date(), couponBranchNames);
+  const couponDeletionRows = couponDeletionBusiness
+    ? visibleCards.filter(card => card.businessId === couponDeletionBusiness.businessId) : [];
+  const couponDeletionCount = couponDeletionRows.length;
   const couponCampaignOptions = [...new Map(managedCards.map((card) => [couponCampaignKey(card.campaignName), {
     key: couponCampaignKey(card.campaignName), name: card.campaignName || ui("General rewards"),
   }])).values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -1662,26 +1674,52 @@ export default function Portal({
         return api("/api/portal/businesses", "POST", { ...businessPayload(payload), password: payload.password, generateCredentials: true });
       },
     });
-  const requestDeleteAllCoupons = (item) => {
-    const couponCount = cards.filter((card) => card.businessId === item.businessId).length;
+  const requestDeleteAllCoupons = (item, matchingCards) => {
+    const filtered = Array.isArray(matchingCards);
+    const targets = (filtered ? matchingCards : cards).filter(card => card.businessId === item.businessId);
+    const couponSlugs = targets.map(card => card.slug);
+    const couponCount = couponSlugs.length;
+    const couponWord = couponCount === 1 ? "coupon" : "coupons";
     setEditor({
-      title: `Delete all coupons for ${item.name}`,
+      title: `Delete ${filtered ? "matching" : "all"} coupons for ${item.name}`,
       danger: true,
-      submitLabel: "Delete all coupons",
-      successMessage: `All coupons for ${item.name} were permanently deleted. Their shared links no longer work.`,
-      description: `Permanently delete all ${couponCount} coupons belonging to ${item.name}. This cannot be undone. Type the exact business name to confirm.`,
+      submitLabel: filtered ? "Delete matching coupons" : "Delete all coupons",
+      deletionSummary: { businessName: item.name, count: couponCount },
+      successMessage: result => platformAdmin
+        ? `${result.deletedCount} ${result.deletedCount === 1 ? "coupon was" : "coupons were"} permanently deleted for ${item.name}. Shared links no longer work.`
+        : `${result.deletedCount} ${result.deletedCount === 1 ? "coupon was" : "coupons were"} removed from ${item.name}. A super administrator can restore them.`,
+      description: platformAdmin
+        ? `Permanently delete ${couponCount} ${couponWord}${filtered ? " matching the current filters" : ", including archived coupons"} belonging to ${item.name}. ${filtered ? "Other coupons will not be changed." : "Table filters do not limit this action."} This cannot be undone. Type the exact business name to confirm.`
+        : `Remove ${couponCount} ${couponWord}${filtered ? " matching the current filters" : ""} belonging to ${item.name} from your workspace and deactivate their shared links. ${filtered ? "Other coupons will not be changed." : "Table filters do not limit this action."} A super administrator can restore them or delete them permanently. Type the exact business name to confirm.`,
       fields: [{ key: "confirmName", label: `Type ${item.name} to confirm`, required: true }],
-      save: (values) => api(`/api/portal/businesses/${item.businessId}/cards`, "DELETE", values),
+      save: (values) => api(`/api/portal/businesses/${item.businessId}/cards`, "DELETE", {
+        ...values, couponSlugs, confirmCount: couponCount,
+        selectionMode: filtered ? "filtered" : "all",
+        ...(filtered ? { couponStates: targets.map(card => ({ slug: card.slug, status: card.status })) } : {}),
+      }),
     });
   };
   const requestDeleteCoupon = (item, card) => setEditor({
     title: `Delete coupon ${card.couponCode}`,
     danger: true,
-    submitLabel: "Delete coupon permanently",
-    successMessage: `${card.couponCode} was permanently deleted. Its shared link no longer works.`,
-    description: `Permanently delete this coupon from ${item.name}. This cannot be undone. Type the exact coupon code to confirm.`,
+    deletionSummary: { businessName: item.name, count: 1 },
+    submitLabel: platformAdmin ? "Delete coupon permanently" : "Delete coupon",
+    successMessage: platformAdmin
+      ? `${card.couponCode} was permanently deleted. Its shared link no longer works.`
+      : `${card.couponCode} was removed from your workspace. A super administrator can restore it.`,
+    description: platformAdmin
+      ? `Permanently delete this coupon from ${item.name}. This cannot be undone. Type the exact coupon code to confirm.`
+      : `Remove this coupon from ${item.name} and deactivate its shared link. A super administrator can restore it or delete it permanently. Type the exact coupon code to confirm.`,
     fields: [{ key: "confirmCode", label: `Type ${card.couponCode} to confirm`, required: true }],
     save: (values) => api(`/api/portal/businesses/${item.businessId}/cards/${card.slug}`, "DELETE", values),
+  });
+  const requestRestoreCoupon = (item, card) => setEditor({
+    title: `Restore coupon ${card.couponCode}`,
+    submitLabel: "Restore coupon",
+    successMessage: `${card.couponCode} was restored to ${item.name}. Its original expiry and redemption state are unchanged.`,
+    description: "Restore this coupon to the business workspace. Redeemed coupons stay redeemed and expired coupons stay expired. Type the exact coupon code to confirm.",
+    fields: [{ key: "confirmCode", label: `Type ${card.couponCode} to confirm`, required: true }],
+    save: values => api(`/api/portal/businesses/${item.businessId}/cards/${card.slug}/restore`, "POST", values),
   });
   const deleteAllBusinesses = () => setEditor({
     title: "Delete all businesses",
@@ -2155,6 +2193,7 @@ export default function Portal({
       ["redeemed", "Redeemed coupons", "Claimed by staff"],
       ["expired", "Expired coupons", "Expired before redemption"],
       ["disabled", "Disabled coupons", "Disabled by an administrator"],
+      ...(platformAdmin ? [["deleted", "Deleted coupons", "Retained for super-admin recovery"]] : []),
     ].map(([status, title, caption]) => ({ status, title, value: couponCounts[status], caption })),
   ];
   const redemptionMethodLabel = (item) => ui(item.staffRedemptionMethod === "qr" ? "QR scanner"
@@ -2217,7 +2256,7 @@ export default function Portal({
               >
                 {ui("Copy link")}
               </button>
-              {canCreate && !item.revealed && (
+              {canCreate && !item.revealed && !item.deletedAt && (
                 <button
                   disabled={busy}
                   onClick={() =>
@@ -2229,6 +2268,20 @@ export default function Portal({
                   }
                 >
                   {ui(item.disabled ? "Enable" : "Disable")}
+                </button>
+              )}
+              {showPhone && admin && (
+                <button type="button" className="danger" disabled={busy}
+                  onClick={() => requestDeleteCoupon(businesses.find(value => value.businessId === item.businessId)
+                    || { businessId: item.businessId, name: item.senderName }, item)}>
+                  {ui(platformAdmin && item.deletedAt ? "Delete permanently ({count})" : "Delete coupon ({count})", { count: 1 })}
+                </button>
+              )}
+              {showPhone && platformAdmin && item.deletedAt && (
+                <button type="button" disabled={busy}
+                  onClick={() => requestRestoreCoupon(businesses.find(value => value.businessId === item.businessId)
+                    || { businessId: item.businessId, name: item.senderName }, item)}>
+                  {ui("Restore coupon")}
                 </button>
               )}
               {global && (
@@ -2612,9 +2665,9 @@ export default function Portal({
                     >
                       {item.status === "active" ? "Pause" : "Activate"}
                     </button>
-                    <button className="danger" disabled={busy || !cards.some((card) => card.businessId === item.businessId)}
+                    <button className="danger p-coupon-delete-all" disabled={busy || !cards.some((card) => card.businessId === item.businessId)}
                       onClick={() => requestDeleteAllCoupons(item)}>
-                      Delete all coupons
+                      {ui("Delete all coupons ({count})", { count: cards.filter(card => card.businessId === item.businessId).length })} · {item.name}
                     </button>
                     <button className="danger" disabled={busy}
                       onClick={() => setEditor({
@@ -3709,6 +3762,7 @@ export default function Portal({
                         "redeemed",
                         "disabled",
                         "expired",
+                        ...(platformAdmin ? ["deleted"] : []),
                       ].map((value) => (
                         <option key={value} value={value}>
                           {ui(value === "all" ? "All statuses" : value)}
@@ -3723,6 +3777,12 @@ export default function Portal({
                       <Icon name="download" />
                       {busy ? ui("Working…") : t("exportExcel")}
                     </button>
+                    {admin && <button type="button" className="p-button danger p-coupon-delete-all"
+                      disabled={busy || loading || !couponDeletionBusiness || !couponDeletionCount}
+                      onClick={() => requestDeleteAllCoupons(couponDeletionBusiness, couponDeletionRows)}>
+                      {ui("Delete matching coupons ({count})", { count: couponDeletionCount })}
+                      {" · "}{couponDeletionBusiness?.name || ui("Select a business")}
+                    </button>}
                   </>
                 )}
                 <button
@@ -3742,6 +3802,17 @@ export default function Portal({
                 <button type="button" className="p-button small" onClick={clearCouponFilters}>
                   {ui("Clear filters")}
                 </button>
+              </div>
+              <div className="p-coupon-type-switch" role="group" aria-label={ui("Coupon type")}>
+                {[["all", "All coupons"], ["individual", "Individual coupons"], ["bulk", "Bulk coupons"]].map(([value, label]) => (
+                  <button key={value} type="button" aria-label={ui(label)}
+                    className={`p-button small${couponFilters.type === value ? " primary" : ""}`}
+                    aria-pressed={couponFilters.type === value}
+                    onClick={() => updateCouponFilter("type", value)}>
+                    {ui(label)} <span>({managedCards.filter(card => value === "all"
+                      || (value === "bulk" ? Boolean(card.batchKey) : !card.batchKey)).length})</span>
+                  </button>
+                ))}
               </div>
               <div className="p-coupon-filter-fields">
                 <label>
@@ -3833,7 +3904,8 @@ export default function Portal({
             .then(() => setNotice("Share link copied."))
             .catch(() => setError("Unable to copy. Open the card to copy its URL."))}
           onDeleteCoupon={(card) => requestDeleteCoupon(managedBusiness, card)}
-          onDeleteAll={() => requestDeleteAllCoupons(managedBusiness)} />;
+          onRestoreCoupon={(card) => requestRestoreCoupon(managedBusiness, card)}
+          onDeleteAll={(matching) => requestDeleteAllCoupons(managedBusiness, matching)} />;
       })()}
       {editor && (
         <Editor
