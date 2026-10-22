@@ -97,6 +97,7 @@ const schema = new mongoose.Schema(
     staffRedeemedDepartmentId: { type: String, default: "" },
     staffRedeemedBy: { type: String, default: "" },
     staffRedeemedByName: { type: String, default: "" },
+    staffRedemptionMethod: { type: String, enum: ["", "manual", "qr"], default: "" },
     staffRedeemedBranchName: { type: String, default: "" },
     staffRedeemedLocationName: { type: String, default: "" },
     redeemedBranchId: { type: String, default: "" },
@@ -610,7 +611,7 @@ function buildCard(body, business, bulk = false, allowExpired = false) {
     claimUrl: safeUrl(body.claimUrl), campaignName: clean(body.campaignName, 80), expiresAt,
     disabled: false, openedAt: null, redeemedAt: null, scratchedAt: null,
     staffRedeemedAt: null, staffRedeemedBranchId: "",
-    staffRedeemedDepartmentId: "", staffRedeemedBy: "", staffRedeemedByName: "",
+    staffRedeemedDepartmentId: "", staffRedeemedBy: "", staffRedeemedByName: "", staffRedemptionMethod: "",
     ...safeShareImage(body.shareImage),
     ...Object.fromEntries([["accentColor", "#f6a800"], ["pageColor", "#002b5c"], ["textColor", "#ffffff"]]
       .map(([key, fallback]) => [key, /^#[0-9a-f]{6}$/i.test(body[key]) ? body[key] : fallback])),
@@ -723,6 +724,10 @@ app.post("/api/portal/redeem", authenticate, async (req, res, next) => {
       throw bad("Only branch staff can redeem customer coupons.", 403);
     const couponCode = clean(req.body.couponCode, 24).toUpperCase();
     if (!couponCode) throw bad("Enter the customer's coupon code.");
+    // Older clients did not send a method; leave it unknown instead of guessing.
+    const redemptionMethod = req.body.redemptionMethod ?? "";
+    if (!["", "manual", "qr"].includes(redemptionMethod))
+      throw bad("Choose a valid redemption method.");
     const businessId = req.user.businessId, branchId = req.user.branchId;
     const business = await getBusiness(businessId);
     const staffBranch = business.branches?.find((item) => item.branchId === branchId && item.status === "active");
@@ -746,6 +751,7 @@ app.post("/api/portal/redeem", authenticate, async (req, res, next) => {
       staffRedeemedDepartmentId: staffBranch.departmentId || "",
       staffRedeemedBy: req.user.id,
       staffRedeemedByName: req.user.name,
+      staffRedemptionMethod: redemptionMethod,
       staffRedeemedBranchName: staffBranch.name,
       staffRedeemedLocationName: locationName(staffBranch),
       redeemedAt: redemptionAt,
@@ -834,6 +840,7 @@ app.post("/api/portal/redeem", authenticate, async (req, res, next) => {
         slug: redeemed.slug, branchId, locationId: staffBranch.departmentId || "",
         branchName: staffBranch.name, locationName: locationName(staffBranch),
         staffId: req.user.id, staffName: req.user.name, redeemedAt: redemptionAt.toISOString(),
+        redemptionMethod,
       });
     res.set("Cache-Control", "no-store").json({
       coupon: {
@@ -846,6 +853,7 @@ app.post("/api/portal/redeem", authenticate, async (req, res, next) => {
         redeemedLocationName: locationName(staffBranch),
         staffName: req.user.name,
         redeemedAt: redeemed.staffRedeemedAt,
+        redemptionMethod: redeemed.staffRedemptionMethod,
         status: "redeemed",
       },
     });

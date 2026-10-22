@@ -1475,7 +1475,7 @@ export default function Portal({
       setBusy(false);
     }
   };
-  const redeemBranchCouponCode = async (couponCode) => {
+  const redeemBranchCouponCode = async (couponCode, redemptionMethod = "manual") => {
     const normalizedCode = String(couponCode || "").trim().toUpperCase();
     if (!normalizedCode) return;
     setBusy(true);
@@ -1483,7 +1483,7 @@ export default function Portal({
     setNotice("");
     setRedemptionFeedback(null);
     try {
-      const result = await api("/api/portal/redeem", "POST", { couponCode: normalizedCode });
+      const result = await api("/api/portal/redeem", "POST", { couponCode: normalizedCode, redemptionMethod });
       setRedemptionFeedback({
         type: "success",
         title: "Coupon redeemed",
@@ -1514,7 +1514,7 @@ export default function Portal({
   const redeemScannedCoupon = (couponCode) => {
     setScannerOpen(false);
     setRedemptionCode(couponCode);
-    redeemBranchCouponCode(couponCode);
+    redeemBranchCouponCode(couponCode, "qr");
   };
   const saved = async (values) => {
     const savedEditor = editor;
@@ -2157,6 +2157,8 @@ export default function Portal({
       ["disabled", "Disabled coupons", "Disabled by an administrator"],
     ].map(([status, title, caption]) => ({ status, title, value: couponCounts[status], caption })),
   ];
+  const redemptionMethodLabel = (item) => ui(item.staffRedemptionMethod === "qr" ? "QR scanner"
+    : item.staffRedemptionMethod === "manual" ? "Manual code" : "Not recorded");
   const cardsTable = (rows, showPhone = false) => (
     <Table
       columns={[
@@ -2169,7 +2171,7 @@ export default function Portal({
         "Status",
         "Created",
         ...(showPhone ? ["Expiry date"] : []),
-        ...(showPhone ? ["Redeemed by", "Redeemed department", "Redeemed branch", "Redeemed date & time"] : []),
+        ...(showPhone ? ["Redeemed by", "Redeemed department", "Redeemed branch", "Redeemed date & time", "Redemption method"] : []),
         "Actions",
       ]}
       empty={!rows.length}
@@ -2195,6 +2197,7 @@ export default function Portal({
             <td>{item.staffRedeemedAt ? item.redemptionDetails?.branchName || "—" : "—"}</td>
             <td>{item.staffRedeemedAt ? item.redemptionDetails?.departmentName || "—" : "—"}</td>
             <td>{item.staffRedeemedAt ? localizedDate(item.redemptionDetails?.redeemedAt || item.staffRedeemedAt) : "—"}</td>
+            <td>{item.staffRedeemedAt ? redemptionMethodLabel(item) : "—"}</td>
           </>}
           <td>
             <div className="p-row-actions">
@@ -2279,12 +2282,13 @@ export default function Portal({
     return <article className="p-card">
       <div className="p-card-title"><div><h2>{limit ? "Recent redemptions" : "Redemption history"}</h2>
         <p>Coupons completed by staff at {branchStaffBranch?.name || "this department"}.</p></div></div>
-      <Table columns={["Coupon code", "Reward", "Campaign", "Redeemed at", "Status"]}
+      <Table columns={["Coupon code", "Reward", "Campaign", "Redemption method", "Redeemed at", "Status"]}
         empty={!displayed.length}>
         {displayed.map((item) => <tr key={item.slug}>
           <td className="p-code">{item.couponCode}</td>
           <td>{item.offerTitle}</td>
           <td>{item.campaignName || ui("General rewards")}</td>
+          <td>{redemptionMethodLabel(item)}</td>
           <td>{localizedDate(item.staffRedeemedAt)}</td>
           <td><Badge status="redeemed" /></td>
         </tr>)}

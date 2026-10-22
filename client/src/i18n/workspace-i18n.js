@@ -3,6 +3,10 @@ import { createContext, useContext } from "react";
 // Only interface copy belongs here. Business names, branches, campaigns, offers,
 // coupon identifiers and saved card languages must never be rewritten by UI locale.
 const copy = {
+  "Redemption method": ["रिडेम्प्शन का तरीका", "రిడెంప్షన్ విధానం"],
+  "QR scanner": ["QR स्कैनर", "QR స్కానర్"],
+  "Manual code": ["मैन्युअल कोड", "మాన్యువల్ కోడ్"],
+  "Not recorded": ["दर्ज नहीं किया गया", "నమోదు కాలేదు"],
   "{remaining} of {limit} department slots remaining after saving this draft.": ["यह ड्राफ्ट सहेजने के बाद {limit} में से {remaining} विभाग स्लॉट बचेंगे।", "ఈ డ్రాఫ్ట్‌ను సేవ్ చేసిన తర్వాత {limit} విభాగాల స్లాట్లలో {remaining} మిగులుతాయి."],
   "{remaining} of {limit} branch slots remaining after saving this draft. This limit applies to all departments together.": ["यह ड्राफ्ट सहेजने के बाद {limit} में से {remaining} शाखा स्लॉट बचेंगे। यह सीमा सभी विभागों पर मिलाकर लागू होती है।", "ఈ డ్రాఫ్ట్‌ను సేవ్ చేసిన తర్వాత {limit} శాఖల స్లాట్లలో {remaining} మిగులుతాయి. ఈ పరిమితి అన్ని విభాగాలకు కలిపి వర్తిస్తుంది."],
   "{remaining} of {limit} branch slots remaining for this business. This limit applies to all departments together.": ["इस व्यवसाय के लिए {limit} में से {remaining} शाखा स्लॉट बचे हैं। यह सीमा सभी विभागों पर मिलाकर लागू होती है।", "ఈ వ్యాపారానికి {limit} శాఖల స్లాట్లలో {remaining} మిగిలి ఉన్నాయి. ఈ పరిమితి అన్ని విభాగాలకు కలిపి వర్తిస్తుంది."],

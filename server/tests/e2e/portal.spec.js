@@ -214,7 +214,7 @@ test("coupon list shows the actual redemption staff, branch, department and time
   } });
   const completed = await page.request.post("/api/portal/redeem", { headers: {
     Authorization: `Bearer ${(await staffLogin.json()).token}`,
-  }, data: { couponCode: redeemed.couponCode } });
+  }, data: { couponCode: redeemed.couponCode, redemptionMethod: "manual" } });
   expect(completed.status()).toBe(200);
   const { coupon } = await completed.json();
   const namesakeResponse = await page.request.post("/api/portal/users", { headers, data: {
@@ -228,7 +228,7 @@ test("coupon list shows the actual redemption staff, branch, department and time
   expect((await page.request.post(`/api/cards/${otherSales.slug}/claim`)).status()).toBe(200);
   expect((await page.request.post("/api/portal/redeem", { headers: {
     Authorization: `Bearer ${(await namesakeLogin.json()).token}`,
-  }, data: { couponCode: otherSales.couponCode } })).status()).toBe(200);
+  }, data: { couponCode: otherSales.couponCode, redemptionMethod: "qr" } })).status()).toBe(200);
   // Historical columns must keep the original identity after the account is renamed.
   expect((await page.request.patch(`/api/portal/users/${user.id}`, { headers, data: { name: "Changed staff name" } })).status()).toBe(200);
   await login(page, "REDEEMCOL88", "Redemption-Columns-Password");
@@ -259,12 +259,13 @@ test("coupon list shows the actual redemption staff, branch, department and time
   expect(exported).not.toContain("COLUMNS-OTHER-SALES");
   await staffFilter.selectOption({ label: "Nisha Redeemer · Warangal · Sales" });
   await expect(page.getByRole("row").filter({ hasText: "COLUMNS-OTHER-SALES" })).toBeVisible();
+  await expect(page.getByRole("row").filter({ hasText: "COLUMNS-OTHER-SALES" })).toContainText("QR scanner");
   await expect(page.getByRole("row").filter({ hasText: "COLUMNS-REDEEMED" })).toHaveCount(0);
   await page.getByRole("button", { name: "Clear filters", exact: true }).click();
   await expect(staffFilter).toHaveValue("");
   await expect(page.getByRole("row").filter({ hasText: "COLUMNS-" })).toHaveCount(4);
   await departmentFilter.selectOption({ label: "Sales" });
-  const columns = ["Redeemed by", "Redeemed branch", "Redeemed department", "Redeemed date & time"];
+  const columns = ["Redeemed by", "Redeemed branch", "Redeemed department", "Redeemed date & time", "Redemption method"];
   for (const name of columns) await expect(page.getByRole("columnheader", { name, exact: true })).toBeVisible();
   const cellsByHeader = async code => {
     const headers = await page.getByRole("columnheader").allTextContents();
@@ -275,6 +276,7 @@ test("coupon list shows the actual redemption staff, branch, department and time
   expect(row["Branch"]).toBe("Warangal");
   expect(row["Department"]).toBe("Sales");
   expect(row["Redeemed by"]).toBe("Nisha Redeemer");
+  expect(row["Redemption method"]).toBe("Manual code");
   expect(row["Redeemed branch"]).toBe("Karimnagar");
   expect(row["Redeemed department"]).toBe("Sales");
   expect(row["Redeemed date & time"]).toBe(await page.evaluate(value => new Date(value).toLocaleString("en-IN"), coupon.redeemedAt));
@@ -286,6 +288,7 @@ test("coupon list shows the actual redemption staff, branch, department and time
   await page.getByRole("switch", { name: "Dark mode", exact: true }).click();
   row = await cellsByHeader("COLUMNS-REDEEMED");
   expect(row["Redeemed by"]).toBe("Nisha Redeemer");
+  expect(row["Redemption method"]).toBe("Manual code");
   await page.setViewportSize({ width: 390, height: 844 });
   await expectResponsiveFit(page);
   await expect(page.getByRole("row").filter({ hasText: "COLUMNS-REDEEMED" })).toContainText("Karimnagar");
@@ -2934,6 +2937,7 @@ test("business creates branch staff with a mandatory manual login ID and super a
     .find((card) => card.slug === northCard.slug);
   expect(redeemedCard.status).toBe("redeemed");
   expect(redeemedCard.used).toBe(true);
+  expect(redeemedCard.staffRedemptionMethod).toBe("qr");
   await page.goto(`/card/${northCard.slug}`);
   await expect(page.locator(".scratch-shell")).toHaveClass(/is-redeemed/);
   await expect(page.locator(".redeemed-coupon-label")).toHaveText("COUPON REDEEMED");
@@ -2946,9 +2950,37 @@ test("business creates branch staff with a mandatory manual login ID and super a
   await expect(page.locator(".p-metrics article").filter({ hasText: "Total redeemed" }).locator("strong")).toHaveText("1");
   await nav(page, "Redemption history");
   await expect(page.getByRole("row").filter({ hasText: "STAFF-NORTH" })).toContainText("redeemed");
+  await expect(page.getByRole("columnheader", { name: "Redemption method", exact: true })).toBeVisible();
+  await expect(page.getByRole("row").filter({ hasText: "STAFF-NORTH" })).toContainText("QR scanner");
   const completedInventory = (await (await page.request.get("/api/portal/cards", { headers: staffHeaders })).json()).cards;
   expect(completedInventory.map(card => card.slug)).toEqual([northCard.slug]);
   expect(completedInventory.every(card => card.status === "redeemed")).toBe(true);
+
+  // Manual entry must be recorded separately; older clients remain unknown.
+  for (const code of ["STAFF-MANUAL", "STAFF-LEGACY"]) {
+    const created = await page.request.post("/api/cards", { headers: ownerCheckHeaders, data: {
+      ...cardData, branchId: north.branchId, couponCode: code,
+    } });
+    expect(created.status()).toBe(201);
+    const card = await created.json();
+    expect((await page.request.post(`/api/cards/${card.slug}/claim`)).status()).toBe(200);
+  }
+  await nav(page, "Redeem coupon");
+  await page.getByLabel("Coupon code", { exact: true }).fill("staff-manual");
+  await page.getByRole("main").getByRole("button", { name: "Redeem coupon", exact: true }).click();
+  await expect(page.getByRole("alertdialog").getByRole("heading", { name: "Coupon redeemed", exact: true })).toBeVisible();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Done", exact: true }).click();
+  expect((await page.request.post("/api/portal/redeem", { headers: staffHeaders,
+    data: { couponCode: "STAFF-LEGACY" },
+  })).status()).toBe(200);
+  await nav(page, "Redemption history");
+  await page.getByRole("button", { name: "Refresh data", exact: true }).click();
+  await expect(page.getByRole("row").filter({ hasText: "STAFF-MANUAL" })).toContainText("Manual code");
+  await expect(page.getByRole("row").filter({ hasText: "STAFF-LEGACY" })).toContainText("Not recorded");
+  await page.reload();
+  await expect(page.getByRole("row").filter({ hasText: "STAFF-NORTH" })).toContainText("QR scanner");
+  await expect(page.getByRole("row").filter({ hasText: "STAFF-MANUAL" })).toContainText("Manual code");
+  await expect(page.getByRole("row").filter({ hasText: "STAFF-LEGACY" })).toContainText("Not recorded");
 
   await page.locator(".p-topbar").getByRole("button", { name: "Sign out" }).click();
   await login(page, "platform@example.test", "Platform-Test-Password");
