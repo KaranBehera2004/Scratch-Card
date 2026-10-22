@@ -3,6 +3,16 @@ import { createContext, useContext } from "react";
 // Only interface copy belongs here. Business names, branches, campaigns, offers,
 // coupon identifiers and saved card languages must never be rewritten by UI locale.
 const copy = {
+  "{remaining} of {limit} department slots remaining after saving this draft.": ["यह ड्राफ्ट सहेजने के बाद {limit} में से {remaining} विभाग स्लॉट बचेंगे।", "ఈ డ్రాఫ్ట్‌ను సేవ్ చేసిన తర్వాత {limit} విభాగాల స్లాట్లలో {remaining} మిగులుతాయి."],
+  "{remaining} of {limit} branch slots remaining after saving this draft. This limit applies to all departments together.": ["यह ड्राफ्ट सहेजने के बाद {limit} में से {remaining} शाखा स्लॉट बचेंगे। यह सीमा सभी विभागों पर मिलाकर लागू होती है।", "ఈ డ్రాఫ్ట్‌ను సేవ్ చేసిన తర్వాత {limit} శాఖల స్లాట్లలో {remaining} మిగులుతాయి. ఈ పరిమితి అన్ని విభాగాలకు కలిపి వర్తిస్తుంది."],
+  "{remaining} of {limit} branch slots remaining for this business. This limit applies to all departments together.": ["इस व्यवसाय के लिए {limit} में से {remaining} शाखा स्लॉट बचे हैं। यह सीमा सभी विभागों पर मिलाकर लागू होती है।", "ఈ వ్యాపారానికి {limit} శాఖల స్లాట్లలో {remaining} మిగిలి ఉన్నాయి. ఈ పరిమితి అన్ని విభాగాలకు కలిపి వర్తిస్తుంది."],
+  "This draft needs {total} branch slots. Only {remaining} are available. Reduce the counts below before saving.": ["इस ड्राफ्ट के लिए {total} शाखा स्लॉट चाहिए। केवल {remaining} उपलब्ध हैं। सहेजने से पहले नीचे संख्या कम करें।", "ఈ డ్రాఫ్ట్‌కు {total} శాఖల స్లాట్లు అవసరం. {remaining} మాత్రమే అందుబాటులో ఉన్నాయి. సేవ్ చేసే ముందు కింద సంఖ్యలను తగ్గించండి."],
+  "Filter by branch staff": ["शाखा कर्मचारियों के अनुसार फ़िल्टर", "శాఖ సిబ్బంది ఆధారంగా ఫిల్టర్ చేయండి"],
+  "All branch staff": ["सभी शाखा कर्मचारी", "శాఖ సిబ్బంది అందరూ"],
+  "Redeemed by": ["रिडीम करने वाला कर्मचारी", "రిడీమ్ చేసిన సిబ్బంది"],
+  "Redeemed department": ["रिडीम किया गया विभाग", "రిడీమ్ చేసిన విభాగం"],
+  "Redeemed branch": ["रिडीम की गई शाखा", "రిడీమ్ చేసిన శాఖ"],
+  "Redeemed date & time": ["रिडीम की तारीख और समय", "రిడీమ్ చేసిన తేదీ మరియు సమయం"],
   "Departments & Branches": ["विभाग & शाखाएँ", "విభాగాలు & శాఖలు"],
   "Delete department?": ["विभाग हटाएँ?", "విభాగాన్ని తొలగించాలా?"],
   "Delete branch?": ["शाखा हटाएँ?", "శాఖను తొలగించాలా?"],

@@ -925,6 +925,10 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
     assert.equal(wrongRedeemed.details.staffName, "South Staff");
     assert.ok(wrongRedeemed.details.redeemedAt);
     assert.notEqual(new Date(wrongRedeemed.details.redeemedAt).getUTCFullYear(), 2000);
+    const listedSouthCard = (await request(`/api/portal/cards?business=${id}`, admin)).cards.find(item => item.slug === southCard.slug);
+    assert.equal(listedSouthCard.redemptionDetails.staffName, "South Staff");
+    assert.equal(listedSouthCard.redemptionDetails.departmentName, "South Branch");
+    assert.equal(new Date(listedSouthCard.redemptionDetails.redeemedAt).getTime(), new Date(wrongRedeemed.details.redeemedAt).getTime());
     assert.equal((await request("/api/portal/redeem", ownerToken, "POST", { couponCode: "NORTH-ONE" })).status, 403);
     let monitored = (await request("/api/portal/users", admin)).users.find((user) => user.id === staff.user.id);
     assert.equal(monitored.loginCount, 1);
@@ -964,17 +968,43 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
     const deletedByAdmin = await request(`/api/portal/users/${automaticStaff.user.id}`, admin, "DELETE", { confirmName: "South Staff" });
     assert.equal(deletedByAdmin.status, 200);
     assert.equal((await request("/api/auth/me", southStaffToken)).status, 401);
-    // Deleting a staff login frees its allowance without reusing its identity.
+    // The archived identity stays intact, but its login ID is reusable within
+    // the same business. A new account must never revive the old sessions.
+    assert.equal((await request("/api/portal/users", ownerToken, "POST", { ...staffPayload, role: "editor" })).status, 409);
     const replacement = await request("/api/portal/users", ownerToken, "POST", {
-      ...staffPayload, name: "Replacement staff", loginId: "REPLACESTAFF58",
+      ...staffPayload, name: "Replacement staff", loginId: "northstaff58", password: "Replacement-Staff-Password",
     });
     assert.equal(replacement.status, 201, replacement.message);
+    assert.notEqual(replacement.user.id, staff.user.id);
+    assert.equal((await request("/api/auth/me", reassignedToken)).status, 401);
+    assert.equal((await request("/api/auth/login", null, "POST", {
+      loginId: "NORTHSTAFF58", password: "North-Staff-Password",
+    })).status, 401);
+    const replacementToken = await login("NORTHSTAFF58", "Replacement-Staff-Password");
+    assert.equal((await request("/api/auth/me", replacementToken)).user.id, replacement.user.id);
     assert.equal((await request("/api/portal/users", ownerToken, "POST", staffPayload)).status, 409);
+    assert.equal((await request(`/api/portal/users/${replacement.user.id}`, ownerToken, "PATCH", { status: "paused" })).status, 200);
+    assert.equal((await request("/api/portal/users", ownerToken, "POST", staffPayload)).status, 409);
+    assert.deepEqual((await request("/api/portal/cards", ownerToken)).cards, beforeDeletion);
+    assert.equal((await request(`/api/portal/users/${replacement.user.id}`, ownerToken, "DELETE", { confirmName: "Replacement staff" })).status, 200);
+    // Several concurrent requests for an archived ID can create only one user.
+    const recreated = await Promise.all(Array.from({ length: 5 }, (_, index) => request("/api/portal/users", ownerToken, "POST", {
+      ...staffPayload, name: `Recreated staff ${index}`, password: "Recreated-Staff-Password",
+    })));
+    assert.equal(recreated.filter(result => result.status === 201).length, 1);
+    assert.equal(recreated.filter(result => result.status === 409).length, 4);
+    const recreatedUser = recreated.find(result => result.status === 201).user;
+    assert.notEqual(recreatedUser.id, staff.user.id);
+    assert.notEqual(recreatedUser.id, replacement.user.id);
+    assert.equal((await request("/api/auth/me", replacementToken)).status, 401);
+    assert.deepEqual((await request("/api/portal/cards", ownerToken)).cards, beforeDeletion);
     const savedMeta = JSON.parse(await fs.readFile(path.join(temporary, "server/data/control.json"), "utf8"));
     const archived = savedMeta.users.find((item) => item.id === staff.user.id);
     assert.equal(archived.status, "deleted");
     assert.ok(archived.deletedAt);
     assert.equal(archived.deletedBy, id);
+    assert.equal(savedMeta.users.filter(item => item.status !== "deleted"
+      && String(item.loginId || "").toLowerCase() === "northstaff58").length, 1);
     assert.ok(savedMeta.audit.some((event) => event.action === "Staff account deleted" && event.businessId === id));
     assert.equal((await request(`/api/portal/businesses/${id}`, admin, "DELETE", { confirmName: "Branch Staff Test" })).status, 200);
   });
@@ -1004,8 +1034,8 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
     const sourceStaff = await makeStaff(sourceSales, "Ameerpet staff", "AMEERSALES88");
     const destinationStaff = await makeStaff(destinationSales, "Punjagutta staff", "PUNJSALES88");
     const serviceStaff = await makeStaff(service, "Service staff", "SERVICESTAFF88");
-    const makeCoupon = async (couponCode) => {
-      const card = await request("/api/cards", admin, "POST", { ...draft, businessId, branchId: sourceSales.branchId, couponCode });
+    const makeCoupon = async (couponCode, assignedBranchId = sourceSales.branchId) => {
+      const card = await request("/api/cards", admin, "POST", { ...draft, businessId, branchId: assignedBranchId, couponCode });
       assert.equal(card.status, 201, card.message);
       return card;
     };
@@ -1029,6 +1059,11 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
     assert.equal(saved.staffRedeemedBy, destinationStaff.user.id);
     assert.equal(saved.staffRedeemedByName, "Punjagutta staff");
     assert.equal(saved.staffRedeemedLocationName, "Punjagutta");
+    assert.deepEqual(saved.redemptionDetails, {
+      staffId: destinationStaff.user.id,
+      staffName: "Punjagutta staff", branchName: "Punjagutta", departmentName: destinationSales.name,
+      redeemedAt: success.coupon.redeemedAt,
+    });
     assert.equal(saved.status, "redeemed");
     assert.ok((await request("/api/portal/cards", destinationStaff.token)).cards.some((item) => item.slug === card.slug));
     for (const staff of [sourceStaff, destinationStaff]) {
@@ -1074,6 +1109,51 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
     assert.equal(otherSales.status, 201);
     const otherStaff = await makeStaff(otherSales.branch, "Other business staff", "OTHERSALES88", other.business.businessId);
     assert.equal((await redeem(otherStaff, card.couponCode)).status, 404);
+    // "All departments" uses an empty branchId, not a specific Sales/Service unit.
+    // Any active staff in this business may redeem it, but still only once.
+    const allStaff = [sourceStaff, destinationStaff, serviceStaff];
+    for (const [index, staff] of allStaff.entries()) {
+      const universal = await makeCoupon(`ALL-DEPTS-${index}`, "");
+      assert.equal((await redeem(staff, universal.couponCode)).status, 409);
+      assert.equal((await request(`/api/cards/${universal.slug}/claim`, null, "POST", {})).status, 200);
+      assert.equal((await redeem(otherStaff, universal.couponCode)).status, 404);
+      const success = await redeem(staff, universal.couponCode);
+      assert.equal(success.status, 200, success.message);
+      assert.equal(success.coupon.staffName, staff.user.name);
+      assert.equal(success.coupon.assignedBranchName, "All branches");
+      for (const checkingStaff of allStaff) {
+        const repeated = await redeem(checkingStaff, universal.couponCode);
+        assert.equal(repeated.status, 409);
+        assert.equal(repeated.details.staffName, staff.user.name);
+        assert.equal(repeated.details.redeemedBranchName, success.coupon.redeemedBranchName);
+        assert.equal(repeated.details.redeemedLocationName, success.coupon.redeemedLocationName);
+        assert.equal(new Date(repeated.details.redeemedAt).getTime(), new Date(success.coupon.redeemedAt).getTime());
+      }
+    }
+    const universalRace = await makeCoupon("ALL-DEPTS-RACE", "");
+    assert.equal((await request(`/api/cards/${universalRace.slug}/claim`, null, "POST", {})).status, 200);
+    const universalResults = await Promise.all(Array.from({ length: 6 }, (_, index) =>
+      redeem(allStaff[index % allStaff.length], universalRace.couponCode)));
+    assert.equal(universalResults.filter(result => result.status === 200).length, 1);
+    assert.equal(universalResults.filter(result => result.status === 409).length, 5);
+    const universalExpired = await makeCoupon("ALL-DEPTS-EXPIRED", "");
+    const universalDisabled = await makeCoupon("ALL-DEPTS-DISABLED", "");
+    const legacyNull = await makeCoupon("ALL-DEPTS-NULL", "");
+    const legacyMissing = await makeCoupon("ALL-DEPTS-MISSING", "");
+    for (const item of [universalExpired, universalDisabled, legacyNull, legacyMissing])
+      assert.equal((await request(`/api/cards/${item.slug}/claim`, null, "POST", {})).status, 200);
+    const universalPersisted = JSON.parse(await fs.readFile(cardsPath, "utf8"));
+    universalPersisted.find(item => item.slug === universalExpired.slug).expiresAt = new Date(Date.now() - 1000).toISOString();
+    universalPersisted.find(item => item.slug === universalDisabled.slug).disabled = true;
+    universalPersisted.find(item => item.slug === legacyNull.slug).branchId = null;
+    delete universalPersisted.find(item => item.slug === legacyMissing.slug).branchId;
+    await fs.writeFile(cardsPath, JSON.stringify(universalPersisted));
+    for (const staff of allStaff) {
+      assert.equal((await redeem(staff, universalExpired.couponCode)).status, 410);
+      assert.equal((await redeem(staff, universalDisabled.couponCode)).status, 410);
+    }
+    assert.equal((await redeem(serviceStaff, legacyNull.couponCode)).status, 200);
+    assert.equal((await redeem(destinationStaff, legacyMissing.couponCode)).status, 200);
     const finalCards = (await request(`/api/portal/cards?business=${businessId}`, admin)).cards;
     assert.deepEqual(finalCards.find((item) => item.slug === card.slug), saved);
     for (const item of [expired, disabled])

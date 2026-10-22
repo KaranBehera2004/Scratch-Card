@@ -155,7 +155,15 @@ export function installControls(app, context) {
       all[key] = value;
       await fs.mkdir(dataDir, { recursive: true });
       await fs.writeFile(`${filename}.tmp`, JSON.stringify(all, null, 2));
-      await fs.rename(`${filename}.tmp`, filename);
+      // Windows readers/antivirus can briefly hold the destination during
+      // concurrent staff requests. Retry the same atomic rename, not the mutation.
+      for (let attempt = 0; ; attempt++) {
+        try { await fs.rename(`${filename}.tmp`, filename); break; }
+        catch (error) {
+          if (!["EPERM", "EBUSY"].includes(error.code) || attempt >= 4) throw error;
+          await new Promise(resolve => setTimeout(resolve, 20 * 2 ** attempt));
+        }
+      }
       return value;
     });
     queue = run.catch(() => {});
@@ -228,18 +236,26 @@ export function installControls(app, context) {
       throw fail("Login ID must be 6–16 characters and contain only letters and numbers, including at least one of each.");
     return loginId;
   };
-  const loginIdInUse = async (value, excludeBusinessId = "") => {
+  const loginIdInUse = async (value, excludeBusinessId = "", reusableStaffBusinessId = "") => {
     const key = String(value || "").toLowerCase(), meta = await readMeta(["users", "superAdmins"]);
     return key === primaryLogin()
       || (await listBusinesses()).some((item) => item.businessId !== excludeBusinessId
         && String(item.loginId || item.loginEmail || "").toLowerCase() === key)
-      || (meta.users || []).some((item) => String(item.loginId || item.email || "").toLowerCase() === key)
+      || (meta.users || []).some((item) => String(item.loginId || item.email || "").toLowerCase() === key
+        && !(reusableStaffBusinessId && item.businessId === reusableStaffBusinessId
+          && item.role === "branch-staff" && item.status === "deleted"))
       || (meta.superAdmins || []).some((item) => String(item.loginId || "").toLowerCase() === key);
   };
-  async function reserveLoginId(value, { current = "", excludeBusinessId = "" } = {}) {
+  async function reserveLoginId(value, { current = "", excludeBusinessId = "", reusableStaffBusinessId = "" } = {}) {
     const loginId = validateLoginId(value), key = loginId.toLowerCase(), currentKey = String(current || "").toLowerCase();
-    if (key !== currentKey && await loginIdInUse(loginId, excludeBusinessId))
+    if (key !== currentKey && await loginIdInUse(loginId, excludeBusinessId, reusableStaffBusinessId))
       throw fail("This login ID already exists.", 409);
+    const reusableDeletedStaff = reusableStaffBusinessId && (await users()).some(item =>
+      item.businessId === reusableStaffBusinessId && item.role === "branch-staff" && item.status === "deleted"
+      && String(item.loginId || item.email || "").toLowerCase() === key);
+    // Preserve the old reservation and archived identity. Creating a replacement
+    // is serialized by the non-deleted-user uniqueness check below instead.
+    if (reusableDeletedStaff) return loginId;
     await changeMeta("loginIds", (ids = []) => {
       if (key !== currentKey && ids.some((item) => String(item).toLowerCase() === key))
         throw fail("This login ID already exists.", 409);
@@ -333,8 +349,8 @@ export function installControls(app, context) {
     if (!business) throw fail("Business not found.", 404);
     return business;
   }
-  async function resolveRedemptionRecord(card) {
-    const meta = await readMeta(["users", "audit"]);
+  async function resolveRedemptionRecord(card, metadata) {
+    const meta = metadata || await readMeta(["users", "audit"]);
     const branchStaff = (meta.users || []).filter((item) =>
       item.businessId === card.businessId
       && item.role === "branch-staff");
@@ -360,6 +376,7 @@ export function installControls(app, context) {
       : String(auditedStaff?.branchId || card.staffRedeemedBranchId || card.branchId || "");
     return {
       branchId,
+      staffId: staff?.id || card.staffRedeemedBy || "",
       branchName: savedIdentityMatchesBranch ? card.staffRedeemedBranchName : "",
       locationName: savedIdentityMatchesBranch ? card.staffRedeemedLocationName : "",
       staffName: (savedIdentityMatchesBranch ? card.staffRedeemedByName : "") || staff?.name
@@ -513,18 +530,38 @@ export function installControls(app, context) {
     const cards = isMongo()
       ? await Card.find(query).select("-shareImageBase64").sort({ createdAt: -1 }).lean()
       : await readLocalCards();
-    return cards
+    const visibleCards = cards
       .filter((item) => visibleBusinesses.has(item.businessId || "impact-vibes"))
       .filter((item) => !id || (item.businessId || "impact-vibes") === id)
       .filter((item) => req.user.role !== "branch-staff"
         || item.branchId === req.user.branchId
-        || item.staffRedeemedBranchId === req.user.branchId)
-      .map((item) => {
+        || item.staffRedeemedBranchId === req.user.branchId);
+    // Resolve saved redemption identities once per list, not from the viewer's
+    // login or the coupon's original assignment. Reuse metadata for legacy rows.
+    const redemptionMeta = visibleCards.some(item => item.staffRedeemedAt)
+      ? await readMeta(["users", "audit"]) : null;
+    const redemptionBusinesses = redemptionMeta ? await listBusinesses() : [];
+    return (await Promise.all(visibleCards.map(async (item) => {
         // The potentially large preview payload is only served through the
         // public image endpoint and must not inflate authenticated tables.
         const { shareImageBase64: _image, shareImageMime, ...row } = item;
+        let redemptionDetails = null;
+        if (item.staffRedeemedAt) {
+          const record = await resolveRedemptionRecord({ ...item, businessId: item.businessId || "impact-vibes" }, redemptionMeta);
+          const business = redemptionBusinesses.find(value => value.businessId === (item.businessId || "impact-vibes"));
+          const unit = business?.branches?.find(value => value.branchId === record.branchId);
+          const location = business?.departments?.find(value => value.departmentId === unit?.departmentId);
+          redemptionDetails = {
+            staffId: record.staffId || "",
+            staffName: record.staffName || "Unknown staff member",
+            branchName: record.locationName || location?.name || "Unknown branch",
+            departmentName: record.branchName || unit?.name || "Unknown department",
+            redeemedAt: record.redeemedAt || item.staffRedeemedAt,
+          };
+        }
         return {
           ...row,
+          redemptionDetails,
           hasShareImage: Boolean(_image),
           shareImageMime: shareImageMime || null,
           businessId: item.businessId || "impact-vibes",
@@ -532,7 +569,7 @@ export function installControls(app, context) {
           revealed: Boolean(item.scratchedAt || item.redeemedAt || item.staffRedeemedAt),
           status: couponStatus(item),
         };
-      })
+      })))
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   }
   async function limit(business, resource, count) {
@@ -764,6 +801,44 @@ export function installControls(app, context) {
             return { ...result, limits: await businessLimits(item, legacy) };
           }),
         ),
+      });
+    }),
+  );
+  app.get(
+    "/api/portal/businesses/:businessId/accounts-export",
+    auth,
+    superOnly,
+    route(async (req, res) => {
+      const id = scope(req), business = await getBusiness(id);
+      const accounts = [{
+        name: business.name,
+        role: "Business owner",
+        branch: "All branches",
+        department: "All departments",
+        loginId: business.loginId || business.loginEmail || "Not configured",
+        password: "Not retrievable",
+        status: business.status || "active",
+      }];
+      const roles = { admin: "Administrator", editor: "Editor", viewer: "Viewer", "branch-staff": "Department staff" };
+      for (const user of (await users()).filter(item => item.businessId === id && item.status !== "deleted")) {
+        const unit = business.branches?.find(item => item.branchId === user.branchId);
+        const location = business.departments?.find(item => item.departmentId === unit?.departmentId);
+        // Explicit fields only: never serialize hashes, sessions, or password versions.
+        accounts.push({
+          name: user.name || "",
+          role: roles[user.role] || user.role,
+          branch: user.branchId ? location?.name || "Unassigned" : "All branches",
+          department: user.branchId ? unit?.name || "Unavailable department" : "All departments",
+          loginId: user.loginId || user.email || "Not configured",
+          password: "Not retrievable",
+          status: user.status || "active",
+        });
+      }
+      await audit(req, "Business accounts exported", id, `${accounts.length} accounts; passwords not included`);
+      res.set("Cache-Control", "private, no-store").json({
+        business: { businessId: id, name: business.name },
+        passwordNotice: "Existing passwords are stored as one-way hashes and cannot be recovered. No passwords were changed by this export.",
+        accounts,
       });
     }),
   );
@@ -1310,7 +1385,9 @@ export function installControls(app, context) {
       const generated = req.body.role === "branch-staff" || req.body.generateCredentials === true || !req.body.email;
       const suppliedPassword = generated ? accountPassword(req.body.password) : String(req.body.password || ""),
         credentials = generated ? {
-          loginId: requestedLoginId ? await reserveLoginId(requestedLoginId) : await issueLoginId(),
+          loginId: requestedLoginId ? await reserveLoginId(requestedLoginId, {
+            reusableStaffBusinessId: req.body.role === "branch-staff" ? id : "",
+          }) : await issueLoginId(),
           password: suppliedPassword,
         } : null;
       const email = text(req.body.email).toLowerCase(),
@@ -1343,6 +1420,9 @@ export function installControls(app, context) {
         loginCount: 0,
       };
       await changeMeta("users", (records) => {
+        if (generated && (records || []).some(item => item.status !== "deleted"
+          && String(item.loginId || item.email || "").toLowerCase() === user.loginId.toLowerCase()))
+          throw fail("This login ID already exists.", 409);
         if (!generated && (records || []).some((item) => item.email === email))
           throw fail("Email already exists.", 409);
         return [...(records || []), user];
