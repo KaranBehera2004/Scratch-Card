@@ -552,7 +552,7 @@ for (const deviceScaleFactor of [1, 2, 3]) {
   });
 }
 
-test("expired coupon links show a disabled reward card without exposing the code", async ({ page }) => {
+test("expired coupon links show a disabled reward card without exposing the code", async ({ page }, info) => {
   await page.route("**/api/cards/expired-ui", route => route.fulfill({
     status: 200,
     contentType: "application/json",
@@ -578,12 +578,18 @@ test("expired coupon links show a disabled reward card without exposing the code
   await expect(page.locator(".scratch-card canvas")).toHaveCount(0);
   await expect(page.locator(".scratch-card .offer-content strong")).toHaveText("25% OFF");
   await expect(page.locator(".expired-coupon-label")).toHaveText("COUPON IS EXPIRED");
+  await expect(page.getByRole("heading", { name: "Coupon is already expired", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "A little surprise for you" })).toHaveCount(0);
   await expect(page.getByText("A surprise was sent to you")).toHaveCount(0);
   await expect(page.locator(".scratch-shell .progress")).toHaveCount(1);
   await expect(page.getByText("This coupon has expired and can no longer be redeemed.")).toHaveCount(0);
   await expect(page.locator(".recipient-actions")).toHaveCount(0);
   await expect(page.locator("body")).not.toContainText("LUCKY-");
+  await page.screenshot({ path: info.outputPath("expired-heading-desktop.png"), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectResponsiveFit(page);
+  await expect(page.getByRole("heading", { name: "Coupon is already expired", exact: true })).toBeVisible();
+  await page.screenshot({ path: info.outputPath("expired-heading-mobile.png"), fullPage: true });
 });
 
 test("compact typography stays readable and sidebar navigation remains accessible", async ({ page }, info) => {
@@ -2809,7 +2815,7 @@ test("bulk branch controls continue the same draft across generations, refreshes
   })).status()).toBe(200);
 });
 
-test("business creates branch staff with a mandatory manual login ID and super admin monitors it", async ({ page }) => {
+test("business creates branch staff with a mandatory manual login ID and super admin monitors it", async ({ page }, info) => {
   const rootLogin = await page.request.post("/api/auth/login", { data: { loginId: "platform@example.test", password: "Platform-Test-Password" } });
   const rootHeaders = { Authorization: `Bearer ${(await rootLogin.json()).token}` };
   const createdResponse = await page.request.post("/api/portal/businesses", { headers: rootHeaders, data: {
@@ -2859,6 +2865,7 @@ test("business creates branch staff with a mandatory manual login ID and super a
   expect(scratchedCard.revealed).toBe(true);
 
   await page.goto(`/card/${northCard.slug}`);
+  await expect(page.getByRole("heading", { name: "Branch reward", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Copy code", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "QR Code", exact: true }).click();
   const customerQrDialog = page.getByRole("dialog", { name: "Scan to redeem", exact: true });
@@ -2940,10 +2947,19 @@ test("business creates branch staff with a mandatory manual login ID and super a
   expect(redeemedCard.staffRedemptionMethod).toBe("qr");
   await page.goto(`/card/${northCard.slug}`);
   await expect(page.locator(".scratch-shell")).toHaveClass(/is-redeemed/);
-  await expect(page.locator(".redeemed-coupon-label")).toHaveText("COUPON REDEEMED");
+  await expect(page.getByRole("heading", { name: "Coupon is already redeemed", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Branch reward", exact: true })).toHaveCount(0);
+  await expect(page.locator(".scratch-card")).not.toContainText("COUPON REDEEMED");
+  await expect(page.locator(".redeemed-coupon-label")).toHaveCount(0);
   await expect(page.getByText("STAFF-NORTH", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Copy code", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "QR Code", exact: true })).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath("redeemed-coupon-heading-desktop.png"), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectResponsiveFit(page);
+  await expect(page.getByRole("heading", { name: "Coupon is already redeemed", exact: true })).toBeVisible();
+  await page.screenshot({ path: info.outputPath("redeemed-coupon-heading-mobile.png"), fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("/");
   await nav(page, "Overview");
   await expect(page.getByText("Ready to redeem", { exact: true })).toHaveCount(0);

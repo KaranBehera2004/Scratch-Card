@@ -113,6 +113,8 @@ const TRANSLATIONS = {
     swipeFinger: "Swipe with your finger",
     unlocked: "Offer unlocked!",
     couponRedeemed: "COUPON REDEEMED",
+    couponAlreadyRedeemed: "Coupon is already redeemed",
+    couponAlreadyExpired: "Coupon is already expired",
     couponExpired: "COUPON IS EXPIRED",
     expiredMessage: "This coupon has expired and can no longer be redeemed.",
     revealed: "revealed",
@@ -148,6 +150,8 @@ const TRANSLATIONS = {
     ],
   },
   hi: {
+    couponAlreadyRedeemed: "कूपन पहले ही उपयोग किया जा चुका है",
+    couponAlreadyExpired: "कूपन की अवधि पहले ही समाप्त हो चुकी है",
     branch: "विभाग",
     allBranches: "सभी विभाग",
     language: "भाषा",
@@ -244,6 +248,8 @@ const TRANSLATIONS = {
     ],
   },
   te: {
+    couponAlreadyRedeemed: "కూపన్ ఇప్పటికే ఉపయోగించబడింది",
+    couponAlreadyExpired: "కూపన్ గడువు ఇప్పటికే ముగిసింది",
     branch: "విభాగం",
     allBranches: "అన్ని విభాగాలు",
     language: "భాష",
@@ -625,9 +631,7 @@ function ScratchCard({ card, onReveal = () => {}, preview = false, t, onCopyCoup
           <span>{t("reward")}</span>
           <strong>{card.offerTitle}</strong>
           <p>{card.description}</p>
-          {card.redeemed ? (
-            <b className="redeemed-coupon-label">{t("couponRedeemed")}</b>
-          ) : card.expired ? (
+          {card.redeemed ? null : card.expired ? (
             <b className="expired-coupon-label">{t("couponExpired")}</b>
           ) : card.couponCode ? (
             <div className="coupon-code-row">
@@ -1392,12 +1396,13 @@ function PublicCard({ slug, language: dashboardLanguage }) {
       <div className="glow one" />
       <div className="glow two" />
       <section className="experience">
+        {card.expired && <h1>{t("couponAlreadyExpired")}</h1>}
         {!card.expired && (
           <>
             <div className="eyebrow">
               <GiftIcon /> {t("sentToYou")}
             </div>
-            <h1>{card.headline}</h1>
+            <h1>{card.redeemed ? t("couponAlreadyRedeemed") : card.headline}</h1>
             <p className="intro">
               {card.used
                 ? (card.redeemed ? t("alreadyUsed") : t("unlocked"))
