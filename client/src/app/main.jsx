@@ -12,6 +12,7 @@ import { workspaceTranslator } from "../i18n/workspace-i18n.js";
 import { normalizeWhatsAppNumber, whatsAppCardUrl } from "../../../server/shared/whatsapp.js";
 import { scratchApiUrl, scratchCardUrl, scratchShareUrl } from "../../../server/shared/urls.js";
 import { publicCardProblem } from "../../../server/shared/public-card-errors.js";
+import { createScratchSurface } from "../features/scratch/scratch-surface.js";
 import { pendingBulk, savedBulkDraft, useBulkGeneration, BranchQuantities, BulkResults } from "../features/bulk/BulkGenerate.jsx";
 import "../styles/bulk.css";
 import "../styles/styles.css";
@@ -568,35 +569,24 @@ function ScratchCard({ card, onReveal = () => {}, preview = false, t, onCopyCoup
   const alreadyScratched = Boolean(card.scratchedAt || card.used || card.expired);
   const canvasRef = useRef(null),
     cardRef = useRef(null),
-    drawing = useRef(false),
-    revealed = useRef(false);
+    surfaceRef = useRef(null),
+    revealCallback = useRef(onReveal);
+  useEffect(() => { revealCallback.current = onReveal; }, [onReveal]);
   const [progress, setProgress] = useState(preview || alreadyScratched ? 100 : 0);
-  const prepare = useCallback(() => {
-    // Revealing the coupon can grow the card with larger translated text.
-    // A resize must not cover an already-revealed reward again.
-    if (preview || alreadyScratched || revealed.current || !canvasRef.current || !cardRef.current) return;
-    const canvas = canvasRef.current,
-      rect = cardRef.current.getBoundingClientRect(),
-      ratio = Math.min(devicePixelRatio || 1, 2),
-      ctx = canvas.getContext("2d");
-    canvas.width = Math.round(rect.width * ratio);
-    canvas.height = Math.round(rect.height * ratio);
-    canvas.style.width = `${rect.width}px`;
-    canvas.style.height = `${rect.height}px`;
-    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  const paint = useCallback((ctx, width, height) => {
     ctx.globalCompositeOperation = "source-over";
-    const gradient = ctx.createLinearGradient(0, 0, rect.width, rect.height);
+    const gradient = ctx.createLinearGradient(0, 0, width, height);
     gradient.addColorStop(0, "#eef0f5");
     gradient.addColorStop(0.48, "#a7adbd");
     gradient.addColorStop(1, "#f7f8fa");
     ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, rect.width, rect.height);
+    ctx.fillRect(0, 0, width, height);
     ctx.fillStyle = "rgba(255,255,255,.24)";
-    for (let x = -rect.height; x < rect.width + rect.height; x += 28) {
+    for (let x = -height; x < width + height; x += 28) {
       ctx.save();
       ctx.translate(x, 0);
       ctx.rotate(Math.PI / 4);
-      ctx.fillRect(0, -rect.height, 8, rect.height * 3);
+      ctx.fillRect(0, -height, 8, height * 3);
       ctx.restore();
     }
     ctx.textAlign = "center";
@@ -605,65 +595,23 @@ function ScratchCard({ card, onReveal = () => {}, preview = false, t, onCopyCoup
     ctx.font = "700 16px DM Sans, system-ui";
     ctx.fillText(
       `✦  ${t("scratchHere")}  ✦`,
-      rect.width / 2,
-      rect.height / 2 - 7,
+      width / 2,
+      height / 2 - 7,
     );
     ctx.fillStyle = "#62697d";
     ctx.font = "500 12px DM Sans, system-ui";
-    ctx.fillText(t("swipeFinger"), rect.width / 2, rect.height / 2 + 18);
-    revealed.current = false;
-    setProgress(0);
-  }, [preview, alreadyScratched, t]);
+    ctx.fillText(t("swipeFinger"), width / 2, height / 2 + 18);
+  }, [t]);
   useEffect(() => {
-    prepare();
-    if (preview) return;
-    const observer = new ResizeObserver(prepare);
+    if (preview || alreadyScratched || !canvasRef.current) return;
+    const surface = createScratchSurface(canvasRef.current, {
+      paint, onProgress: setProgress, onComplete: () => revealCallback.current(),
+    });
+    surfaceRef.current = surface;
+    const observer = new ResizeObserver(surface.resize);
     observer.observe(cardRef.current);
-    return () => observer.disconnect();
-  }, [prepare, preview]);
-  const scratch = (event) => {
-    if (!drawing.current || revealed.current || preview) return;
-    event.preventDefault();
-    const canvas = canvasRef.current,
-      rect = canvas.getBoundingClientRect(),
-      ratio = canvas.width / rect.width,
-      ctx = canvas.getContext("2d");
-    ctx.globalCompositeOperation = "destination-out";
-    ctx.beginPath();
-    ctx.arc(
-      (event.clientX - rect.left) * ratio,
-      (event.clientY - rect.top) * ratio,
-      29 * ratio,
-      0,
-      Math.PI * 2,
-    );
-    ctx.fill();
-    const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-    let cleared = 0;
-    for (let i = 3; i < pixels.length; i += 160) if (pixels[i] === 0) cleared++;
-    const percent = Math.min(
-      100,
-      Math.round((cleared / (pixels.length / 160)) * 100),
-    );
-    setProgress(percent);
-    if (percent >= 42) {
-      revealed.current = true;
-      setProgress(100);
-      Promise.resolve(onReveal())
-        .then((canReveal) => {
-          if (canReveal === false) {
-            revealed.current = false;
-            prepare();
-            return;
-          }
-          canvas.classList.add("canvas-revealed");
-        })
-        .catch(() => {
-          revealed.current = false;
-          prepare();
-        });
-    }
-  };
+    return () => { observer.disconnect(); surface.dispose(); surfaceRef.current = null; };
+  }, [paint, preview, alreadyScratched]);
   return (
     <div
       className={`scratch-shell ${preview ? "is-preview" : ""}${card.expired ? " is-expired" : ""}${card.redeemed ? " is-redeemed" : ""}`}
@@ -694,14 +642,11 @@ function ScratchCard({ card, onReveal = () => {}, preview = false, t, onCopyCoup
         {!preview && !alreadyScratched && (
           <canvas
             ref={canvasRef}
-            onPointerDown={(e) => {
-              drawing.current = true;
-              e.currentTarget.setPointerCapture(e.pointerId);
-              scratch(e);
-            }}
-            onPointerMove={scratch}
-            onPointerUp={() => (drawing.current = false)}
-            onPointerCancel={() => (drawing.current = false)}
+            onPointerDown={(event) => surfaceRef.current?.start(event)}
+            onPointerMove={(event) => surfaceRef.current?.move(event)}
+            onPointerUp={(event) => surfaceRef.current?.end(event)}
+            onPointerCancel={(event) => surfaceRef.current?.end(event)}
+            onLostPointerCapture={(event) => surfaceRef.current?.end(event)}
             aria-label={t("scratchLabel")}
           />
         )}

@@ -77,6 +77,267 @@ test("sidebar selected section stays distinct from hover in both themes", async 
   }
 });
 
+test("superadmin downloads one business account list without exposing or changing passwords", async ({ page }, info) => {
+  const password = "Export-Accounts-Password";
+  const signIn = async loginId => {
+    const response = await page.request.post("/api/auth/login", { data: { loginId, password } });
+    expect(response.ok()).toBe(true);
+    return { Authorization: `Bearer ${(await response.json()).token}` };
+  };
+  const root = await page.request.post("/api/auth/login", { data: {
+    loginId: "platform@example.test", password: "Platform-Test-Password",
+  } });
+  const headers = { Authorization: `Bearer ${(await root.json()).token}` };
+  const createBusiness = async (name, loginId) => {
+    const response = await page.request.post("/api/portal/businesses", { headers, data: {
+      name, loginId, password, limits: { card: 0, branch: 0, department: 0, account: 0 },
+    } });
+    expect(response.status()).toBe(201);
+    return (await response.json()).business;
+  };
+  const business = await createBusiness("Account export business", "EXPORTBIZ88");
+  const other = await createBusiness("Other export business", "OTHEREXPORT88");
+  const structure = await page.request.post(`/api/portal/businesses/${business.businessId}/departments/branches`, {
+    headers, data: { departments: [
+      { name: "North", branches: [{ name: "Sales" }] },
+      { name: "South", branches: [{ name: "Sales" }] },
+    ] },
+  });
+  expect(structure.status()).toBe(201);
+  const { branches } = await structure.json();
+  const createAccount = async (name, loginId, role, branchId, businessId = business.businessId) => {
+    const response = await page.request.post("/api/portal/users", { headers, data: {
+      businessId, name, loginId, role, branchId, password, generateCredentials: true,
+    } });
+    expect(response.status()).toBe(201);
+    return (await response.json()).user;
+  };
+  await createAccount("North staff", "NORTHEXPORT88", "branch-staff", branches[0].branchId);
+  const south = await createAccount("South staff", "SOUTHEXPORT88", "branch-staff", branches[1].branchId);
+  await createAccount("=1+1", "ADMINEXPORT88", "admin");
+  await createAccount("Other staff", "FOREIGNEXPORT88", "viewer", undefined, other.businessId);
+  const removed = await createAccount("Removed staff", "REMOVEEXPORT88", "branch-staff", branches[0].branchId);
+  expect((await page.request.delete(`/api/portal/users/${removed.id}`, { headers,
+    data: { confirmName: "Removed staff" } })).ok()).toBe(true);
+  const ownerHeaders = await signIn("EXPORTBIZ88");
+  const staffHeaders = await signIn("NORTHEXPORT88");
+  const adminHeaders = await signIn("ADMINEXPORT88");
+  const endpoint = `/api/portal/businesses/${business.businessId}/accounts-export`;
+  expect((await page.request.get(endpoint)).status()).toBe(401);
+  for (const accountHeaders of [ownerHeaders, staffHeaders, adminHeaders])
+    expect((await page.request.get(endpoint, { headers: accountHeaders })).status()).toBe(403);
+  expect((await page.request.get(`${endpoint}?business=${other.businessId}`, { headers })).status()).toBe(403);
+  expect((await page.request.get("/api/portal/businesses/not-found/accounts-export", { headers })).status()).toBe(404);
+  // Include paused accounts and leave their access unchanged.
+  expect((await page.request.patch(`/api/portal/users/${south.id}`, { headers, data: { status: "paused" } })).ok()).toBe(true);
+  const exported = await page.request.get(endpoint, { headers });
+  expect(exported.ok()).toBe(true);
+  expect(exported.headers()["cache-control"]).toContain("no-store");
+  const result = await exported.json();
+  expect(result.business.businessId).toBe(business.businessId);
+  expect(result.accounts).toHaveLength(4);
+  expect(result.accounts.find(row => row.loginId === "NORTHEXPORT88")).toMatchObject({ branch: "North", department: "Sales" });
+  expect(result.accounts.find(row => row.loginId === "SOUTHEXPORT88")).toMatchObject({ branch: "South", department: "Sales", status: "paused" });
+  expect(result.accounts.every(row => row.password === "Not retrievable")).toBe(true);
+  for (const forbidden of [password, "passwordHash", "passwordVersion", "FOREIGNEXPORT88", "OTHEREXPORT88", "REMOVEEXPORT88"])
+    expect(JSON.stringify(result)).not.toContain(forbidden);
+
+  await login(page, "platform@example.test", "Platform-Test-Password");
+  await nav(page, "Businesses");
+  const row = page.getByRole("row").filter({ hasText: "Account export business" });
+  await expect(row.getByRole("button", { name: "Download accounts (Excel)", exact: true })).toBeVisible();
+  const downloadPromise = page.waitForEvent("download");
+  await row.getByRole("button", { name: "Download accounts (Excel)", exact: true }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toMatch(/^Account-export-business-accounts-\d{4}-\d{2}-\d{2}\.xlsx$/);
+  const archive = unzipSync(await fs.readFile(await download.path()));
+  const sheet = strFromU8(archive["xl/worksheets/sheet1.xml"]);
+  const text = Object.values(archive).map(value => strFromU8(value)).join(" ");
+  for (const value of ["Business accounts", "Business", "Account name", "Role", "Branch", "Department", "Login ID", "Password", "Access",
+    "EXPORTBIZ88", "NORTHEXPORT88", "SOUTHEXPORT88", "ADMINEXPORT88", "Not retrievable", "North", "South", "Sales", "paused", "=1+1"])
+    expect(text).toContain(value);
+  for (const forbidden of [password, "passwordHash", "passwordVersion", "FOREIGNEXPORT88", "OTHEREXPORT88", "REMOVEEXPORT88"])
+    expect(text).not.toContain(forbidden);
+  expect(sheet).not.toMatch(/<f(?:\s|>)/);
+  expect((sheet.match(/<row\b/g) || []).length).toBe(5);
+  await expect(page.getByRole("status")).toContainText("no passwords were changed");
+  for (const accountHeaders of [ownerHeaders, staffHeaders, adminHeaders])
+    expect((await page.request.get("/api/auth/me", { headers: accountHeaders })).ok()).toBe(true);
+  await signIn("EXPORTBIZ88");
+  await signIn("NORTHEXPORT88");
+  await page.screenshot({ path: info.outputPath("business-account-export.png"), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectResponsiveFit(page);
+  await expect(row.getByRole("button", { name: "Download accounts (Excel)", exact: true })).toBeEnabled();
+});
+
+test("coupon list shows the actual redemption staff, branch, department and timestamp", async ({ page }, info) => {
+  const root = await page.request.post("/api/auth/login", { data: {
+    loginId: "platform@example.test", password: "Platform-Test-Password",
+  } });
+  const headers = { Authorization: `Bearer ${(await root.json()).token}` };
+  const created = await page.request.post("/api/portal/businesses", { headers, data: {
+    name: "Redemption columns business", loginId: "REDEEMCOL88", password: "Redemption-Columns-Password",
+    limits: { card: 0, branch: 0, department: 0, account: 0 },
+  } });
+  expect(created.status()).toBe(201);
+  const { business } = await created.json();
+  const structure = await page.request.post(`/api/portal/businesses/${business.businessId}/departments/branches`, {
+    headers, data: { departments: [
+      { name: "Warangal", branches: [{ name: "Sales" }] },
+      { name: "Karimnagar", branches: [{ name: "Sales" }, { name: "Service" }] },
+    ] },
+  });
+  expect(structure.status()).toBe(201);
+  const { branches } = await structure.json();
+  const staffResponse = await page.request.post("/api/portal/users", { headers, data: {
+    businessId: business.businessId, branchId: branches[1].branchId, name: "Nisha Redeemer",
+    role: "branch-staff", loginId: "NISHACOL88", password: "Nisha-Columns-Password", generateCredentials: true,
+  } });
+  expect(staffResponse.status()).toBe(201);
+  const { user } = await staffResponse.json();
+  const createCard = async (couponCode, branchId = branches[0].branchId) => {
+    const response = await page.request.post("/api/cards", { headers, data: {
+      businessId: business.businessId, branchId, headline: "A reward for you",
+      offerTitle: "25% OFF", description: "On your next order", customerPhone: "9876543210", couponCode,
+    } });
+    expect(response.status()).toBe(201);
+    return response.json();
+  };
+  const redeemed = await createCard("COLUMNS-REDEEMED");
+  await createCard("COLUMNS-AVAILABLE");
+  const otherSales = await createCard("COLUMNS-OTHER-SALES", branches[1].branchId);
+  await createCard("COLUMNS-SERVICE", branches[2].branchId);
+  expect((await page.request.post(`/api/cards/${redeemed.slug}/claim`)).status()).toBe(200);
+  const staffLogin = await page.request.post("/api/auth/login", { data: {
+    loginId: "NISHACOL88", password: "Nisha-Columns-Password",
+  } });
+  const completed = await page.request.post("/api/portal/redeem", { headers: {
+    Authorization: `Bearer ${(await staffLogin.json()).token}`,
+  }, data: { couponCode: redeemed.couponCode } });
+  expect(completed.status()).toBe(200);
+  const { coupon } = await completed.json();
+  const namesakeResponse = await page.request.post("/api/portal/users", { headers, data: {
+    businessId: business.businessId, branchId: branches[0].branchId, name: "Nisha Redeemer",
+    role: "branch-staff", loginId: "NISHASECOND88", password: "Nisha-Second-Password", generateCredentials: true,
+  } });
+  expect(namesakeResponse.status()).toBe(201);
+  const namesakeLogin = await page.request.post("/api/auth/login", { data: {
+    loginId: "NISHASECOND88", password: "Nisha-Second-Password",
+  } });
+  expect((await page.request.post(`/api/cards/${otherSales.slug}/claim`)).status()).toBe(200);
+  expect((await page.request.post("/api/portal/redeem", { headers: {
+    Authorization: `Bearer ${(await namesakeLogin.json()).token}`,
+  }, data: { couponCode: otherSales.couponCode } })).status()).toBe(200);
+  // Historical columns must keep the original identity after the account is renamed.
+  expect((await page.request.patch(`/api/portal/users/${user.id}`, { headers, data: { name: "Changed staff name" } })).status()).toBe(200);
+  await login(page, "REDEEMCOL88", "Redemption-Columns-Password");
+  await nav(page, "Coupons");
+  const departmentFilter = page.getByRole("combobox", { name: "Filter by department", exact: true });
+  await expect(departmentFilter.getByRole("option", { name: "Sales", exact: true })).toHaveCount(1);
+  await expect(departmentFilter.getByRole("option", { name: "Service", exact: true })).toHaveCount(1);
+  await departmentFilter.selectOption({ label: "Sales" });
+  await expect(page.getByRole("row").filter({ hasText: "COLUMNS-" })).toHaveCount(3);
+  await expect(page.getByRole("row").filter({ hasText: "COLUMNS-OTHER-SALES" })).toContainText("Karimnagar");
+  await expect(page.getByRole("row").filter({ hasText: "COLUMNS-SERVICE" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Refresh data", exact: true }).click();
+  await expect(page.getByRole("row").filter({ hasText: "COLUMNS-" })).toHaveCount(3);
+  const staffFilter = page.getByRole("combobox", { name: "Filter by department staff", exact: true });
+  await expect(staffFilter.getByRole("option")).toHaveCount(3);
+  await staffFilter.selectOption({ label: "Nisha Redeemer · Karimnagar · Sales" });
+  await expect(page.getByRole("row").filter({ hasText: "COLUMNS-" })).toHaveCount(1);
+  await expect(page.getByRole("row").filter({ hasText: "COLUMNS-REDEEMED" })).toBeVisible();
+  await page.getByLabel("Coupon status", { exact: true }).selectOption("redeemed");
+  await page.getByLabel("Search WhatsApp number", { exact: true }).fill("43210");
+  await page.getByRole("button", { name: "Refresh data", exact: true }).click();
+  await expect(page.getByRole("row").filter({ hasText: "COLUMNS-" })).toHaveCount(1);
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export Excel", exact: true }).click();
+  const download = await downloadPromise;
+  const exported = Object.values(unzipSync(await fs.readFile(await download.path()))).map(value => strFromU8(value)).join(" ");
+  expect(exported).toContain("COLUMNS-REDEEMED");
+  expect(exported).not.toContain("COLUMNS-OTHER-SALES");
+  await staffFilter.selectOption({ label: "Nisha Redeemer · Warangal · Sales" });
+  await expect(page.getByRole("row").filter({ hasText: "COLUMNS-OTHER-SALES" })).toBeVisible();
+  await expect(page.getByRole("row").filter({ hasText: "COLUMNS-REDEEMED" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Clear filters", exact: true }).click();
+  await expect(staffFilter).toHaveValue("");
+  await expect(page.getByRole("row").filter({ hasText: "COLUMNS-" })).toHaveCount(4);
+  await departmentFilter.selectOption({ label: "Sales" });
+  const columns = ["Redeemed by", "Redeemed branch", "Redeemed department", "Redeemed date & time"];
+  for (const name of columns) await expect(page.getByRole("columnheader", { name, exact: true })).toBeVisible();
+  const cellsByHeader = async code => {
+    const headers = await page.getByRole("columnheader").allTextContents();
+    const cells = await page.getByRole("row").filter({ hasText: code }).getByRole("cell").allTextContents();
+    return Object.fromEntries(headers.map((header, index) => [header, cells[index]]));
+  };
+  let row = await cellsByHeader("COLUMNS-REDEEMED");
+  expect(row["Branch"]).toBe("Warangal");
+  expect(row["Department"]).toBe("Sales");
+  expect(row["Redeemed by"]).toBe("Nisha Redeemer");
+  expect(row["Redeemed branch"]).toBe("Karimnagar");
+  expect(row["Redeemed department"]).toBe("Sales");
+  expect(row["Redeemed date & time"]).toBe(await page.evaluate(value => new Date(value).toLocaleString("en-IN"), coupon.redeemedAt));
+  const available = await cellsByHeader("COLUMNS-AVAILABLE");
+  for (const name of columns) expect(available[name]).toBe("—");
+  await staffFilter.selectOption({ label: "Nisha Redeemer · Karimnagar · Sales" });
+  await page.getByRole("columnheader", { name: "Redeemed date & time", exact: true }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: info.outputPath("coupon-redemption-columns.png"), fullPage: true });
+  await page.getByRole("switch", { name: "Dark mode", exact: true }).click();
+  row = await cellsByHeader("COLUMNS-REDEEMED");
+  expect(row["Redeemed by"]).toBe("Nisha Redeemer");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectResponsiveFit(page);
+  await expect(page.getByRole("row").filter({ hasText: "COLUMNS-REDEEMED" })).toContainText("Karimnagar");
+  await page.reload();
+  await expect(page.getByRole("row").filter({ hasText: "COLUMNS-REDEEMED" })).toContainText("Nisha Redeemer");
+});
+
+test("deleted staff login IDs can be reused in the create staff form without reviving old sessions", async ({ page }) => {
+  const root = await page.request.post("/api/auth/login", { data: { loginId: "platform@example.test", password: "Platform-Test-Password" } });
+  const headers = { Authorization: `Bearer ${(await root.json()).token}` };
+  const created = await page.request.post("/api/portal/businesses", { headers, data: {
+    name: "Staff login reuse test", loginId: "REUSEBIZ88", password: "Reuse-Business-Password",
+    limits: { card: 0, branch: 0, department: 0, account: 0 },
+  } });
+  expect(created.status()).toBe(201);
+  const { business } = await created.json();
+  const structure = await page.request.post(`/api/portal/businesses/${business.businessId}/departments/branches`, {
+    headers, data: { departments: [{ name: "Central", branches: [{ name: "Sales" }] }] },
+  });
+  expect(structure.status()).toBe(201);
+  const branch = (await structure.json()).branches[0];
+  const old = await page.request.post("/api/portal/users", { headers, data: {
+    businessId: business.businessId, branchId: branch.branchId, role: "branch-staff", name: "Deleted staff",
+    loginId: "REUSESTAFF88", password: "Old-Staff-Password", generateCredentials: true,
+  } });
+  expect(old.status()).toBe(201);
+  const oldUser = (await old.json()).user;
+  const oldLogin = await page.request.post("/api/auth/login", { data: { loginId: "REUSESTAFF88", password: "Old-Staff-Password" } });
+  const oldHeaders = { Authorization: `Bearer ${(await oldLogin.json()).token}` };
+  expect((await page.request.delete(`/api/portal/users/${oldUser.id}`, { headers, data: { confirmName: "Deleted staff" } })).status()).toBe(200);
+  await login(page, "REUSEBIZ88", "Reuse-Business-Password");
+  await nav(page, "Department staff");
+  await page.getByRole("button", { name: "Add department staff", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Create department staff login", exact: true });
+  await dialog.getByLabel("Staff name", { exact: true }).fill("Replacement staff");
+  await dialog.getByLabel("Login ID", { exact: true }).fill("reusestaff88");
+  await dialog.getByRole("combobox", { name: "Branch and department", exact: true }).selectOption(branch.branchId);
+  await dialog.getByLabel("Password", { exact: true }).fill("New-Staff-Password");
+  await dialog.getByLabel("Confirm password", { exact: true }).fill("New-Staff-Password");
+  await dialog.getByRole("button", { name: "Save changes", exact: true }).click();
+  const credentials = await createdCredentials(page);
+  expect(credentials.loginId).toBe("reusestaff88");
+  await expect(dialog).not.toBeVisible();
+  await expandBranchGroups(page);
+  await expect(page.getByRole("row").filter({ hasText: "Replacement staff" })).toContainText("reusestaff88");
+  expect((await page.request.get("/api/auth/me", { headers: oldHeaders })).status()).toBe(401);
+  expect((await page.request.post("/api/auth/login", { data: { loginId: "REUSESTAFF88", password: "Old-Staff-Password" } })).status()).toBe(401);
+  const newLogin = await page.request.post("/api/auth/login", { data: { loginId: "REUSESTAFF88", password: "New-Staff-Password" } });
+  expect(newLogin.status()).toBe(200);
+  expect((await newLogin.json()).user.id).not.toBe(oldUser.id);
+});
+
 test("favicon follows live browser theme changes without refreshing the page", async ({ page }) => {
   await page.emulateMedia({ colorScheme: "light" });
   await page.goto("/");
@@ -201,6 +462,92 @@ test("public coupon links show safe error screens and recover from temporary fai
     await expect(page.locator(".p-login")).toHaveCount(0);
   }
 });
+
+for (const deviceScaleFactor of [1, 2, 3]) {
+  test(`finger scratching follows continuous strokes at pixel ratio ${deviceScaleFactor}`, async ({ browser }, info) => {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 },
+      hasTouch: true, isMobile: true, deviceScaleFactor });
+    const page = await context.newPage();
+    try {
+      const errors = [];
+      page.on("pageerror", error => errors.push(error.message));
+      await page.addInitScript(() => {
+        const read = CanvasRenderingContext2D.prototype.getImageData;
+        window.scratchReadbacks = [];
+        window.readScratchPixel = (canvas, x, y) => read.call(canvas.getContext("2d"), x, y, 1, 1).data[3];
+        CanvasRenderingContext2D.prototype.getImageData = function (x, y, width, height, ...args) {
+          window.scratchReadbacks.push({ width, height });
+          return read.call(this, x, y, width, height, ...args);
+        };
+      });
+      const slug = `touch-test-${deviceScaleFactor}`;
+      const couponCode = `TOUCH-COUPON-${deviceScaleFactor}`;
+      const card = { slug, senderName: "Touch test business", headline: "A little surprise for you",
+        offerTitle: "25% OFF", description: "On your next order", language: "en",
+        branchId: "sales", branchName: "Sales", used: false };
+      let claims = 0, claimed = false;
+      await page.route(`**/api/cards/${slug}`, route => route.fulfill({
+        json: claimed ? { ...card, couponCode, scratchedAt: new Date().toISOString() } : card,
+      }));
+      let allowClaim;
+      const claimAllowed = new Promise(resolve => { allowClaim = resolve; });
+      await page.route(`**/api/cards/${slug}/claim`, async route => {
+        claims++;
+        await claimAllowed;
+        claimed = true;
+        await route.fulfill({ json: { couponCode, scratchedAt: new Date().toISOString() } });
+      });
+      await page.goto(`http://127.0.0.1:5099/card/${slug}`);
+      const canvas = page.locator(".scratch-card canvas");
+      await expect(canvas).toBeVisible();
+      await canvas.scrollIntoViewIfNeeded();
+      await expect(canvas).toHaveCSS("touch-action", "none");
+      const session = await context.newCDPSession(page);
+      const touch = async (type, x, y) => session.send("Input.dispatchTouchEvent", {
+        type, touchPoints: type === "touchEnd" || type === "touchCancel" ? []
+          : [{ x, y, id: 1, radiusX: 8, radiusY: 8 }],
+      });
+      let box = await canvas.boundingBox();
+      const originalScroll = await page.evaluate(() => window.scrollY);
+      await touch("touchStart", box.x + box.width * .65, box.y + box.height * .6);
+      await touch("touchMove", box.x + box.width * .9, box.y + box.height * .6);
+      await touch("touchCancel");
+      const alpha = (x, y) => canvas.evaluate((node, point) =>
+        window.readScratchPixel(node, Math.floor(node.width * point.x), Math.floor(node.height * point.y)), { x, y });
+      // Right-half touches used to be displaced beyond the canvas on retina phones.
+      await expect.poll(() => alpha(.8, .6)).toBe(0);
+      expect(await alpha(.2, .15)).toBe(255);
+      await expect.poll(() => page.locator(".scratch-shell > small").innerText()).toMatch(/^[1-9]\d?% revealed$/);
+      expect(claims).toBe(0);
+      expect(await page.evaluate(() => window.scrollY)).toBe(originalScroll);
+
+      // Responsive resizing must retain partial scratches instead of repainting silver.
+      await page.setViewportSize({ width: 430, height: 844 });
+      await expect.poll(() => canvas.evaluate(node => Math.abs(node.width / Math.min(devicePixelRatio, 2)
+        - node.getBoundingClientRect().width))).toBeLessThan(1);
+      await expect.poll(() => alpha(.8, .6)).toBe(0);
+      await page.screenshot({ path: info.outputPath("partial-finger-scratch.png"), fullPage: true });
+      box = await canvas.boundingBox();
+      await touch("touchStart", box.x + 15, box.y + 20);
+      for (let y = 20, row = 0; y < box.height && claims === 0; y += 40, row++) {
+        await touch("touchMove", box.x + (row % 2 ? 15 : box.width - 15), box.y + y);
+      }
+      await touch("touchEnd");
+      await expect.poll(() => claims).toBe(1);
+      await expect(page.locator("body")).not.toContainText(couponCode);
+      expect(await page.evaluate(() => window.scratchReadbacks.every(({ width, height }) => width <= 128 && height <= 80))).toBe(true);
+      allowClaim();
+      await expect(page.locator(".scratch-card canvas")).toHaveCount(0);
+      await expect(page.locator(".scratch-card .offer-content b")).toContainText(couponCode);
+      await expect(page.getByText("Offer unlocked!", { exact: true }).last()).toBeVisible();
+      await page.reload();
+      await expect(page.locator(".scratch-card canvas")).toHaveCount(0);
+      await expect(page.locator(".scratch-card .offer-content b")).toContainText(couponCode);
+      expect(claims).toBe(1);
+      expect(errors).toEqual([]);
+    } finally { await context.close(); }
+  });
+}
 
 test("expired coupon links show a disabled reward card without exposing the code", async ({ page }) => {
   await page.route("**/api/cards/expired-ui", route => route.fulfill({
@@ -377,7 +724,7 @@ test("super admin can manage workspaces, create rewards, and export English work
   await expect(capacityBranchCount).toHaveAttribute("max", "2");
   await capacityBranchCount.fill("5");
   await expect(capacityBranchCount).toHaveValue("2");
-  await expect(capacityDialog).toContainText("2 of 2 department slots remaining");
+  await expect(capacityDialog).toContainText("0 of 2 department slots remaining after saving this draft.");
   await capacityDialog.getByRole("button", { name: "Cancel" }).click();
   await nav(page, "Businesses");
   const impactBusinessRow = page.getByRole("row").filter({ hasText: "Impact Vibes" });
@@ -516,7 +863,7 @@ test("super admin can manage workspaces, create rewards, and export English work
   await nav(page, "Scratch cards");
   await page.getByLabel("Filter by business").selectOption("impact-vibes");
   await expect(page.getByRole("columnheader", { name: "Business" })).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "Department" })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "Department", exact: true })).toBeVisible();
   await expect(page.getByRole("row").filter({ hasText: "Diwali rewards" })).toContainText("Hyderabad");
   await nav(page, "Departments");
   await page.getByLabel("Filter by business").selectOption("impact-vibes");
@@ -674,6 +1021,8 @@ test("hierarchy defaults populate every branch and removing panels preserves the
   await defaultCount.fill("2");
   await branchCount.fill("3");
   await expect(panels).toHaveCount(3);
+  await expect(dialog).toContainText("2 of 5 branch slots remaining after saving this draft.");
+  await expect(dialog).toContainText("6 of 12 department slots remaining after saving this draft.");
   for (const [index, name] of ["Ameerpet", "Discard branch", "Punjagutta"].entries()) {
     const panel = panels.nth(index);
     await expect(panel.getByRole("spinbutton", { name: "Number of departments", exact: true })).toHaveValue("2");
@@ -686,6 +1035,8 @@ test("hierarchy defaults populate every branch and removing panels preserves the
   await panels.nth(2).getByRole("textbox", { name: "Address optional", exact: true }).nth(0).fill("Punjagutta showroom");
   await dialog.getByRole("button", { name: "Remove branch 2", exact: true }).click();
   await expect(branchCount).toHaveValue("2");
+  await expect(dialog).toContainText("3 of 5 branch slots remaining after saving this draft.");
+  await expect(dialog).toContainText("7 of 12 department slots remaining after saving this draft.");
   await expect(panels.nth(1).getByRole("textbox", { name: "Branch name", exact: true })).toHaveValue("Punjagutta");
   await expect(panels.nth(1).getByRole("textbox", { name: "Department name", exact: true }).nth(2)).toHaveValue("Support");
   await expect(panels.nth(1).getByRole("textbox", { name: "Address optional", exact: true }).nth(0)).toHaveValue("Punjagutta showroom");
@@ -700,15 +1051,19 @@ test("hierarchy defaults populate every branch and removing panels preserves the
   await page.screenshot({ path: info.outputPath("hierarchy-remove-mobile.png"), fullPage: true });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await defaultCount.fill("100");
-  await expect(defaultCount).toHaveValue("6");
+  await expect(defaultCount).toHaveValue("12");
   for (let index = 0; index < 2; index++)
-    await expect(panels.nth(index).getByRole("spinbutton", { name: "Number of departments", exact: true })).toHaveValue("6");
+    await expect(panels.nth(index).getByRole("spinbutton", { name: "Number of departments", exact: true })).toHaveValue("12");
+  await expect(dialog.getByRole("alert")).toContainText("This draft needs 24 department slots. Only 12 are available.");
+  await expect(dialog.getByRole("button", { name: "Create 2 branches and 24 departments", exact: true })).toBeDisabled();
   await branchCount.fill("3");
   await expect(branchCount).toHaveValue("2");
   await dialog.getByRole("button", { name: "Remove branch 1", exact: true }).click();
   await dialog.getByRole("button", { name: "Remove branch 1", exact: true }).click();
   await expect(panels).toHaveCount(0);
   await expect(branchCount).toHaveValue("0");
+  await expect(dialog).toContainText("5 of 5 branch slots remaining after saving this draft.");
+  await expect(dialog).toContainText("12 of 12 department slots remaining after saving this draft.");
   await expect(dialog.getByRole("button", { name: "Create 0 branches and 0 departments", exact: true })).toBeDisabled();
   await dialog.getByRole("button", { name: "Add branch", exact: true }).click();
   await defaultCount.fill("2");
@@ -728,6 +1083,103 @@ test("hierarchy defaults populate every branch and removing panels preserves the
   await expect(savedBranch.getByRole("row").filter({ has: page.getByRole("cell", { name: /^(Sales|Service)$/ }) })).toHaveCount(2);
   const cleanup = await page.request.post("/api/auth/login", { data: { loginId: "platform@example.test", password: "Platform-Test-Password" } });
   expect((await page.request.delete(`/api/portal/businesses/${business.businessId}`, { headers: { Authorization: `Bearer ${(await cleanup.json()).token}` }, data: { confirmName: business.name } })).status()).toBe(200);
+});
+
+test("departments per branch is not silently capped at two by the shared business allowance", async ({ page }, info) => {
+  const auth = await page.request.post("/api/auth/login", { data: {
+    loginId: "platform@example.test", password: "Platform-Test-Password",
+  } });
+  const headers = { Authorization: `Bearer ${(await auth.json()).token}` };
+  const created = await page.request.post("/api/portal/businesses", { headers, data: {
+    name: "Flexible departments test", password: "Flexible-Departments-Password",
+    limits: { card: 10, department: 5, branch: 10, account: 1 },
+  } });
+  expect(created.status()).toBe(201);
+  const { business } = await created.json();
+  await login(page, "platform@example.test", "Platform-Test-Password");
+  await page.goto(`/?business=${business.businessId}&tab=Branches`);
+  await page.getByRole("button", { name: "Add branches & departments", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Add branches and departments", exact: true });
+  const panels = dialog.locator("fieldset");
+  await dialog.getByRole("spinbutton", { name: "Number of branches", exact: true }).fill("4");
+  const defaultCount = dialog.getByRole("spinbutton", { name: "Departments per branch", exact: true });
+  await expect(defaultCount).toHaveAttribute("max", "10");
+  await defaultCount.fill("2");
+  await expect(dialog).toContainText("1 of 5 branch slots remaining after saving this draft.");
+  await expect(dialog).toContainText("2 of 10 department slots remaining after saving this draft.");
+  await defaultCount.fill("3");
+  await expect(defaultCount).toHaveValue("3");
+  await expect(panels).toHaveCount(4);
+  for (let index = 0; index < 4; index++)
+    await expect(panels.nth(index).getByRole("spinbutton", { name: "Number of departments", exact: true })).toHaveValue("3");
+  await expect(dialog.getByRole("alert")).toContainText("This draft needs 12 department slots. Only 10 are available.");
+  await expect(dialog).toContainText("0 of 10 department slots remaining after saving this draft.");
+  await expect(dialog.getByRole("button", { name: "Create 4 branches and 12 departments", exact: true })).toBeDisabled();
+  // Redistribute the allowance rather than silently changing the entered default.
+  const counts = [4, 2, 2, 2];
+  for (const [index, count] of counts.entries())
+    await panels.nth(index).getByRole("spinbutton", { name: "Number of departments", exact: true }).fill(String(count));
+  await expect(defaultCount).toHaveValue("3");
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
+  await expect(dialog).toContainText("1 of 5 branch slots remaining after saving this draft.");
+  await expect(dialog).toContainText("0 of 10 department slots remaining after saving this draft.");
+  const locations = ["Ameerpet", "Punjagutta", "SR Nagar", "Warangal"];
+  const names = ["Sales", "Service", "Marketing", "Support"];
+  for (const [index, count] of counts.entries()) {
+    const panel = panels.nth(index);
+    await panel.getByRole("textbox", { name: "Branch name", exact: true }).fill(locations[index]);
+    for (let department = 0; department < count; department++)
+      await panel.getByRole("textbox", { name: "Department name", exact: true }).nth(department).fill(names[department]);
+  }
+  await dialog.evaluate(element => { element.scrollTop = 0; });
+  await page.screenshot({ path: info.outputPath("flexible-departments-per-branch.png"), fullPage: true });
+  const responsePromise = page.waitForResponse(response => response.url().endsWith(`/businesses/${business.businessId}/departments/branches`)
+    && response.request().method() === "POST");
+  await dialog.getByRole("button", { name: "Create 4 branches and 10 departments", exact: true }).click();
+  const saved = await responsePromise;
+  expect(saved.status()).toBe(201);
+  expect(saved.request().postDataJSON().departments.map(row => row.branches.length)).toEqual(counts);
+  await expect(dialog).not.toBeVisible();
+  const businesses = await page.request.get(`/api/portal/businesses?business=${business.businessId}`, { headers });
+  const persisted = (await businesses.json()).businesses.find(item => item.businessId === business.businessId);
+  expect(persisted.limits.branch).toBe(10);
+  expect(persisted.branches).toHaveLength(10);
+});
+
+test("remaining slot counters subtract saved structures and the unsaved hierarchy draft", async ({ page }, info) => {
+  const auth = await page.request.post("/api/auth/login", { data: {
+    loginId: "platform@example.test", password: "Platform-Test-Password",
+  } });
+  const headers = { Authorization: `Bearer ${(await auth.json()).token}` };
+  const response = await page.request.post("/api/portal/businesses", { headers, data: {
+    name: "Remaining slots test", password: "Remaining-Slots-Password",
+    limits: { card: 10, department: 5, branch: 10, account: 1 },
+  } });
+  expect(response.status()).toBe(201);
+  const { business } = await response.json();
+  expect((await page.request.post(`/api/portal/businesses/${business.businessId}/departments/branches`, {
+    headers, data: { departments: [{ name: "Existing branch", branches: [{ name: "Sales" }, { name: "Service" }] }] },
+  })).status()).toBe(201);
+  await login(page, "platform@example.test", "Platform-Test-Password");
+  await page.goto(`/?business=${business.businessId}&tab=Branches`);
+  await page.getByRole("button", { name: "Add branches & departments", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Add branches and departments", exact: true });
+  await expect(dialog).toContainText("3 of 5 branch slots remaining after saving this draft.");
+  await expect(dialog).toContainText("7 of 10 department slots remaining after saving this draft.");
+  await dialog.getByRole("spinbutton", { name: "Departments per branch", exact: true }).fill("2");
+  await dialog.getByRole("spinbutton", { name: "Number of branches", exact: true }).fill("2");
+  await expect(dialog).toContainText("2 of 5 branch slots remaining after saving this draft.");
+  await expect(dialog).toContainText("4 of 10 department slots remaining after saving this draft.");
+  await dialog.getByRole("button", { name: "Remove branch 2", exact: true }).click();
+  await expect(dialog).toContainText("3 of 5 branch slots remaining after saving this draft.");
+  await expect(dialog).toContainText("6 of 10 department slots remaining after saving this draft.");
+  await dialog.evaluate(element => { element.scrollTop = 0; });
+  await page.screenshot({ path: info.outputPath("remaining-slots-after-draft.png"), fullPage: true });
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  const result = await page.request.get("/api/portal/businesses", { headers });
+  const persisted = (await result.json()).businesses.find(item => item.businessId === business.businessId);
+  expect(persisted.departments).toHaveLength(1);
+  expect(persisted.branches).toHaveLength(2);
 });
 
 test("super admin can reset a forgotten business password without changing its login ID", async ({ page, browser }, info) => {

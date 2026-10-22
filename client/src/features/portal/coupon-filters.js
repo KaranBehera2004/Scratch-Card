@@ -1,9 +1,17 @@
 export const EMPTY_COUPON_FILTERS = {
-  number: "", branch: "", campaign: "", dateRange: "all", from: "", to: "",
+  number: "", branch: "", staff: "", campaign: "", dateRange: "all", from: "", to: "",
 };
 
 export const couponBranchKey = (card) => JSON.stringify([card.businessId, card.branchId]);
+export const couponDepartmentKey = (card, name = card.branchName || card.branchId) =>
+  JSON.stringify(["department", card.businessId, String(name || "").trim().toLowerCase()]);
 export const couponCampaignKey = (name) => JSON.stringify(name ? ["named", name] : ["default"]);
+export const couponStaffKey = (card) => {
+  if (!card.staffRedeemedAt) return "";
+  const id = card.redemptionDetails?.staffId || card.staffRedeemedBy;
+  const name = card.redemptionDetails?.staffName || card.staffRedeemedByName || "Unknown staff member";
+  return JSON.stringify([card.businessId, id ? "id" : "name", id || name]);
+};
 
 function localDateKey(date) {
   return `${String(date.getFullYear()).padStart(4, "0")}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
@@ -31,7 +39,7 @@ export function couponDateBounds(filters, now = new Date()) {
   return { from: localDateKey(start), to: localDateKey(now) };
 }
 
-export function filterCouponCards(cards, filters, now = new Date()) {
+export function filterCouponCards(cards, filters, now = new Date(), branchNames = new Map()) {
   const bounds = couponDateBounds(filters, now);
   if (bounds.error) return [];
   const rawNumber = filters.number.trim();
@@ -40,8 +48,11 @@ export function filterCouponCards(cards, filters, now = new Date()) {
     if (rawNumber && (!digits || !/^[+0-9 ()-]+$/.test(rawNumber)
       || !String(card.customerPhone || "").replace(/\D/g, "").includes(digits))) return false;
     if (filters.branch === "unassigned" && card.branchId) return false;
-    if (filters.branch && filters.branch !== "unassigned" && couponBranchKey(card) !== filters.branch) return false;
+    if (filters.branch && filters.branch !== "unassigned"
+      && couponBranchKey(card) !== filters.branch
+      && (!card.branchId || couponDepartmentKey(card, branchNames.get(couponBranchKey(card)) || card.branchName || card.branchId) !== filters.branch)) return false;
     if (filters.campaign && couponCampaignKey(card.campaignName) !== filters.campaign) return false;
+    if (filters.staff && couponStaffKey(card) !== filters.staff) return false;
     if (bounds.from || bounds.to) {
       const created = new Date(card.createdAt);
       if (!card.createdAt || !Number.isFinite(created.getTime())) return false;

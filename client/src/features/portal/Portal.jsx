@@ -5,7 +5,7 @@ import { WorkspaceLocale, useWorkspaceText, workspaceTranslator } from "../../i1
 import { summarizeCampaigns } from "./campaigns.js";
 import { scratchApiUrl, scratchCardUrl } from "../../../../server/shared/urls.js";
 import { COUPON_STATUSES, summarizeCouponStatuses } from "../../../../server/shared/coupon-status.js";
-import { EMPTY_COUPON_FILTERS, couponBranchKey, couponCampaignKey, couponDateBounds, filterCouponCards } from "./coupon-filters.js";
+import { EMPTY_COUPON_FILTERS, couponBranchKey, couponDepartmentKey, couponCampaignKey, couponStaffKey, couponDateBounds, filterCouponCards } from "./coupon-filters.js";
 
 function JustConnectLogo({ theme = "light", className = "" }) {
   return (
@@ -827,11 +827,14 @@ function DepartmentBranchEditor({ businesses, initialBusinessId, onClose, onSave
   const branchRemaining = branchLimit
     ? Math.max(0, branchLimit - activeCount(selectedBusiness?.branches))
     : Infinity;
+  const departmentRemainingAfterSave = Math.max(0, departmentRemaining - departments.length);
+  const branchRemainingAfterSave = Math.max(0, branchRemaining - branchTotal);
   const departmentLimitExceeded = departments.length > departmentRemaining;
   const branchLimitExceeded = branchTotal > branchRemaining;
   const availableBranchSlots = Math.min(200, branchRemaining);
-  const maximumDefaultBranchCount = Math.max(1, Math.min(50,
-    Math.floor(availableBranchSlots / Math.max(1, departments.length))));
+  // Keep the default independent of the panel count. Over-budget drafts can be
+  // adjusted below, but the total allowance is still enforced before saving.
+  const maximumDefaultBranchCount = Math.max(1, Math.min(50, availableBranchSlots));
   const effectiveDefaultBranchCount = Math.min(defaultBranchCount, maximumDefaultBranchCount);
   const maximumDepartmentsByBranchCapacity = departments.length
     + Math.floor(Math.max(0, availableBranchSlots - branchTotal) / effectiveDefaultBranchCount);
@@ -890,13 +893,18 @@ function DepartmentBranchEditor({ businesses, initialBusinessId, onClose, onSave
       <p className="p-hierarchy-default-note">{ui("Set the default number of branches for every department. You can change each department below.")}</p>
       {Number.isFinite(departmentRemaining) && <div className={`p-alert${departmentLimitExceeded ? " error" : ""}`} role="status">
         {departmentRemaining
-          ? ui("{remaining} of {limit} department slots remaining for this business.", { remaining: departmentRemaining, limit: departmentLimit })
+          ? ui("{remaining} of {limit} department slots remaining after saving this draft.", { remaining: departmentRemainingAfterSave, limit: departmentLimit })
           : ui("Department limit reached ({limit}). Increase it in the business workspace settings.", { limit: departmentLimit })}
       </div>}
       {Number.isFinite(branchRemaining) && <div className={`p-alert${branchLimitExceeded || branchRemaining === 0 ? " error" : ""}`} role="status">
         {branchRemaining
-          ? ui("{remaining} of {limit} branch slots remaining for this business. The form will not allow more.", { remaining: branchRemaining, limit: branchLimit })
+          ? ui("{remaining} of {limit} branch slots remaining after saving this draft. This limit applies to all departments together.", { remaining: branchRemainingAfterSave, limit: branchLimit })
           : ui("Branch limit reached ({limit}). Increase it in the business workspace settings before adding another branch.", { limit: branchLimit })}
+      </div>}
+      {branchTotal > availableBranchSlots && <div className="p-alert error" role="alert">
+        {ui("This draft needs {total} branch slots. Only {remaining} are available. Reduce the counts below before saving.", {
+          total: branchTotal, remaining: availableBranchSlots,
+        })}
       </div>}
       <div className="p-department-list">
         {!departments.length && <div className="p-hierarchy-empty" role="status">
@@ -920,12 +928,10 @@ function DepartmentBranchEditor({ businesses, initialBusinessId, onClose, onSave
               onChange={(event) => setDepartments((current) => current.map((item, index) =>
                 index === departmentIndex ? { ...item, name: event.target.value } : item))} /></label>
             <label>{ui("Number of branches")}<input type="number" min="1"
-              max={Math.max(1, Math.min(50, availableBranchSlots - (branchTotal - department.branches.length)))}
+              max={maximumDefaultBranchCount}
               step="1" required disabled={busy || availableBranchSlots < 1}
               value={department.branches.length} onChange={(event) => {
-                const availableForDepartment = Math.max(1, Math.min(50,
-                  availableBranchSlots - (branchTotal - department.branches.length)));
-                const count = Math.min(availableForDepartment, Math.max(1, Math.trunc(Number(event.target.value) || 1)));
+                const count = Math.min(maximumDefaultBranchCount, Math.max(1, Math.trunc(Number(event.target.value) || 1)));
                 setDepartments((current) => current.map((item, index) => index === departmentIndex
                   ? { ...item, branches: resizeDrafts(item.branches, count, newBranchDraft) } : item));
               }} /></label>
@@ -1526,9 +1532,6 @@ export default function Portal({
   const couponSection = ["Coupons", "Scratch cards"].includes(tab);
   const inSelectedBusiness = (item) => !global || !businessFilter || item.businessId === businessFilter;
   const managedCards = cards.filter(inSelectedBusiness);
-  const visibleCards = filterCouponCards(managedCards.filter(
-    (item) => match(item) && (status === "all" || item.status === status),
-  ), couponSection ? couponFilters : EMPTY_COUPON_FILTERS);
   const couponDateError = couponDateBounds(couponFilters).error;
   const updateCouponFilter = (key, value) => setCouponFilters((current) => ({ ...current, [key]: value }));
   const clearCouponFilters = () => {
@@ -1580,21 +1583,42 @@ export default function Portal({
     && (!locationFilter || locationKey(department) === locationFilter)
     && (!departmentFilter || structureUnits.some((unit) => unit.businessId === department.businessId
       && unit.departmentId === department.departmentId && departmentNameKey(unit.name) === departmentFilter)));
-  const couponBranchOptions = new Map(branches.filter(inSelectedBusiness).map((branch) => [couponBranchKey(branch), {
-    key: couponBranchKey(branch),
-    name: global ? `${branch.businessName} · ${branch.name}` : branch.name,
-  }]));
+  const couponBranchNames = new Map(branches.filter(inSelectedBusiness)
+    .map(branch => [couponBranchKey(branch), branch.name]));
+  const couponBranchOptions = new Map();
+  const addCouponDepartmentOption = (item, name, businessName) => {
+    const label = String(name || item.branchId || "").trim();
+    if (!label) return;
+    const key = couponDepartmentKey(item, label);
+    if (!couponBranchOptions.has(key)) couponBranchOptions.set(key, {
+      key, name: global ? `${businessName} · ${label}` : label,
+    });
+  };
+  for (const branch of branches.filter(inSelectedBusiness))
+    addCouponDepartmentOption(branch, branch.name, branch.businessName);
   // Retain options for older cards whose assigned branch no longer appears in management.
   for (const card of managedCards) {
-    if (!card.branchId || couponBranchOptions.has(couponBranchKey(card))) continue;
+    if (!card.branchId || couponBranchNames.has(couponBranchKey(card))) continue;
     const name = card.branchName || card.branchId;
-    couponBranchOptions.set(couponBranchKey(card), {
-      key: couponBranchKey(card), name: global ? `${card.senderName} · ${name}` : name,
-    });
+    couponBranchNames.set(couponBranchKey(card), name);
+    addCouponDepartmentOption(card, name, card.senderName);
   }
+  const visibleCards = filterCouponCards(managedCards.filter(
+    (item) => match(item) && (status === "all" || item.status === status),
+  ), couponSection ? couponFilters : EMPTY_COUPON_FILTERS, new Date(), couponBranchNames);
   const couponCampaignOptions = [...new Map(managedCards.map((card) => [couponCampaignKey(card.campaignName), {
     key: couponCampaignKey(card.campaignName), name: card.campaignName || ui("General rewards"),
   }])).values()].sort((a, b) => a.name.localeCompare(b.name));
+  const couponStaffOptions = new Map();
+  for (const card of managedCards) {
+    const key = couponStaffKey(card);
+    if (!key || couponStaffOptions.has(key)) continue;
+    const details = card.redemptionDetails;
+    const name = [details?.staffName || card.staffRedeemedByName || ui("Unknown staff member"),
+      details?.branchName, details?.departmentName].filter(Boolean).join(" · ");
+    couponStaffOptions.set(key, { key, name: global
+      ? `${businesses.find(item => item.businessId === card.businessId)?.name || card.senderName} · ${name}` : name });
+  }
   const businessSelect = {
     key: "businessId",
     label: "Business",
@@ -1881,6 +1905,39 @@ export default function Portal({
     return assignedBusiness?.departments?.find((item) => item.departmentId === unit?.departmentId)?.name
       || ui("Unavailable department");
   };
+  const exportBusinessAccounts = async (business) => {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await api(`/api/portal/businesses/${encodeURIComponent(business.businessId)}/accounts-export`);
+      const { default: write } = await import("write-excel-file/universal");
+      const labels = ["Business", "Account name", "Role", "Branch", "Department", "Login ID", "Password", "Access"];
+      const rows = result.accounts.map(account => [result.business.name, account.name, account.role,
+        account.branch, account.department, account.loginId, account.password, account.status]
+        .map(value => ({ value: String(value ?? ""), type: String, wrap: true })));
+      const blob = await write([
+        labels.map(value => ({ value, fontWeight: "bold", backgroundColor: "#002B5C", textColor: "#FFFFFF" })),
+        ...rows,
+      ], {
+        sheet: "Business accounts",
+        columns: [30, 28, 24, 24, 24, 28, 24, 16].map(width => ({ width })),
+        stickyRowsCount: 1,
+      }).toBlob();
+      const filename = result.business.name.replace(/[^a-z0-9_-]+/gi, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "business";
+      const url = URL.createObjectURL(blob), link = document.createElement("a");
+      link.href = url;
+      link.download = `${filename}-accounts-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setNotice("Account list downloaded. Existing passwords cannot be retrieved; no passwords were changed.");
+    } catch (error) {
+      setError(error.message);
+    } finally {
+      setBusy(false);
+    }
+  };
   const exportCards = async () => {
     setBusy(true);
     setError("");
@@ -2113,6 +2170,7 @@ export default function Portal({
         "Status",
         "Created",
         ...(showPhone ? ["Expiry date"] : []),
+        ...(showPhone ? ["Redeemed by", "Redeemed department", "Redeemed branch", "Redeemed date & time"] : []),
         "Actions",
       ]}
       empty={!rows.length}
@@ -2133,6 +2191,12 @@ export default function Portal({
           </td>
           <td>{localizedDate(item.createdAt)}</td>
           {showPhone && <td>{item.expiresAt ? localizedDate(item.expiresAt) : ui("No expiry")}</td>}
+          {showPhone && <>
+            <td>{item.staffRedeemedAt ? item.redemptionDetails?.staffName || "—" : "—"}</td>
+            <td>{item.staffRedeemedAt ? item.redemptionDetails?.branchName || "—" : "—"}</td>
+            <td>{item.staffRedeemedAt ? item.redemptionDetails?.departmentName || "—" : "—"}</td>
+            <td>{item.staffRedeemedAt ? localizedDate(item.redemptionDetails?.redeemedAt || item.staffRedeemedAt) : "—"}</td>
+          </>}
           <td>
             <div className="p-row-actions">
               <button onClick={() => setPreviewCard(item)}>{ui("Preview")}</button>
@@ -2475,6 +2539,7 @@ export default function Portal({
         <article className="p-card">
           <div className="p-info">
             Every owner login ID is listed below. Passwords are protected with one-way hashing and cannot be viewed by anyone, including super admins. Use Reset password to assign a new password and revoke the owner's existing sessions.
+            {" "}Download accounts (Excel) includes the selected business's owner and staff login IDs, branches, departments, and access status. Passwords are marked Not retrievable.
           </div>
           <Table
             columns={[
@@ -2536,6 +2601,10 @@ export default function Portal({
                         return api(`/api/portal/businesses/${item.businessId}`, "PATCH", { password: values.password });
                       },
                     })}>Reset password</button>
+                    <button disabled={busy} onClick={() => exportBusinessAccounts(item)}
+                      title="Download owner and staff login details. Existing passwords cannot be retrieved and will not be changed.">
+                      <Icon name="download" size={14} /> Download accounts (Excel)
+                    </button>
                     <button onClick={() => openWorkspace(item.businessId)}>
                       Open workspace <Icon name="arrow" size={14} />
                     </button>
@@ -3718,6 +3787,16 @@ export default function Portal({
                     <option value="unassigned">{ui("No specific branch")}</option>
                     {[...couponBranchOptions.values()].sort((a, b) => a.name.localeCompare(b.name)).map((branch) => (
                       <option key={branch.key} value={branch.key}>{branch.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  {ui("Branch staff")}
+                  <select aria-label={ui("Filter by branch staff")} value={couponFilters.staff}
+                    onChange={(event) => updateCouponFilter("staff", event.target.value)}>
+                    <option value="">{ui("All branch staff")}</option>
+                    {[...couponStaffOptions.values()].sort((a, b) => a.name.localeCompare(b.name)).map(staff => (
+                      <option key={staff.key} value={staff.key}>{staff.name}</option>
                     ))}
                   </select>
                 </label>

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { EMPTY_COUPON_FILTERS, couponBranchKey, couponCampaignKey, couponDateBounds, filterCouponCards } from "./coupon-filters.js";
+import { EMPTY_COUPON_FILTERS, couponBranchKey, couponDepartmentKey, couponCampaignKey, couponStaffKey, couponDateBounds, filterCouponCards } from "./coupon-filters.js";
 
 const rows = [
   { slug: "a", businessId: "one", branchId: "north", campaignName: "Diwali", customerPhone: "+919876543210", createdAt: new Date(2026, 9, 7, 0).toISOString() },
@@ -39,12 +39,53 @@ test("date presets and custom ranges include complete local days and combine wit
   assert.deepEqual(filter({}), ["a", "b", "c", "d", "e"]);
 });
 
+test("one department selection includes matching names across branches without mixing businesses", () => {
+  const cards = [
+    { slug: "north-sales", businessId: "one", branchId: "north-sales", branchName: "Sales" },
+    { slug: "south-sales", businessId: "one", branchId: "south-sales", branchName: " sales " },
+    { slug: "service", businessId: "one", branchId: "service", branchName: "Service" },
+    { slug: "foreign-sales", businessId: "two", branchId: "north-sales", branchName: "Sales" },
+    { slug: "all", businessId: "one", branchId: "", branchName: "All branches" },
+  ];
+  const selected = couponDepartmentKey(cards[0]);
+  assert.equal(selected, couponDepartmentKey(cards[1]));
+  assert.notEqual(selected, couponDepartmentKey(cards[3]));
+  assert.deepEqual(filterCouponCards(cards, { ...EMPTY_COUPON_FILTERS, branch: selected }).map(card => card.slug), ["north-sales", "south-sales"]);
+  const currentNames = new Map([[couponBranchKey(cards[1]), "Service"]]);
+  assert.deepEqual(filterCouponCards(cards, { ...EMPTY_COUPON_FILTERS, branch: selected }, now, currentNames).map(card => card.slug), ["north-sales"]);
+  assert.deepEqual(filterCouponCards(cards, { ...EMPTY_COUPON_FILTERS, branch: "unassigned" }).map(card => card.slug), ["all"]);
+});
+
 test("invalid custom ranges return an error and never yield exportable rows", () => {
   const reversed = { ...EMPTY_COUPON_FILTERS, dateRange: "custom", from: "2026-10-08", to: "2026-10-07" };
   assert.equal(couponDateBounds(reversed).error, "From date must be on or before To date.");
   assert.deepEqual(filterCouponCards(rows, reversed), []);
   assert.deepEqual(filter({ dateRange: "custom", from: "2026-02-30" }), []);
   assert.equal(couponDateBounds({ ...reversed, from: "not-a-date" }).error, "Choose valid dates for the custom range.");
+});
+
+test("staff filter uses the saved redeemer identity, distinguishes namesakes and combines with other filters", () => {
+  const base = { ...rows[0], branchName: "Sales", staffRedeemedAt: now.toISOString() };
+  const cards = [
+    { ...base, slug: "actual", staffRedeemedBy: "wrong-viewer", redemptionDetails: { staffId: "actual-staff", staffName: "Alex" } },
+    { ...base, slug: "same-id", branchId: "south", redemptionDetails: { staffId: "actual-staff", staffName: "Alex renamed" } },
+    { ...base, slug: "namesake", redemptionDetails: { staffId: "other-staff", staffName: "Alex" } },
+    { ...base, slug: "foreign", businessId: "two", redemptionDetails: { staffId: "actual-staff", staffName: "Alex" } },
+    { ...base, slug: "unredeemed", staffRedeemedAt: null, redemptionDetails: { staffId: "actual-staff", staffName: "Alex" } },
+  ];
+  const staff = couponStaffKey(cards[0]);
+  const run = filters => filterCouponCards(cards, { ...EMPTY_COUPON_FILTERS, ...filters }, now).map(card => card.slug);
+  assert.equal(staff, couponStaffKey(cards[1]));
+  assert.notEqual(staff, couponStaffKey(cards[2]));
+  assert.notEqual(staff, couponStaffKey(cards[3]));
+  assert.equal(couponStaffKey(cards[4]), "");
+  assert.deepEqual(run({ staff }), ["actual", "same-id"]);
+  assert.deepEqual(run({ staff, branch: couponBranchKey(cards[0]), campaign: couponCampaignKey("Diwali"), number: "43210", dateRange: "today" }), ["actual"]);
+  assert.deepEqual(run({ staff, campaign: couponCampaignKey("Other") }), []);
+  assert.equal(run({}).length, cards.length);
+  const legacy = { ...base, staffRedeemedByName: "Historical staff" };
+  assert.ok(couponStaffKey(legacy));
+  assert.deepEqual(filterCouponCards([legacy], { ...EMPTY_COUPON_FILTERS, staff: couponStaffKey(legacy) }, now), [legacy]);
 });
 
 test("last-seven-days calendar bounds survive month and year boundaries", () => {

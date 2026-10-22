@@ -732,9 +732,11 @@ app.post("/api/portal/redeem", authenticate, async (req, res, next) => {
     const activeLocation = (unit) => !unit.departmentId || business.departments?.some((location) =>
       location.departmentId === unit.departmentId && (location.status || "active") === "active");
     if (!activeLocation(staffBranch)) throw bad("Your assigned branch's department is not active.", 403);
-    const eligibleBranchIds = business.branches.filter((unit) => unit.status === "active"
+    // An unassigned coupon means "All departments" within this business.
+    // null also matches older MongoDB records with a missing branchId.
+    const eligibleBranchIds = ["", null, ...business.branches.filter((unit) => unit.status === "active"
       && activeLocation(unit) && departmentName(unit.name)
-      && departmentName(unit.name) === departmentName(staffBranch.name)).map((unit) => unit.branchId);
+      && departmentName(unit.name) === departmentName(staffBranch.name)).map((unit) => unit.branchId)];
     const locationName = (unit) => business.departments?.find((location) =>
       location.departmentId === unit?.departmentId)?.name || "";
     const redemptionAt = new Date();
