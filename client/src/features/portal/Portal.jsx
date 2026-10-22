@@ -3816,6 +3816,14 @@ export default function Portal({
               </div>
               <div className="p-coupon-filter-fields">
                 <label>
+                  {ui("Coupon code")}
+                  <input type="search" autoComplete="off" autoCapitalize="characters" spellCheck={false} maxLength={24}
+                    aria-label={ui("Search coupon code")}
+                    placeholder={ui("Enter coupon code…")}
+                    value={couponFilters.code}
+                    onChange={(event) => updateCouponFilter("code", event.target.value)} />
+                </label>
+                <label>
                   {ui("WhatsApp number")}
                   <input type="search" inputMode="tel" autoComplete="off"
                     aria-label={ui("Search WhatsApp number")}
