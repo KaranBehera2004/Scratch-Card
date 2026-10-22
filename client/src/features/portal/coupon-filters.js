@@ -1,5 +1,5 @@
 export const EMPTY_COUPON_FILTERS = {
-  number: "", branch: "", staff: "", campaign: "", dateRange: "all", from: "", to: "",
+  type: "all", number: "", branch: "", staff: "", campaign: "", dateRange: "all", from: "", to: "",
 };
 
 export const couponBranchKey = (card) => JSON.stringify([card.businessId, card.branchId]);
@@ -45,6 +45,8 @@ export function filterCouponCards(cards, filters, now = new Date(), branchNames 
   const rawNumber = filters.number.trim();
   const digits = rawNumber.replace(/\D/g, "");
   return cards.filter((card) => {
+    if (filters.type === "bulk" && !card.batchKey) return false;
+    if (filters.type === "individual" && card.batchKey) return false;
     if (rawNumber && (!digits || !/^[+0-9 ()-]+$/.test(rawNumber)
       || !String(card.customerPhone || "").replace(/\D/g, "").includes(digits))) return false;
     if (filters.branch === "unassigned" && card.branchId) return false;

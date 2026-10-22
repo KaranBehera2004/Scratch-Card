@@ -1173,6 +1173,211 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
     for (const tenant of [created.business, other.business])
       assert.equal((await request(`/api/portal/businesses/${tenant.businessId}`, admin, "DELETE", { confirmName: tenant.name })).status, 200);
   });
+  await t.test("single coupon deletion is administrator-only and scoped to the account business", async () => {
+    const created = await request("/api/portal/businesses", admin, "POST", {
+      name: "Owner coupon deletion", loginId: "DELETEBIZ88", password: "Delete-Owner-Password",
+      limits: { card: 0, branch: 0, department: 0, account: 0 },
+    });
+    assert.equal(created.status, 201);
+    const id = created.business.businessId;
+    const ownerToken = await login("DELETEBIZ88", "Delete-Owner-Password");
+    const branch = await request(`/api/portal/businesses/${id}/branches`, ownerToken, "POST", { name: "Sales" });
+    const card = await request("/api/cards", ownerToken, "POST", { ...draft, businessId: id, couponCode: "OWNER-DELETE-ONE" });
+    assert.equal(card.status, 201);
+    const url = `/api/portal/businesses/${id}/cards/${card.slug}`;
+    const confirmation = { confirmCode: card.couponCode };
+    assert.equal((await request(url, null, "DELETE", confirmation)).status, 401);
+    assert.equal((await request(url, owner, "DELETE", confirmation)).status, 403);
+    assert.equal((await request(url, ownerToken, "DELETE", { businessId: "impact-vibes", ...confirmation })).status, 403);
+    const roleTokens = new Map();
+    for (const [index, role] of ["editor", "viewer", "branch-staff"].entries()) {
+      const staff = await request("/api/portal/users", ownerToken, "POST", {
+        businessId: id, role, name: `Delete permission ${role}`, loginId: `DELROLE88${index}`,
+        password: "Delete-Role-Password", ...(role === "branch-staff" ? { branchId: branch.branch.branchId } : {}),
+      });
+      assert.equal(staff.status, 201);
+      const token = await login(`DELROLE88${index}`, "Delete-Role-Password");
+      roleTokens.set(role, token);
+      assert.equal((await request(url, token, "DELETE", confirmation)).status, 403);
+    }
+    assert.equal((await request(`/api/cards/${card.slug}/claim`, null, "POST", {})).status, 200);
+    const redeemed = await request("/api/portal/redeem", roleTokens.get("branch-staff"), "POST", {
+      couponCode: card.couponCode, redemptionMethod: "qr",
+    });
+    assert.equal(redeemed.status, 200);
+    assert.equal((await request(url, ownerToken, "DELETE", {})).status, 400);
+    const archived = await request(url, ownerToken, "DELETE", confirmation);
+    assert.equal(archived.status, 200);
+    assert.equal(archived.archived, true);
+    assert.equal((await request(`/api/cards/${card.slug}`)).status, 404);
+    assert.equal((await request(`/api/cards/${card.slug}/claim`, null, "POST", {})).status, 404);
+    assert.equal((await request("/api/portal/redeem", roleTokens.get("branch-staff"), "POST", { couponCode: card.couponCode })).status, 404);
+    for (const token of [ownerToken, ...roleTokens.values()]) {
+      assert.ok(!(await request("/api/portal/cards", token)).cards.some(item => item.slug === card.slug));
+      assert.ok(!(await request("/api/admin/coupons", token)).coupons.some(item => item.slug === card.slug));
+      assert.equal((await request(`${url}/restore`, token, "POST", confirmation)).status, 403);
+    }
+    const retained = (await request(`/api/portal/cards?business=${id}`, admin)).cards.find(item => item.slug === card.slug);
+    assert.ok(retained.deletedAt);
+    assert.equal(retained.staffRedemptionMethod, "qr");
+    assert.equal(retained.staffRedeemedAt, redeemed.coupon.redeemedAt);
+    assert.equal((await request(`${url}/restore`, admin, "POST", { confirmCode: "wrong" })).status, 400);
+    assert.equal((await request(`${url}/restore`, admin, "POST", confirmation)).status, 200);
+    assert.equal((await request(`${url}/restore`, admin, "POST", confirmation)).status, 409);
+    const restored = (await request("/api/portal/cards", ownerToken)).cards.find(item => item.slug === card.slug);
+    assert.ok(!restored.deletedAt);
+    assert.deepEqual(restored.redemptionDetails, retained.redemptionDetails);
+    assert.equal(restored.staffRedemptionMethod, "qr");
+    assert.equal(restored.expiresAt, draft.expiresAt);
+    assert.equal((await request(`/api/cards/${card.slug}`)).redeemed, true);
+    assert.equal((await request("/api/portal/redeem", roleTokens.get("branch-staff"), "POST", { couponCode: card.couponCode })).status, 409);
+    assert.equal((await request(url, ownerToken, "DELETE", confirmation)).archived, true);
+    assert.equal((await request(url, ownerToken, "DELETE", confirmation)).status, 404);
+    assert.equal((await request(url, admin, "DELETE", confirmation)).status, 200);
+    assert.ok(!(await request(`/api/portal/cards?business=${id}`, admin)).cards.some(item => item.slug === card.slug));
+    assert.equal((await request(`${url}/restore`, admin, "POST", confirmation)).status, 404);
+    const businessAdmin = await request("/api/portal/users", ownerToken, "POST", {
+      businessId: id, role: "admin", name: "Coupon administrator", loginId: "DELADMIN88", password: "Delete-Admin-Password",
+    });
+    assert.equal(businessAdmin.status, 201);
+    const adminToken = await login("DELADMIN88", "Delete-Admin-Password");
+    const second = await request("/api/cards", ownerToken, "POST", { ...draft, businessId: id, couponCode: "ADMIN-DELETE-ONE" });
+    assert.equal((await request(`/api/portal/cards/${second.slug}`, ownerToken, "PATCH", { disabled: true })).status, 200);
+    assert.equal((await request(`/api/portal/businesses/${id}/cards/${second.slug}`, adminToken, "DELETE", { confirmCode: second.couponCode })).status, 200);
+    assert.equal((await request(`/api/portal/cards/${second.slug}`, admin, "PATCH", { disabled: false })).status, 409);
+    assert.equal((await request(`/api/portal/businesses/${id}/cards/${second.slug}/restore`, admin, "POST", { confirmCode: second.couponCode })).status, 200);
+    assert.equal((await request(`/api/cards/${second.slug}`)).status, 410);
+    assert.equal((await request(`/api/cards/${second.slug}/claim`, null, "POST", {})).status, 410);
+    assert.equal((await request(`/api/portal/businesses/${id}/cards`, ownerToken, "DELETE", { confirmName: created.business.name })).status, 400);
+    for (const action of ["Business coupon archived", "Business coupon restored", "Business coupon deleted"])
+      assert.ok((await request("/api/portal/audit", admin)).events.some(event => event.action === action && event.businessId === id));
+    const batchDraft = { ...draft, businessId: id, idempotencyKey: "archive-recovery-batch-001",
+      branches: [{ branchId: branch.branch.branchId, quantity: 2 }] };
+    const batch = await request("/api/cards/bulk", ownerToken, "POST", batchDraft);
+    assert.equal(batch.status, 201);
+    const batchCard = batch.coupons[0];
+    const batchCardUrl = `/api/portal/businesses/${id}/cards/${batchCard.slug}`;
+    assert.equal((await request(batchCardUrl, ownerToken, "DELETE", { confirmCode: batchCard.couponCode })).archived, true);
+    const recovered = await request(`/api/portal/batches/${encodeURIComponent(batch.batchId)}`, ownerToken);
+    assert.equal(recovered.savedCount, 1);
+    assert.ok(!recovered.coupons.some(item => item.slug === batchCard.slug));
+    const retry = await request("/api/cards/bulk", ownerToken, "POST", batchDraft);
+    assert.equal(retry.savedCount, 1);
+    assert.ok(!retry.coupons.some(item => item.slug === batchCard.slug));
+    assert.equal((await request(`/api/portal/batches/${encodeURIComponent(batch.batchId)}?businessId=${id}`, admin)).coupons.length, 2);
+    assert.equal((await request(`${batchCardUrl}/restore`, admin, "POST", { confirmCode: batchCard.couponCode })).status, 200);
+    assert.equal((await request(`/api/portal/batches/${encodeURIComponent(batch.batchId)}`, ownerToken)).coupons.length, 2);
+    const allUrl = `/api/portal/businesses/${id}/cards`;
+    const makeConfirmation = cards => ({ confirmName: created.business.name, confirmCount: cards.length, couponSlugs: cards.map(card => card.slug) });
+    const initialTargets = (await request("/api/portal/cards", ownerToken)).cards;
+    const staleConfirmation = makeConfirmation(initialTargets);
+    assert.equal((await request(allUrl, null, "DELETE", staleConfirmation)).status, 401);
+    assert.equal((await request(allUrl, owner, "DELETE", staleConfirmation)).status, 403);
+    for (const token of roleTokens.values())
+      assert.equal((await request(allUrl, token, "DELETE", staleConfirmation)).status, 403);
+    assert.equal((await request(allUrl, ownerToken, "DELETE", { ...staleConfirmation, confirmCount: 999 })).status, 400);
+    assert.equal((await request(allUrl, ownerToken, "DELETE", { ...staleConfirmation, couponSlugs: initialTargets.map(() => initialTargets[0].slug) })).status, 400);
+    assert.equal((await request(allUrl, ownerToken, "DELETE", makeConfirmation(initialTargets.slice(0, 1)))).status, 409);
+    const fresh = await request("/api/cards", ownerToken, "POST", { ...draft, businessId: id, couponCode: "NEW-AFTER-CONFIRM" });
+    assert.equal(fresh.status, 201);
+    assert.equal((await request(allUrl, ownerToken, "DELETE", staleConfirmation)).status, 409);
+    assert.equal((await request(`/api/cards/${fresh.slug}`)).status, 200);
+    // Previously archived records must retain their original deletion metadata.
+    assert.equal((await request(`/api/portal/businesses/${id}/cards/${second.slug}`, adminToken, "DELETE", { confirmCode: second.couponCode })).archived, true);
+    const before = (await request(`/api/portal/cards?business=${id}`, admin)).cards;
+    const originallyArchived = before.find(card => card.slug === second.slug);
+    const active = (await request("/api/portal/cards", ownerToken)).cards;
+    const foreignBefore = (await request("/api/portal/cards", owner)).cards.map(card => card.slug).sort();
+    const removedAll = await request(allUrl, adminToken, "DELETE", makeConfirmation(active));
+    assert.equal(removedAll.status, 200);
+    assert.equal(removedAll.archived, true);
+    assert.equal(removedAll.deletedCount, active.length);
+    assert.equal(removedAll.businessName, created.business.name);
+    assert.deepEqual((await request("/api/portal/cards", ownerToken)).cards, []);
+    const retainedAll = (await request(`/api/portal/cards?business=${id}`, admin)).cards;
+    assert.equal(retainedAll.length, before.length);
+    assert.ok(retainedAll.every(card => card.deletedAt && card.status === "deleted"));
+    assert.equal(retainedAll.find(card => card.slug === second.slug).deletedAt, originallyArchived.deletedAt);
+    assert.equal((await request(`/api/portal/batches/${encodeURIComponent(batch.batchId)}`, ownerToken)).savedCount, 0);
+    assert.equal((await request(`/api/cards/${fresh.slug}/claim`, null, "POST", {})).status, 404);
+    assert.equal((await request(`${batchCardUrl}/restore`, admin, "POST", { confirmCode: batchCard.couponCode })).status, 200);
+    assert.equal((await request("/api/portal/cards", ownerToken)).cards.length, 1);
+    const permanentAll = await request(allUrl, admin, "DELETE", makeConfirmation(retainedAll));
+    assert.equal(permanentAll.status, 200);
+    assert.equal(permanentAll.archived, false);
+    assert.equal(permanentAll.deletedCount, retainedAll.length);
+    assert.deepEqual((await request(`/api/portal/cards?business=${id}`, admin)).cards, []);
+    assert.deepEqual((await request("/api/portal/cards", owner)).cards.map(card => card.slug).sort(), foreignBefore);
+    assert.equal((await request(`${batchCardUrl}/restore`, admin, "POST", { confirmCode: batchCard.couponCode })).status, 404);
+    assert.equal((await request(allUrl, admin, "DELETE", makeConfirmation([]))).deletedCount, 0);
+    assert.equal((await request(`/api/portal/businesses/${id}`, admin, "DELETE", { confirmName: created.business.name })).status, 200);
+  });
+  await t.test("filtered deletion affects only confirmed matching coupons and preserves other statuses, types and businesses", async () => {
+    const createTenant = (name, loginId) => request("/api/portal/businesses", admin, "POST", {
+      name, loginId, password: "Filtered-Delete-Password", limits: { card: 0, branch: 0, department: 0, account: 0 },
+    });
+    const created = await createTenant("Filtered coupon deletion", "FILTERDEL88");
+    const foreign = await createTenant("Unselected business", "FILTERSAFE88");
+    const id = created.business.businessId;
+    const ownerToken = await login("FILTERDEL88", "Filtered-Delete-Password");
+    const branch = await request(`/api/portal/businesses/${id}/branches`, ownerToken, "POST", { name: "Sales" });
+    const individual = await request("/api/cards", ownerToken, "POST", { ...draft, businessId: id, couponCode: "EXPIRED-INDIVIDUAL" });
+    const available = await request("/api/cards", ownerToken, "POST", { ...draft, businessId: id, couponCode: "ACTIVE-INDIVIDUAL" });
+    const safe = await request("/api/cards", admin, "POST", { ...draft, businessId: foreign.business.businessId, couponCode: "FOREIGN-SAFE" });
+    const batch = await request("/api/cards/bulk", ownerToken, "POST", { ...draft, businessId: id,
+      idempotencyKey: "filtered-delete-batch-001", branches: [{ branchId: branch.branch.branchId, quantity: 4 }],
+    });
+    assert.equal(batch.status, 201);
+    const cardsPath = path.join(temporary, "server/data/cards.json");
+    const stored = JSON.parse(await fs.readFile(cardsPath, "utf8"));
+    const expired = new Set([individual.slug, batch.coupons[0].slug, batch.coupons[1].slug]);
+    for (const card of stored) if (expired.has(card.slug)) card.expiresAt = "2020-01-01T00:00:00.000Z";
+    await fs.writeFile(cardsPath, JSON.stringify(stored));
+    const rows = (await request("/api/portal/cards", ownerToken)).cards;
+    const matching = rows.filter(card => card.status === "expired" && card.batchKey);
+    assert.equal(matching.length, 2);
+    const confirmation = cards => ({ confirmName: created.business.name, selectionMode: "filtered",
+      confirmCount: cards.length, couponSlugs: cards.map(card => card.slug),
+      couponStates: cards.map(card => ({ slug: card.slug, status: card.status })),
+    });
+    const url = `/api/portal/businesses/${id}/cards`;
+    assert.equal((await request(url, ownerToken, "DELETE", { ...confirmation(matching), couponStates: [] })).status, 400);
+    assert.equal((await request(url, ownerToken, "DELETE", confirmation([{ slug: safe.slug, status: "available" }]))).status, 409);
+    assert.equal((await request(url, admin, "DELETE", confirmation([{ slug: safe.slug, status: "available" }]))).status, 409);
+    assert.equal((await request(`/api/portal/cards/${matching[0].slug}`, ownerToken, "PATCH", { disabled: true })).status, 200);
+    assert.equal((await request(url, ownerToken, "DELETE", confirmation(matching))).status, 409);
+    assert.equal((await request(`/api/portal/cards/${matching[0].slug}`, ownerToken, "PATCH", { disabled: false })).status, 200);
+    // A newly created coupon must not enlarge the confirmed filtered selection.
+    const newer = await request("/api/cards", ownerToken, "POST", { ...draft, businessId: id, couponCode: "NEW-UNSELECTED" });
+    assert.equal(newer.status, 201);
+    const removed = await request(url, ownerToken, "DELETE", confirmation(matching));
+    assert.equal(removed.status, 200);
+    assert.equal(removed.deletedCount, 2);
+    assert.equal(removed.archived, true);
+    const remaining = (await request("/api/portal/cards", ownerToken)).cards;
+    assert.equal(remaining.length, 5);
+    for (const slug of [individual.slug, available.slug, newer.slug, batch.coupons[2].slug, batch.coupons[3].slug])
+      assert.ok(remaining.some(card => card.slug === slug));
+    const rootRows = (await request(`/api/portal/cards?business=${id}`, admin)).cards;
+    const archivedBulk = rootRows.filter(card => card.deletedAt && card.batchKey);
+    assert.equal(archivedBulk.length, 2);
+    const permanent = await request(url, admin, "DELETE", confirmation(archivedBulk));
+    assert.equal(permanent.status, 200);
+    assert.equal(permanent.deletedCount, 2);
+    assert.equal(permanent.archived, false);
+    assert.equal((await request(`/api/portal/cards?business=${id}`, admin)).cards.length, 5);
+    assert.equal((await request(`/api/portal/batches/${encodeURIComponent(batch.batchId)}`, ownerToken)).savedCount, 2);
+    const expiredSingle = remaining.filter(card => card.status === "expired");
+    assert.deepEqual(expiredSingle.map(card => card.slug), [individual.slug]);
+    assert.equal((await request(url, ownerToken, "DELETE", confirmation(expiredSingle))).deletedCount, 1);
+    assert.equal((await request(`/api/portal/businesses/${id}/cards/${individual.slug}/restore`, admin, "POST", { confirmCode: individual.couponCode })).status, 200);
+    assert.equal((await request("/api/portal/cards", ownerToken)).cards.find(card => card.slug === individual.slug).status, "expired");
+    assert.equal((await request(`/api/cards/${safe.slug}`)).status, 200);
+    for (const action of ["Selected business coupons archived", "Selected business coupons deleted"])
+      assert.ok((await request("/api/portal/audit", admin)).events.some(event => event.businessId === id && event.action === action));
+    for (const tenant of [created.business, foreign.business])
+      assert.equal((await request(`/api/portal/businesses/${tenant.businessId}`, admin, "DELETE", { confirmName: tenant.name })).status, 200);
+  });
   await t.test("only super admins can permanently delete every coupon for one business", async () => {
     const created = await request("/api/portal/businesses", admin, "POST", {
       name: "Coupon Delete Test", loginEmail: "coupon-delete@example.test", password: "Coupon-Delete-Test-Password",
@@ -1185,16 +1390,18 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
     const second = await request("/api/cards", ownerToken, "POST", { ...draft, businessId: id, couponCode: "DELETE-TWO" });
     assert.equal(first.status, 201);
     assert.equal(second.status, 201);
-    assert.equal((await request(`/api/portal/businesses/${id}/cards/${first.slug}`, ownerToken, "DELETE", { confirmCode: "DELETE-ONE" })).status, 403);
+    assert.equal((await request(`/api/portal/businesses/${id}/cards/${first.slug}`, ownerToken, "DELETE", { confirmCode: "wrong" })).status, 400);
     assert.equal((await request(`/api/portal/businesses/${id}/cards/${first.slug}`, admin, "DELETE", { confirmCode: "wrong" })).status, 400);
     const removedOne = await request(`/api/portal/businesses/${id}/cards/${first.slug}`, admin, "DELETE", { confirmCode: "delete-one" });
     assert.equal(removedOne.status, 200);
     assert.equal(removedOne.deletedCount, 1);
     assert.equal((await request(`/api/cards/${first.slug}`)).status, 404);
     assert.equal((await request(`/api/cards/${second.slug}`)).status, 200);
-    assert.equal((await request(`/api/portal/businesses/${id}/cards`, ownerToken, "DELETE", { confirmName: "Coupon Delete Test" })).status, 403);
+    assert.equal((await request(`/api/portal/businesses/${id}/cards`, ownerToken, "DELETE", { confirmName: "Coupon Delete Test" })).status, 400);
     assert.equal((await request(`/api/portal/businesses/${id}/cards`, admin, "DELETE", { confirmName: "wrong" })).status, 400);
-    const removed = await request(`/api/portal/businesses/${id}/cards`, admin, "DELETE", { confirmName: "Coupon Delete Test" });
+    const removed = await request(`/api/portal/businesses/${id}/cards`, admin, "DELETE", {
+      confirmName: "Coupon Delete Test", confirmCount: 1, couponSlugs: [second.slug],
+    });
     assert.equal(removed.status, 200);
     assert.equal(removed.deletedCount, 1);
     assert.equal((await request(`/api/cards/${first.slug}`)).status, 404);

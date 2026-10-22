@@ -89,6 +89,8 @@ const schema = new mongoose.Schema(
     campaignName: { type: String, default: "" },
     expiresAt: { type: Date, default: null },
     disabled: { type: Boolean, default: false },
+    deletedAt: { type: Date, default: null },
+    deletedBy: { type: String, default: "" },
     openedAt: { type: Date, default: null },
     redeemedAt: { type: Date, default: null },
     scratchedAt: { type: Date, default: null },
@@ -375,8 +377,8 @@ async function normalizeMongoCoupons() {
 }
 async function findCard(slug, { includeImage = false } = {}) {
   return atlasConnected
-    ? Card.findOne({ slug }).select(includeImage ? "+shareImageBase64" : "-shareImageBase64").lean()
-    : (await readLocalCards()).find((card) => card.slug === slug);
+    ? Card.findOne({ slug, deletedAt: null }).select(includeImage ? "+shareImageBase64" : "-shareImageBase64").lean()
+    : (await readLocalCards()).find((card) => card.slug === slug && !card.deletedAt);
 }
 async function markCardOpened(card) {
   if (card.openedAt) return card;
@@ -421,7 +423,7 @@ async function findAllCoupons() {
   const cards = atlasConnected
     ? await Card.find()
         .select(
-          "slug couponCode offerTitle senderName businessId branchId customerPhone expiresAt createdAt redeemedAt staffRedeemedAt",
+          "slug couponCode offerTitle senderName businessId branchId customerPhone expiresAt createdAt redeemedAt staffRedeemedAt deletedAt",
         )
         .sort({ createdAt: -1 })
         .lean()
@@ -441,6 +443,7 @@ async function findAllCoupons() {
       createdAt,
       redeemedAt,
       staffRedeemedAt,
+      deletedAt,
     }) => ({
       slug,
       couponCode,
@@ -453,6 +456,7 @@ async function findAllCoupons() {
       createdAt,
       redeemedAt: redeemedAt || null,
       staffRedeemedAt: staffRedeemedAt || null,
+      deletedAt: deletedAt || null,
       used: Boolean(staffRedeemedAt),
     }),
   );
@@ -460,7 +464,7 @@ async function findAllCoupons() {
 async function claimLocalCard(slug) {
   return mutateLocalCards((cards) => {
     const index = cards.findIndex((card) => card.slug === slug);
-    if (index === -1) return { status: "missing" };
+    if (index === -1 || cards[index].deletedAt) return { status: "missing" };
     if (cards[index].redeemedAt || cards[index].scratchedAt) return { status: "used" };
     if (
       cards[index].disabled ||
@@ -478,6 +482,7 @@ async function claimCard(slug) {
   const card = await Card.findOneAndUpdate(
     {
       slug,
+      deletedAt: null,
       disabled: { $ne: true },
       redeemedAt: null,
       scratchedAt: null,
@@ -489,7 +494,7 @@ async function claimCard(slug) {
   if (card) return { status: "claimed", card };
   const existing = await Card.findOne({ slug }).select("-shareImageBase64").lean();
   return {
-    status: !existing
+    status: !existing || existing.deletedAt
       ? "missing"
       : existing.redeemedAt || existing.scratchedAt
         ? "used"
@@ -623,7 +628,7 @@ function buildCard(body, business, bulk = false, allowExpired = false) {
 const batchCard = (card) => Object.fromEntries([
   "slug", "branchId", "branchName", "couponCode", "offerTitle", "description",
   "campaignName", "expiresAt", "createdAt", "openedAt", "scratchedAt", "redeemedAt", "staffRedeemedAt",
-  "staffRedeemedBranchId", "staffRedeemedDepartmentId", "customerPhone",
+  "staffRedeemedBranchId", "staffRedeemedDepartmentId", "customerPhone", "deletedAt",
 ].map((key) => [key, card[key] ?? null]));
 function batchResult(key, fingerprint, cards, replayed = false) {
   return { batchId: key, fingerprint, savedCount: cards.length, replayed,
@@ -764,6 +769,7 @@ app.post("/api/portal/redeem", authenticate, async (req, res, next) => {
           businessId,
           branchId: { $in: eligibleBranchIds },
           couponCode,
+          deletedAt: null,
           scratchedAt: { $ne: null },
           staffRedeemedAt: null,
           disabled: { $ne: true },
@@ -778,7 +784,7 @@ app.post("/api/portal/redeem", authenticate, async (req, res, next) => {
           (item.businessId || "impact-vibes") === businessId
           && eligibleBranchIds.includes(String(item.branchId || ""))
           && String(item.couponCode || "").toUpperCase() === couponCode);
-        if (!card || card.disabled || !card.scratchedAt || card.staffRedeemedAt
+        if (!card || card.deletedAt || card.disabled || !card.scratchedAt || card.staffRedeemedAt
           || (card.expiresAt && new Date(card.expiresAt) <= redemptionAt)) return null;
         Object.assign(card, { ...redemption, staffRedeemedAt: redemption.staffRedeemedAt.toISOString() });
         return { ...card };
@@ -790,7 +796,7 @@ app.post("/api/portal/redeem", authenticate, async (req, res, next) => {
         : (await readLocalCards()).find((item) =>
           (item.businessId || "impact-vibes") === businessId
           && String(item.couponCode || "").toUpperCase() === couponCode);
-      if (!card) throw bad("Coupon code not found for this business.", 404);
+      if (!card || card.deletedAt) throw bad("Coupon code not found for this business.", 404);
       if (!eligibleBranchIds.includes(String(card.branchId || ""))) {
         const assignedBranch = business.branches?.find((item) => item.branchId === card.branchId);
         const completed = card.staffRedeemedAt ? await resolveRedemptionRecord(card) : null;
@@ -888,6 +894,7 @@ app.get("/api/admin/coupons", authenticate, async (req, res, next) => {
         : req.user.businessId;
     const coupons = (await findAllCoupons()).filter(
       (item) => (!id || item.businessId === id)
+        && (req.user.role === "super-admin" || !item.deletedAt)
         && (req.user.role !== "branch-staff" || item.branchId === req.user.branchId),
     );
     const usedCount = coupons.filter((item) => item.used).length;
@@ -909,6 +916,7 @@ app.get("/api/admin/redeemed-coupons", authenticate, async (req, res, next) => {
         : req.user.businessId;
     const coupons = (await findAllCoupons()).filter(
       (item) => item.used && (!id || item.businessId === id)
+        && (req.user.role === "super-admin" || !item.deletedAt)
         && (req.user.role !== "branch-staff" || item.branchId === req.user.branchId),
     );
     res.json({ coupons, count: coupons.length });

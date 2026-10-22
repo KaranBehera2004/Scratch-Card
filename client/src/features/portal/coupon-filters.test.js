@@ -20,6 +20,24 @@ test("WhatsApp search accepts full, formatted and partial numbers and does not m
   assert.deepEqual(filter({ number: "987abc" }), []);
 });
 
+test("bulk and individual views use saved batch identity, not the phone number or coupon status", () => {
+  const cards = [
+    { ...rows[0], slug: "bulk-with-number", batchKey: "one:batch-1", status: "redeemed" },
+    { ...rows[1], slug: "bulk-without-number", batchKey: "one:batch-1", customerPhone: "" },
+    { ...rows[0], slug: "individual", batchKey: "" },
+    { ...rows[0], slug: "legacy-individual", customerPhone: "" },
+  ];
+  const run = values => filterCouponCards(cards, { ...EMPTY_COUPON_FILTERS, ...values }, now).map(card => card.slug);
+  assert.deepEqual(run({}), cards.map(card => card.slug));
+  assert.deepEqual(run({ type: "bulk" }), ["bulk-with-number", "bulk-without-number"]);
+  assert.deepEqual(run({ type: "individual" }), ["individual", "legacy-individual"]);
+  assert.deepEqual(run({ type: "bulk", number: "43210", dateRange: "today", branch: couponBranchKey(rows[0]) }), ["bulk-with-number"]);
+  assert.deepEqual(run({ type: "individual", number: "43210" }), ["individual"]);
+  assert.deepEqual(filterCouponCards(cards, { ...EMPTY_COUPON_FILTERS, type: "bulk" })
+    .filter(card => card.status === "redeemed").map(card => card.slug), ["bulk-with-number"]);
+  assert.deepEqual(run({ type: "bulk", campaign: couponCampaignKey("Missing") }), []);
+});
+
 test("branches are business-scoped and default campaigns stay distinct from named General rewards", () => {
   assert.deepEqual(filter({ branch: couponBranchKey(rows[0]) }), ["a", "c"]);
   assert.deepEqual(filter({ branch: "unassigned" }), ["d"]);

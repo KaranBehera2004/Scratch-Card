@@ -1,6 +1,8 @@
-export const COUPON_STATUSES = ["available", "opened", "scratched", "redeemed", "expired", "disabled"];
+export const COUPON_STATUSES = ["available", "opened", "scratched", "redeemed", "expired", "disabled", "deleted"];
 
 export function couponStatus(card, now = Date.now()) {
+  // Keep the original lifecycle fields intact so restoration never resets use.
+  if (card.deletedAt) return "deleted";
   // Staff redemption is final. Legacy redeemedAt values represent scratching.
   if (card.staffRedeemedAt) return "redeemed";
   if (card.disabled) return "disabled";

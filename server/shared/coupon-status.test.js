@@ -37,7 +37,7 @@ test("all six exclusive status counts reconcile to 94 and 15 staff redemptions r
   const before = JSON.stringify(cards);
   const counts = summarizeCouponStatuses(cards, now);
   assert.deepEqual(counts, {
-    available: 44, opened: 10, scratched: 12, redeemed: 15, expired: 8, disabled: 5, total: 94, redemptionRate: 16,
+    available: 44, opened: 10, scratched: 12, redeemed: 15, expired: 8, disabled: 5, deleted: 0, total: 94, redemptionRate: 16,
   });
   assert.equal(COUPON_STATUSES.reduce((total, status) => total + counts[status], 0), counts.total);
   assert.equal(JSON.stringify(cards), before);
@@ -48,4 +48,16 @@ test("an empty dashboard has zero counts and a finite zero redemption rate", () 
   assert.equal(counts.total, 0);
   assert.equal(counts.redemptionRate, 0);
   assert.ok(COUPON_STATUSES.every((status) => counts[status] === 0));
+});
+
+test("archived coupons leave active buckets and recover their original status on restoration", () => {
+  for (const lifecycle of [{}, { scratchedAt: past }, { staffRedeemedAt: past }, { expiresAt: past }, { disabled: true }]) {
+    const card = { ...lifecycle, deletedAt: past };
+    assert.equal(couponStatus(card, now), "deleted");
+    const counts = summarizeCouponStatuses([card], now);
+    assert.equal(counts.deleted, 1);
+    assert.equal(COUPON_STATUSES.reduce((sum, status) => sum + counts[status], 0), counts.total);
+    delete card.deletedAt;
+    assert.equal(couponStatus(card, now), couponStatus(lifecycle, now));
+  }
 });

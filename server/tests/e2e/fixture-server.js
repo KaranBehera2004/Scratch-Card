@@ -30,6 +30,14 @@ export const ready = new Promise((resolve, reject) => {
   server.once("listening", resolve);
   server.once("error", reject);
 });
+// Seed expiry only in this isolated browser fixture, never through a public API.
+export async function expireCoupons(slugs) {
+  const file = path.join(fixture, "server/data/cards.json");
+  const cards = JSON.parse(await fs.readFile(file, "utf8"));
+  const selected = new Set(slugs);
+  for (const card of cards) if (selected.has(card.slug)) card.expiresAt = "2020-01-01T00:00:00.000Z";
+  await fs.writeFile(file, JSON.stringify(cards));
+}
 export async function close() {
   await new Promise((resolve) => server.close(resolve));
   const resolved = await fs.realpath(fixture);

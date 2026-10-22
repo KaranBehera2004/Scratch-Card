@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import mongoose from "mongoose";
 import { couponStatus } from "./bulk.js";
+import { COUPON_STATUSES } from "../../shared/coupon-status.js";
 
 const text = (value, max = 120) =>
   String(value ?? "")
@@ -533,6 +534,7 @@ export function installControls(app, context) {
     const visibleCards = cards
       .filter((item) => visibleBusinesses.has(item.businessId || "impact-vibes"))
       .filter((item) => !id || (item.businessId || "impact-vibes") === id)
+      .filter((item) => req.user.role === "super-admin" || !item.deletedAt)
       .filter((item) => req.user.role !== "branch-staff"
         // Staff need completed records for their existing history and metrics,
         // never the inventory of available, opened, or scratched coupon codes.
@@ -1035,8 +1037,8 @@ export function installControls(app, context) {
   app.delete(
     "/api/portal/businesses/:businessId/cards/:slug",
     auth,
-    superOnly,
     route(async (req, res) => {
+      owner(req);
       const id = scope(req);
       const business = await getBusiness(id);
       const slug = text(req.params.slug, 80);
@@ -1045,6 +1047,20 @@ export function installControls(app, context) {
       if (!card) throw fail("Coupon not found.", 404);
       if (String(req.body?.confirmCode || "").trim().toUpperCase() !== String(card.couponCode).toUpperCase())
         throw fail("Type the exact coupon code to confirm deletion.");
+      // Business deletion archives the record. Only super admins may erase it.
+      if (req.user.role !== "super-admin") {
+        const patch = { deletedAt: new Date().toISOString(), deletedBy: req.user.id };
+        if (isMongo()) {
+          const result = await Card.updateOne({ slug: card.slug, deletedAt: null }, { $set: patch });
+          if (!result.matchedCount) throw fail("Coupon not found.", 404);
+        } else await mutateLocalCards((items) => {
+          const current = items.find(item => item.slug === card.slug && (item.businessId || "impact-vibes") === id && !item.deletedAt);
+          if (!current) throw fail("Coupon not found.", 404);
+          Object.assign(current, patch);
+        });
+        await audit(req, "Business coupon archived", id, `${business.name}: ${card.couponCode} (retained for super-admin recovery)`);
+        return res.json({ ok: true, archived: true, deletedCount: 1 });
+      }
       let deletedCount = 0;
       if (isMongo()) {
         const query = id === "impact-vibes"
@@ -1066,36 +1082,109 @@ export function installControls(app, context) {
       res.json({ ok: true, deletedCount: 1 });
     }),
   );
-  app.delete(
-    "/api/portal/businesses/:businessId/cards",
+  app.post(
+    "/api/portal/businesses/:businessId/cards/:slug/restore",
     auth,
     superOnly,
     route(async (req, res) => {
       const id = scope(req);
       const business = await getBusiness(id);
+      const card = (await cardRows(req)).find(item => item.businessId === id && item.slug === req.params.slug);
+      if (!card) throw fail("Coupon not found.", 404);
+      if (!card.deletedAt) throw fail("Coupon is not deleted.", 409);
+      if (String(req.body?.confirmCode || "").trim().toUpperCase() !== String(card.couponCode).toUpperCase())
+        throw fail("Type the exact coupon code to confirm restoration.");
+      if (isMongo()) {
+        const result = await Card.updateOne({ slug: card.slug, deletedAt: { $ne: null } },
+          { $set: { deletedAt: null, deletedBy: "" } });
+        if (!result.matchedCount) throw fail("Coupon could not be restored. Refresh and try again.", 409);
+      } else await mutateLocalCards((items) => {
+        const current = items.find(item => item.slug === card.slug && (item.businessId || "impact-vibes") === id);
+        if (!current?.deletedAt) throw fail("Coupon could not be restored. Refresh and try again.", 409);
+        delete current.deletedAt;
+        delete current.deletedBy;
+      });
+      await audit(req, "Business coupon restored", id, `${business.name}: ${card.couponCode}`);
+      res.json({ ok: true, restored: true });
+    }),
+  );
+  app.delete(
+    "/api/portal/businesses/:businessId/cards",
+    auth,
+    route(async (req, res) => {
+      owner(req);
+      const id = scope(req);
+      const business = await getBusiness(id);
       if (req.body?.confirmName !== business.name)
         throw fail("Type the exact business name to confirm coupon deletion.");
+      const slugs = req.body.couponSlugs, expectedCount = req.body.confirmCount;
+      if (!Array.isArray(slugs) || !Number.isSafeInteger(expectedCount) || expectedCount < 0
+        || slugs.length !== expectedCount || new Set(slugs).size !== slugs.length
+        || slugs.some(slug => typeof slug !== "string" || !/^[A-Za-z0-9_-]{6,32}$/.test(slug)))
+        throw fail("Confirm the coupon count and list before deleting all coupons.");
+      const permanent = req.user.role === "super-admin";
+      const filtered = req.body.selectionMode === "filtered";
+      if (req.body.selectionMode !== undefined && !["all", "filtered"].includes(req.body.selectionMode))
+        throw fail("Choose a valid coupon deletion selection.");
+      const expected = new Set(slugs);
+      const states = req.body.couponStates;
+      if (filtered && (!Array.isArray(states) || states.length !== expectedCount
+        || states.some(state => !state || !expected.has(state.slug) || !COUPON_STATUSES.includes(state.status))
+        || new Set(states.map(state => state.slug)).size !== expectedCount))
+        throw fail("Confirm the matching coupon states before deleting coupons.");
+      const expectedStates = new Map(filtered ? states.map(state => [state.slug, state.status]) : []);
+      const checkTargets = (items) => {
+        const current = items.filter(item => (item.businessId || "impact-vibes") === id && (permanent || !item.deletedAt)
+          && (!filtered || expected.has(item.slug)));
+        if (current.length !== expectedCount || current.some(item => !expected.has(item.slug)
+          || (filtered && couponStatus(item) !== expectedStates.get(item.slug))))
+          throw fail("The coupon list changed. Refresh and confirm deletion again.", 409);
+        return current;
+      };
+      const targets = checkTargets(await cardRows(req));
       const query = id === "impact-vibes"
-        ? { $or: [{ businessId: id }, { businessId: { $exists: false } }] }
-        : { businessId: id };
+        ? { slug: { $in: slugs }, $or: [{ businessId: id }, { businessId: { $exists: false } }] }
+        : { businessId: id, slug: { $in: slugs } };
+      if (filtered && targets.length) {
+        // Match the saved lifecycle atomically too: a concurrent redemption or
+        // restore must never be erased using a stale status-filter snapshot.
+        query.$and = [{ $or: targets.map(card => ({ slug: card.slug,
+          disabled: card.disabled ? true : { $ne: true },
+          ...Object.fromEntries(["deletedAt", "staffRedeemedAt", "expiresAt", "scratchedAt", "redeemedAt", "openedAt"]
+            .map(field => [field, card[field] || null])),
+        })) }];
+      }
+      const archive = { deletedAt: new Date().toISOString(), deletedBy: req.user.id };
       let deletedCount = 0;
       if (isMongo()) {
-        deletedCount = (await Card.deleteMany(query)).deletedCount;
-        if (CouponBatch) await CouponBatch.deleteMany({ businessId: id });
+        if (permanent) {
+          const batchKeys = filtered ? [...new Set(targets.map(card => card.batchKey).filter(Boolean))]
+            : CouponBatch ? await CouponBatch.distinct("key", { businessId: id }) : [];
+          deletedCount = (await Card.deleteMany(query)).deletedCount;
+          // Never remove metadata for a newer batch outside this confirmation.
+          if (CouponBatch && batchKeys.length) {
+            const remaining = new Set(await Card.distinct("batchKey", { businessId: id, batchKey: { $in: batchKeys } }));
+            await CouponBatch.deleteMany({ businessId: id, key: { $in: batchKeys.filter(key => !remaining.has(key)) } });
+          }
+        } else deletedCount = (await Card.updateMany({ ...query, deletedAt: null }, { $set: archive })).modifiedCount;
       } else {
         deletedCount = await mutateLocalCards((items) => {
+          checkTargets(items);
           let removed = 0;
           for (let index = items.length - 1; index >= 0; index -= 1) {
-            if ((items[index].businessId || "impact-vibes") === id) {
-              items.splice(index, 1);
+            if ((items[index].businessId || "impact-vibes") === id && expected.has(items[index].slug)) {
+              if (permanent) items.splice(index, 1);
+              else Object.assign(items[index], archive);
               removed += 1;
             }
           }
           return removed;
         });
       }
-      await audit(req, "All business coupons deleted", id, `${business.name}: ${deletedCount} coupons permanently deleted`);
-      res.json({ ok: true, deletedCount });
+      await audit(req, permanent ? `${filtered ? "Selected" : "All"} business coupons deleted`
+        : `${filtered ? "Selected" : "All"} business coupons archived`, id,
+        `${business.name}: ${deletedCount} coupons ${permanent ? "permanently deleted" : "archived for super-admin recovery"}`);
+      res.json({ ok: true, archived: !permanent, deletedCount, businessId: id, businessName: business.name });
     }),
   );
   app.delete(
@@ -1669,6 +1758,7 @@ export function installControls(app, context) {
         (item) => item.slug === req.params.slug,
       );
       if (!card) throw fail("Card not found.", 404);
+      if (card.deletedAt) throw fail("Restore this coupon before changing it.", 409);
       const patch = { disabled: Boolean(req.body.disabled) };
       if (card.scratchedAt || card.staffRedeemedAt || card.redeemedAt)
         throw fail("Scratched or redeemed cards cannot be changed.");
