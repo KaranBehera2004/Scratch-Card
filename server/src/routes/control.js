@@ -534,8 +534,10 @@ export function installControls(app, context) {
       .filter((item) => visibleBusinesses.has(item.businessId || "impact-vibes"))
       .filter((item) => !id || (item.businessId || "impact-vibes") === id)
       .filter((item) => req.user.role !== "branch-staff"
-        || item.branchId === req.user.branchId
-        || item.staffRedeemedBranchId === req.user.branchId);
+        // Staff need completed records for their existing history and metrics,
+        // never the inventory of available, opened, or scratched coupon codes.
+        || (Boolean(item.staffRedeemedAt) && (item.branchId === req.user.branchId
+          || item.staffRedeemedBranchId === req.user.branchId)));
     // Resolve saved redemption identities once per list, not from the viewer's
     // login or the coupon's original assignment. Reuse metadata for legacy rows.
     const redemptionMeta = visibleCards.some(item => item.staffRedeemedAt)

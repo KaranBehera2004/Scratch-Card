@@ -2868,17 +2868,26 @@ test("business creates branch staff with a mandatory manual login ID and super a
   await page.locator(".p-topbar").getByRole("button", { name: "Sign out" }).click();
   await login(page, credentials.loginId, credentials.password);
   await expect(page.getByRole("heading", { name: "North Showroom", exact: true })).toBeVisible();
-  await expect(page.locator(".p-sidebar nav").getByRole("button")).toHaveCount(4);
+  await expect(page.locator(".p-sidebar nav").getByRole("button")).toHaveCount(3);
   await expect(page.locator(".p-sidebar nav").getByRole("button")).toHaveText([
-    "Overview", "Redeem coupon", "Department coupons", "Redemption history",
+    "Overview", "Redeem coupon", "Redemption history",
   ]);
   await expect(page.locator(".p-sidebar nav").getByRole("button", { name: "Create scratch card", exact: true })).toHaveCount(0);
   await expect(page.locator(".p-staff-metrics article")).toHaveCount(2);
   await expect(page.getByText("Ready to redeem", { exact: true })).toHaveCount(0);
-  await nav(page, "Department coupons");
-  await expect(page.getByRole("heading", { name: "Department coupons", exact: true })).toBeVisible();
-  await expect(page.getByRole("row").filter({ hasText: "STAFF-NORTH" })).toBeVisible();
-  await expect(page.getByRole("row").filter({ hasText: "STAFF-SOUTH" })).toHaveCount(0);
+  await expect(page.locator(".p-sidebar nav").getByRole("button", { name: "Department coupons", exact: true })).toHaveCount(0);
+  await page.goto("/?tab=Branch%20coupons");
+  await expect(page.getByRole("heading", { name: "North Showroom", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Department coupons", exact: true })).toHaveCount(0);
+  const staffAuth = await page.request.post("/api/auth/login", { data: { loginId: credentials.loginId, password: credentials.password } });
+  const staffHeaders = { Authorization: `Bearer ${(await staffAuth.json()).token}` };
+  const hiddenInventory = await page.request.get("/api/portal/cards", { headers: staffHeaders });
+  expect((await hiddenInventory.json()).cards).toEqual([]);
+  const ownerCheck = await page.request.post("/api/auth/login", { data: { loginId: "BRPORT58", password: "Branch-Portal-Owner" } });
+  const ownerCheckHeaders = { Authorization: `Bearer ${(await ownerCheck.json()).token}` };
+  const ownerInventory = (await (await page.request.get("/api/portal/cards", { headers: ownerCheckHeaders })).json()).cards;
+  expect(ownerInventory.some(card => card.slug === northCard.slug)).toBe(true);
+  expect(ownerInventory.some(card => card.slug === southCard.slug)).toBe(true);
   await nav(page, "Redeem coupon");
   await page.getByLabel("Coupon code", { exact: true }).fill("staff-south");
   await page.getByRole("main").getByRole("button", { name: "Redeem coupon", exact: true }).click();
@@ -2935,10 +2944,11 @@ test("business creates branch staff with a mandatory manual login ID and super a
   await nav(page, "Overview");
   await expect(page.getByText("Ready to redeem", { exact: true })).toHaveCount(0);
   await expect(page.locator(".p-metrics article").filter({ hasText: "Total redeemed" }).locator("strong")).toHaveText("1");
-  await nav(page, "Department coupons");
-  await expect(page.getByRole("row").filter({ hasText: "STAFF-NORTH" })).toContainText("redeemed");
   await nav(page, "Redemption history");
   await expect(page.getByRole("row").filter({ hasText: "STAFF-NORTH" })).toContainText("redeemed");
+  const completedInventory = (await (await page.request.get("/api/portal/cards", { headers: staffHeaders })).json()).cards;
+  expect(completedInventory.map(card => card.slug)).toEqual([northCard.slug]);
+  expect(completedInventory.every(card => card.status === "redeemed")).toBe(true);
 
   await page.locator(".p-topbar").getByRole("button", { name: "Sign out" }).click();
   await login(page, "platform@example.test", "Platform-Test-Password");
@@ -2949,7 +2959,7 @@ test("business creates branch staff with a mandatory manual login ID and super a
   await expandBranchGroups(page);
   const monitoredRow = page.getByRole("row").filter({ hasText: "Nina North" });
   await expect(monitoredRow).not.toContainText("Never");
-  await expect(monitoredRow).toContainText("1");
+  await expect(monitoredRow.getByRole("cell", { name: "2", exact: true })).toBeVisible();
   await expect(monitoredRow.getByRole("button", { name: "Manage staff", exact: true })).toBeVisible();
   expect((await page.request.get(`/api/cards/${northCard.slug}`)).status()).toBe(200);
   expect((await page.request.get(`/api/cards/${southCard.slug}`)).status()).toBe(200);

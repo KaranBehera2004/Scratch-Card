@@ -1327,7 +1327,6 @@ export default function Portal({
     : branchStaff ? [
         ["Overview", "overview"],
         ["Redeem coupon", "check"],
-        ["Branch coupons", "cards"],
         ["Redemption history", "audit"],
       ] : [
         ["Overview", "overview"],
@@ -2292,24 +2291,6 @@ export default function Portal({
       </Table>
     </article>;
   };
-  const branchCouponsTable = (
-    <article className="p-card">
-      <div className="p-info">
-        Coupons issued here or redeemed here are shown. Enter or scan a coupon code for {branchStaffBranch?.name || "your department"} from any branch of this business to redeem it once.
-      </div>
-      <Table columns={["Coupon code", "Reward", "Campaign", "Status", "Created", "Expiry date"]}
-        empty={!visibleCards.length}>
-        {visibleCards.map((item) => <tr key={item.slug}>
-          <td className="p-code">{item.couponCode}</td>
-          <td>{item.offerTitle}</td>
-          <td>{item.campaignName || ui("General rewards")}</td>
-          <td><Badge status={item.status} /></td>
-          <td>{localizedDate(item.createdAt)}</td>
-          <td>{item.expiresAt ? localizedDate(item.expiresAt) : ui("No expiry")}</td>
-        </tr>)}
-      </Table>
-    </article>
-  );
   const branchStaffOverview = (
     <>
       <div className="p-welcome-row p-staff-welcome">
@@ -2501,7 +2482,6 @@ export default function Portal({
   const render = () => {
     if (tab === "Overview") return branchStaff ? branchStaffOverview : overview;
     if (branchStaff && tab === "Redeem coupon") return branchRedemptionDesk();
-    if (branchStaff && tab === "Branch coupons") return branchCouponsTable;
     if (branchStaff && tab === "Redemption history") return branchRedemptionHistory();
     // The creator needs the loaded workspace. When loading failed, offer Retry
     // instead of rendering a form without a business (a blank-page crash).
@@ -3709,17 +3689,6 @@ export default function Portal({
                   <button className="p-button" disabled={busy || loading || !visibleBranches.length} onClick={exportBranches}>
                     <Icon name="download" />{busy ? ui("Working…") : ui("Export branches")}
                   </button>
-                )}
-                {branchStaff && tab === "Branch coupons" && (
-                  <select
-                    aria-label={ui("Coupon status")}
-                    value={status}
-                    onChange={(event) => setStatus(event.target.value)}
-                  >
-                    {["all", "available", "opened", "scratched", "redeemed", "disabled", "expired"].map((value) => (
-                      <option key={value} value={value}>{ui(value === "all" ? "All statuses" : value)}</option>
-                    ))}
-                  </select>
                 )}
                 {["Coupons", "Scratch cards"].includes(tab) && (
                   <>

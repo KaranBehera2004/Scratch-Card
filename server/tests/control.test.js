@@ -864,13 +864,14 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
     const staffToken = await login(staff.credentials.loginId, "North-Staff-Password");
     const southStaffToken = await login(automaticStaff.credentials.loginId, "South-Staff-Password");
     const staffCards = (await request("/api/portal/cards", staffToken)).cards;
-    assert.deepEqual(staffCards.map((card) => card.slug), [northCard.slug]);
+    assert.deepEqual(staffCards, []);
     const staffBusiness = (await request("/api/portal/businesses", staffToken)).businesses[0];
     assert.deepEqual(staffBusiness.branches.map((branch) => branch.branchId), [firstBranch.branch.branchId]);
     assert.equal((await request("/api/cards", staffToken, "POST", { ...draft, businessId: id, branchId: firstBranch.branch.branchId })).status, 403);
     assert.equal((await request("/api/portal/users", staffToken)).status, 403);
     assert.equal((await request("/api/portal/redeem", staffToken, "POST", { couponCode: "NORTH-ONE" })).status, 409);
     assert.equal((await request(`/api/cards/${northCard.slug}/claim`, null, "POST", {})).status, 200);
+    assert.deepEqual((await request("/api/portal/cards", staffToken)).cards, []);
     const fulfilled = await request("/api/portal/redeem", staffToken, "POST", { couponCode: "north-one" });
     assert.equal(fulfilled.status, 200);
     assert.equal(fulfilled.coupon.couponCode, "NORTH-ONE");
