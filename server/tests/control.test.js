@@ -872,10 +872,17 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
     assert.equal((await request("/api/portal/redeem", staffToken, "POST", { couponCode: "NORTH-ONE" })).status, 409);
     assert.equal((await request(`/api/cards/${northCard.slug}/claim`, null, "POST", {})).status, 200);
     assert.deepEqual((await request("/api/portal/cards", staffToken)).cards, []);
-    const fulfilled = await request("/api/portal/redeem", staffToken, "POST", { couponCode: "north-one" });
+    for (const redemptionMethod of ["scanner", {}, 1]) {
+      assert.equal((await request("/api/portal/redeem", staffToken, "POST", {
+        couponCode: "north-one", redemptionMethod,
+      })).status, 400);
+    }
+    const fulfilled = await request("/api/portal/redeem", staffToken, "POST", { couponCode: "north-one", redemptionMethod: "manual" });
     assert.equal(fulfilled.status, 200);
     assert.equal(fulfilled.coupon.couponCode, "NORTH-ONE");
     assert.equal(fulfilled.coupon.staffName, "North Staff");
+    assert.equal(fulfilled.coupon.redemptionMethod, "manual");
+    assert.equal((await request("/api/portal/cards", staffToken)).cards[0].staffRedemptionMethod, "manual");
     assert.equal(fulfilled.coupon.redemptionStatus, "Redeemed");
     assert.equal(fulfilled.coupon.assignedBranchName, "North Branch");
     assert.equal(fulfilled.coupon.redeemedBranchName, "North Branch");
@@ -883,8 +890,10 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
     const redeemedPublicCard = await request(`/api/cards/${northCard.slug}`);
     assert.equal(redeemedPublicCard.redeemed, true);
     assert.equal(redeemedPublicCard.couponCode, undefined);
-    const repeated = await request("/api/portal/redeem", staffToken, "POST", { couponCode: "NORTH-ONE" });
+    assert.equal(redeemedPublicCard.staffRedemptionMethod, undefined);
+    const repeated = await request("/api/portal/redeem", staffToken, "POST", { couponCode: "NORTH-ONE", redemptionMethod: "qr" });
     assert.equal(repeated.status, 409);
+    assert.equal((await request("/api/portal/cards", staffToken)).cards[0].staffRedemptionMethod, "manual");
     assert.equal(repeated.details.couponCode, "NORTH-ONE");
     assert.equal(repeated.details.redemptionStatus, "Redeemed");
     assert.equal(repeated.details.assignedBranchName, "North Branch");
@@ -899,13 +908,14 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
     assert.equal((await request(`/api/cards/${southCard.slug}/claim`, null, "POST", {})).status, 200);
     const competingBranches = await Promise.all([
       request("/api/portal/redeem", staffToken, "POST", { couponCode: "SOUTH-ONE" }),
-      request("/api/portal/redeem", southStaffToken, "POST", { couponCode: "SOUTH-ONE" }),
+      request("/api/portal/redeem", southStaffToken, "POST", { couponCode: "SOUTH-ONE", redemptionMethod: "qr" }),
     ]);
     assert.equal(competingBranches.filter((result) => result.status === 200).length, 1);
     assert.equal(competingBranches.filter((result) => result.status === 403).length, 1);
     assert.match(competingBranches.find((result) => result.status === 403).message, /another branch/i);
     const lockedSouthCard = (await request("/api/portal/cards", ownerToken)).cards.find((card) => card.slug === southCard.slug);
     assert.ok(lockedSouthCard.staffRedeemedAt);
+    assert.equal(lockedSouthCard.staffRedemptionMethod, "qr");
     assert.equal(lockedSouthCard.staffRedeemedBranchId, secondBranch.branch.branchId);
     // Legacy deployments could save the staff/branch fields from the viewer who
     // checked an already-redeemed code. The immutable assignment and redemption
@@ -1059,6 +1069,7 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
     assert.equal(saved.staffRedeemedDepartmentId, destinationSales.departmentId);
     assert.equal(saved.staffRedeemedBy, destinationStaff.user.id);
     assert.equal(saved.staffRedeemedByName, "Punjagutta staff");
+    assert.equal(saved.staffRedemptionMethod, "");
     assert.equal(saved.staffRedeemedLocationName, "Punjagutta");
     assert.deepEqual(saved.redemptionDetails, {
       staffId: destinationStaff.user.id,
