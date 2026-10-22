@@ -735,8 +735,7 @@
   box-shadow: 0 20px 55px #00000040, 0 0 0 1px #ffffff26 inset;
 }
 
-.scratch-shell.is-expired .expired-coupon-label,
-.scratch-shell.is-redeemed .redeemed-coupon-label {
+.scratch-shell.is-expired .expired-coupon-label {
   border-style: solid;
   border-color: #3c4654;
   background: #eef1f5e6;
