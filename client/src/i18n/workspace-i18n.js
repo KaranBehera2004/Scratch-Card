@@ -3,6 +3,8 @@ import { createContext, useContext } from "react";
 // Only interface copy belongs here. Business names, branches, campaigns, offers,
 // coupon identifiers and saved card languages must never be rewritten by UI locale.
 const copy = {
+  "Search coupon code": ["कूपन कोड खोजें", "కూపన్ కోడ్ వెతకండి"],
+  "Enter coupon code…": ["कूपन कोड दर्ज करें…", "కూపన్ కోడ్ నమోదు చేయండి…"],
   "Delete matching coupons": ["फ़िल्टर से मेल खाने वाले कूपन हटाएँ", "ఫిల్టర్‌కు సరిపోయే కూపన్లను తొలగించండి"],
   "Delete matching coupons ({count})": ["फ़िल्टर से मेल खाने वाले कूपन हटाएँ ({count})", "ఫిల్టర్‌కు సరిపోయే కూపన్లను తొలగించండి ({count})"],
   "Coupons to delete": ["हटाए जाने वाले कूपन", "తొలగించబోయే కూపన్లు"],

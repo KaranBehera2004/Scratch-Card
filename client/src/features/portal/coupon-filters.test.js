@@ -20,6 +20,26 @@ test("WhatsApp search accepts full, formatted and partial numbers and does not m
   assert.deepEqual(filter({ number: "987abc" }), []);
 });
 
+test("coupon code search matches full or partial codes, ignores case and combines with existing filters", () => {
+  const cards = [
+    { ...rows[0], slug: "code-a", couponCode: "LUCKY-A1234", batchKey: "one:batch" },
+    { ...rows[1], slug: "code-b", couponCode: "LUCKY-B5678" },
+    { ...rows[2], slug: "code-c", couponCode: "SAVE25" },
+    { ...rows[3], slug: "missing-code", offerTitle: "LUCKY-A1234" },
+  ];
+  const run = values => filterCouponCards(cards, { ...EMPTY_COUPON_FILTERS, ...values }, now).map(card => card.slug);
+  assert.deepEqual(run({ code: " lucky-a1234 " }), ["code-a"]);
+  assert.deepEqual(run({ code: "a1234" }), ["code-a"]);
+  assert.deepEqual(run({ code: "LUCKY-" }), ["code-a", "code-b"]);
+  assert.deepEqual(run({ code: "LUCKY-", type: "individual" }), ["code-b"]);
+  assert.deepEqual(run({ code: "lucky-", type: "bulk", number: "43210", dateRange: "today",
+    branch: couponBranchKey(cards[0]), campaign: couponCampaignKey("Diwali") }), ["code-a"]);
+  assert.deepEqual(run({ code: "LUCKY-A1234", branch: couponBranchKey(cards[1]) }), []);
+  assert.deepEqual(run({ code: "DOES-NOT-EXIST" }), []);
+  assert.deepEqual(run({ code: "LUCKY-.*" }), []);
+  assert.deepEqual(run({ code: "   " }), cards.map(card => card.slug));
+});
+
 test("bulk and individual views use saved batch identity, not the phone number or coupon status", () => {
   const cards = [
     { ...rows[0], slug: "bulk-with-number", batchKey: "one:batch-1", status: "redeemed" },
