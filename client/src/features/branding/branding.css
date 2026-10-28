@@ -4,6 +4,7 @@
 .card-brand-header .card-brand-item { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; color: inherit; min-width: 0; text-align: center; }
 .card-brand-left { justify-self: end; }
 .card-brand-right { justify-self: start; }
+.card-brand-center { justify-self: center; }
 .card-brand-item.is-empty { width: 1px; min-height: 72px; }
 .brand-logo { display: inline-flex; align-items: center; justify-content: center; flex: none; width: clamp(104px, 10vw, 144px); height: 72px; overflow: visible; border-radius: 0; }
 .card-brand-header .brand-logo { color: inherit; transform: scale(var(--brand-logo-scale, 1)); transform-origin: center; transition: transform .16s ease; }
@@ -48,3 +49,8 @@
   .recipient-topbar:has(.card-brand-item:not(.is-empty)) { padding-top: 54px; height: 142px; }
   .recipient:has(.card-brand-item:not(.is-empty)) { padding-top: 170px; }
 }
+.card-brand-header .card-brand-item { transform: translate(calc(var(--brand-logo-x, 0) * 1%), calc(var(--brand-logo-y, 0) * 1%)); }
+.card-brand-item.is-draggable { position: relative; z-index: 1; cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; border-radius: 8px; outline: 1px dashed transparent; outline-offset: 4px; transition: outline-color .15s ease; }
+.card-brand-item.is-draggable:hover, .card-brand-item.is-draggable:focus-visible { outline-color: #ffffff80; }
+.card-brand-item.is-draggable:active { cursor: grabbing; z-index: 2; }
+.card-brand-item.is-draggable img { pointer-events: none; }

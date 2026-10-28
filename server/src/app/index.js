@@ -62,6 +62,7 @@ app.use("/api", (req, res, next) => {
 app.use("/api/cards/bulk", express.json({ limit: "1mb" }));
 app.use("/api/cards", express.json({ limit: "8mb" }));
 app.use("/api/portal/businesses/:businessId/brand-settings", express.json({ limit: "3mb" }));
+app.use("/api/scratch-images", express.json({ limit: "3mb" }));
 app.use(express.json({ limit: "256kb" }));
 // Express 5 leaves req.body undefined without a JSON body. Handlers read
 // optional fields directly, so give them an empty object instead of a TypeError.
@@ -86,12 +87,20 @@ const schema = new mongoose.Schema(
     ticketTextColor: { type: String, default: "#4b0024" },
     pageColor: { type: String, default: "#4b0024" },
     textColor: { type: String, default: "#fff8f5" },
+    scratchColor: { type: String, default: "#b8c0ce" },
+    scratchShineColor: { type: String, default: "#f8fafc" },
+    scratchTextColor: { type: String, default: "#30394b" },
+    scratchTitle: { type: String, maxlength: 40, default: "" },
+    scratchSubtitle: { type: String, maxlength: 60, default: "" },
+    scratchPattern: { type: Boolean, default: true },
+    scratchImage: { type: String, default: "" },
     businessId: { type: String, default: "impact-vibes", index: true },
     branchId: { type: String, default: "" },
     branchName: { type: String, maxlength: 60 },
     displayBrandId: String,
     normalBrand: mongoose.Schema.Types.Mixed,
     fixedBrand: mongoose.Schema.Types.Mixed,
+    centerBrand: mongoose.Schema.Types.Mixed,
     language: { type: String, enum: ["en", "hi", "te"], default: "en" },
     campaignName: { type: String, default: "" },
     expiresAt: { type: Date, default: null },
@@ -515,7 +524,9 @@ function publicCard(card) {
   // Explicitly allow presentation fields only. Customer contact details are private.
   const fields = ["slug", "senderName", "shareTitle", "headline", "offerTitle", "description",
     "claimUrl", "accentColor", "pageColor", "textColor", "ticketColor", "ticketTextColor", "businessId",
-    "branchId", "branchName", "language", "campaignName", "expiresAt", "createdAt", "normalBrand", "fixedBrand"];
+    "scratchColor", "scratchShineColor", "scratchTextColor", "scratchTitle", "scratchSubtitle",
+    "scratchPattern", "scratchImage",
+    "branchId", "branchName", "language", "campaignName", "expiresAt", "createdAt", "normalBrand", "fixedBrand", "centerBrand"];
   const revealed = Boolean(card.redeemedAt || card.scratchedAt);
   return {
     ...Object.fromEntries(fields.map((key) => [key, card[key]])),
@@ -619,6 +630,16 @@ function cardLogoScale(value, label) {
   return scale;
 }
 
+// Dragged header image positions, as a percentage of the image's own box.
+function cardLogoOffset(value, label) {
+  if (value === undefined || value === null || value === "") return 0;
+  const offset = Number(value);
+  if (!Number.isInteger(offset) || offset < -150 || offset > 150)
+    throw bad(`${label} image position is outside the card header.`);
+  return offset;
+}
+const logoOffset = (x, y) => x || y ? { offsetX: x, offsetY: y } : {};
+
 function buildCard(body, business, bulk = false, allowExpired = false) {
   if (["branch-only", "brand-only"].includes(business.structureMode) && body.displayBrandId)
     throw bad("This workspace uses one structure level. Select a branch or brand only.");
@@ -645,9 +666,19 @@ function buildCard(body, business, bulk = false, allowExpired = false) {
     staffRedeemedDepartmentId: "", staffRedeemedBy: "", staffRedeemedByName: "", staffRedemptionMethod: "",
     normalLogoScale: cardLogoScale(body.normalLogoScale, "Selected brand"),
     fixedLogoScale: cardLogoScale(body.fixedLogoScale, "Fixed brand"),
+    centerLogoScale: cardLogoScale(body.centerLogoScale, "Middle"),
+    ...Object.fromEntries([["normalLogoX", "Selected brand"], ["normalLogoY", "Selected brand"],
+      ["centerLogoX", "Middle"], ["centerLogoY", "Middle"], ["fixedLogoX", "Fixed brand"], ["fixedLogoY", "Fixed brand"]]
+      .map(([key, label]) => [key, cardLogoOffset(body[key], label)])),
     ...safeShareImage(body.shareImage),
     ...Object.fromEntries([["accentColor", "#ff9b72"], ["pageColor", "#4b0024"], ["textColor", "#fff8f5"], ["ticketColor", "#ffd5bd"], ["ticketTextColor", "#4b0024"]]
       .map(([key, fallback]) => [key, /^#[0-9a-f]{6}$/i.test(body[key]) ? body[key] : fallback])),
+    ...Object.fromEntries([["scratchColor", "#b8c0ce"], ["scratchShineColor", "#f8fafc"], ["scratchTextColor", "#30394b"]]
+      .map(([key, fallback]) => [key, /^#[0-9a-f]{6}$/i.test(body[key]) ? body[key] : fallback])),
+    scratchTitle: clean(body.scratchTitle, 40), scratchSubtitle: clean(body.scratchSubtitle, 60),
+    scratchPattern: body.scratchPattern !== false,
+    // Only a URL returned by the scratch-image upload, never arbitrary image hosts.
+    scratchImage: /^\/api\/brand-images\/[a-f0-9]{64}$/.test(body.scratchImage || "") ? body.scratchImage : "",
   };
   if (!card.senderName || !card.headline || !card.offerTitle || !card.description)
     throw bad("Please complete all required fields.");
@@ -657,7 +688,7 @@ const batchCard = (card) => Object.fromEntries([
   "slug", "branchId", "branchName", "couponCode", "offerTitle", "description",
   "campaignName", "expiresAt", "createdAt", "openedAt", "scratchedAt", "redeemedAt", "staffRedeemedAt",
   "staffRedeemedBranchId", "staffRedeemedDepartmentId", "customerPhone", "deletedAt",
-  "displayBrandId", "normalBrand", "fixedBrand",
+  "displayBrandId", "normalBrand", "fixedBrand", "centerBrand",
 ].map((key) => [key, card[key] ?? null]));
 function batchResult(key, fingerprint, cards, replayed = false) {
   return { batchId: key, fingerprint, savedCount: cards.length, replayed,
@@ -676,11 +707,13 @@ async function findBatch(key) {
 async function saveGeneration({ base, branches, total, maximum, batchKey, fingerprint, recipients = null, requestedCode = "" }) {
   const brandBusiness = await getBusiness(base.businessId);
   const fixedBrand = brandBusiness.brandSettings?.fixed || null;
+  const centerBrand = brandBusiness.brandSettings?.center || null;
   const showCardImages = brandBusiness.cardImagesEnabled !== false;
   if (base.displayBrandId && !brandBusiness.departments?.some(item => item.departmentId === base.displayBrandId && item.status === "active"))
     throw bad("The selected brand is no longer active. No coupons were saved.");
   const makeCards = (existing = []) => {
-    const { normalLogoScale = 100, fixedLogoScale = 100, ...cardBase } = base;
+    const { normalLogoScale = 100, fixedLogoScale = 100, centerLogoScale = 100, normalLogoX = 0, normalLogoY = 0,
+      centerLogoX = 0, centerLogoY = 0, fixedLogoX = 0, fixedLogoY = 0, ...cardBase } = base;
     const codes = new Set(existing.map((card) => card.couponCode)), slugs = new Set(existing.map((card) => card.slug));
     if (requestedCode && codes.has(requestedCode)) throw bad("This coupon code already exists. Choose another code or leave it blank.", 409);
     const cards = [], createdAt = new Date().toISOString();
@@ -695,9 +728,11 @@ async function saveGeneration({ base, branches, total, maximum, batchKey, finger
       const brand = brandBusiness.departments?.find(item => item.departmentId === (base.displayBrandId || unit?.departmentId) && item.status === "active");
       cards.push({ ...cardBase,
         normalBrand: brand ? { name: brand.name, image: showCardImages ? brand.image || "" : "",
-          ...(normalLogoScale !== 100 ? { logoScale: normalLogoScale } : {}) } : null,
+          ...(normalLogoScale !== 100 ? { logoScale: normalLogoScale } : {}), ...logoOffset(normalLogoX, normalLogoY) } : null,
         fixedBrand: fixedBrand?.name ? { name: fixedBrand.name, image: showCardImages ? fixedBrand.image || "" : "",
-          ...(fixedLogoScale !== 100 ? { logoScale: fixedLogoScale } : {}) } : null,
+          ...(fixedLogoScale !== 100 ? { logoScale: fixedLogoScale } : {}), ...logoOffset(fixedLogoX, fixedLogoY) } : null,
+        centerBrand: centerBrand?.name ? { name: centerBrand.name, image: showCardImages ? centerBrand.image || "" : "",
+          ...(centerLogoScale !== 100 ? { logoScale: centerLogoScale } : {}), ...logoOffset(centerLogoX, centerLogoY) } : null,
         branchId: branch.branchId, branchName: clean(branch.branchName, 60), slug, couponCode, createdAt,
         ...(recipientsByBranch ? { customerPhone: recipientsByBranch.get(branch.branchId)[index].customerPhone } : {}),
         ...(batchKey ? { batchKey, batchFingerprint: fingerprint } : {}) });
@@ -996,6 +1031,14 @@ app.post("/api/cards", authenticate, async (req, res, next) => {
     res
       .status(201)
       .json({ slug: savedCard.slug, couponCode: savedCard.couponCode });
+  } catch (error) {
+    next(error);
+  }
+});
+app.post("/api/scratch-images", authenticate, async (req, res, next) => {
+  try {
+    if (["viewer", "branch-staff"].includes(req.user.role)) throw bad("This account cannot create scratch cards.", 403);
+    res.status(201).json({ image: await saveBrand.saveScratchImage(req.body.image) });
   } catch (error) {
     next(error);
   }

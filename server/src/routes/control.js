@@ -1046,6 +1046,16 @@ export function installControls(app, context) {
   app.patch("/api/portal/businesses/:businessId/brand-settings", auth, route(async (req, res) => {
     owner(req);
     const id = scope(req), business = await getBusiness(id);
+    // The middle card image is saved on its own, beside the fixed brand.
+    if (req.body.center !== undefined) {
+      const center = await saveBrand(req.body.center, business.brandSettings?.center);
+      await updateBusiness(id, {
+        brandSettings: { ...business.brandSettings, center },
+        ...(center.image ? { cardImagesEnabled: true } : {}),
+      });
+      await audit(req, "Middle card image updated", id, center.name || "Middle card image removed");
+      return res.json({ ok: true, center });
+    }
     const fixed = await saveBrand(req.body.fixed, business.brandSettings?.fixed);
     await updateBusiness(id, {
       brandSettings: { ...business.brandSettings, fixed },
