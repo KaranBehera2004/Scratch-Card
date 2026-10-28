@@ -3,6 +3,23 @@ import { createContext, useContext } from "react";
 // Only interface copy belongs here. Business names, branches, campaigns, offers,
 // coupon identifiers and saved card languages must never be rewritten by UI locale.
 const copy = {
+  "Brand settings": ["ब्रांड सेटिंग्स", "బ్రాండ్ సెట్టింగ్‌లు"],
+  "Brand controls": ["ब्रांड नियंत्रण", "బ్రాండ్ నియంత్రణలు"],
+  "Staff by brand": ["ब्रांड के अनुसार स्टाफ", "బ్రాండ్ వారీగా సిబ్బంది"],
+  "Brand name": ["ब्रांड का नाम", "బ్రాండ్ పేరు"],
+  "Department name": ["विभाग का नाम", "విభాగం పేరు"],
+  "Brand image": ["ब्रांड की छवि", "బ్రాండ్ చిత్రం"],
+  "Retry image": ["छवि फिर से लोड करें", "చిత్రాన్ని మళ్లీ లోడ్ చేయండి"],
+  "This brand image could not be loaded. Retry, or upload the logo again and save the brand.": ["ब्रांड की छवि लोड नहीं हुई। फिर कोशिश करें या लोगो दोबारा अपलोड करके ब्रांड सहेजें।", "బ్రాండ్ చిత్రం లోడ్ కాలేదు. మళ్లీ ప్రయత్నించండి లేదా లోగోను తిరిగి అప్‌లోడ్ చేసి బ్రాండ్‌ను సేవ్ చేయండి."],
+  "Select brand": ["ब्रांड चुनें", "బ్రాండ్‌ను ఎంచుకోండి"],
+  "Fixed brand": ["स्थायी ब्रांड", "స్థిర బ్రాండ్"],
+  "Selectable brand": ["चुनने योग्य ब्रांड", "ఎంచుకోగల బ్రాండ్"],
+  "Save brand": ["ब्रांड सहेजें", "బ్రాండ్‌ను సేవ్ చేయండి"],
+  "Scratch-card branding": ["स्क्रैच-कार्ड ब्रांडिंग", "స్క్రాచ్ కార్డ్ బ్రాండింగ్"],
+  "Automatic brand from department": ["विभाग से स्वचालित ब्रांड", "విభాగం నుండి స్వయంచాలక బ్రాండ్"],
+  "Add brands & departments": ["ब्रांड और विभाग जोड़ें", "బ్రాండ్‌లు మరియు విభాగాలను జోడించండి"],
+  "Remove image": ["छवि हटाएँ", "చిత్రాన్ని తీసివేయండి"],
+  "Clear fixed brand": ["स्थायी ब्रांड साफ़ करें", "స్థిర బ్రాండ్‌ను తీసివేయండి"],
   "Search coupon code": ["कूपन कोड खोजें", "కూపన్ కోడ్ వెతకండి"],
   "Enter coupon code…": ["कूपन कोड दर्ज करें…", "కూపన్ కోడ్ నమోదు చేయండి…"],
   "Delete matching coupons": ["फ़िल्टर से मेल खाने वाले कूपन हटाएँ", "ఫిల్టర్‌కు సరిపోయే కూపన్లను తొలగించండి"],
@@ -334,7 +351,7 @@ const copy = {
   "The Scratch-card API did not respond. Restart npm run dev and open the URL printed in the terminal.": ["स्क्रैच-कार्ड सर्वर ने जवाब नहीं दिया। npm run dev दोबारा चलाएँ और टर्मिनल में दिया लिंक खोलें।", "స్క్రాచ్ కార్డ్ సర్వర్ స్పందించలేదు. npm run dev మళ్లీ నడిపి టెర్మినల్‌లోని లింక్ తెరవండి."],
 };
 
-export function workspaceTranslator(language = "en") {
+export function workspaceTranslator(language = "en", structureMode = "brand") {
   const index = { hi: 0, te: 1 }[language];
   return function translate(text, values = {}) {
     const limit = typeof text === "string" && text.match(/^(card|branch|account) limit reached \((\d+)\)\. Contact your administrator\.$/);
@@ -347,10 +364,25 @@ export function workspaceTranslator(language = "en") {
       ? translated.replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match)
       : translated;
     if (typeof populated !== "string") return populated;
+    if (structureMode === "brand-only") return populated
+      .replace(/शाखाओं/g, "ब्रांडों").replace(/शाखाएँ/g, "ब्रांड").replace(/शाखाएं/g, "ब्रांड")
+      .replace(/शाखा/g, "ब्रांड")
+      .replace(/శాఖలను/g, "బ్రాండ్‌లను").replace(/శాఖల్లో/g, "బ్రాండ్‌లలో")
+      .replace(/శాఖలు/g, "బ్రాండ్‌లు").replace(/శాఖల/g, "బ్రాండ్‌ల")
+      .replace(/శాఖను/g, "బ్రాండ్‌ను").replace(/శాఖకు/g, "బ్రాండ్‌కు")
+      .replace(/శాఖలో/g, "బ్రాండ్‌లో").replace(/శాఖ/g, "బ్రాండ్")
+      .replace(/\bBRANCHES\b/g, "BRANDS").replace(/\bBRANCH\b/g, "BRAND")
+      .replace(/\bBranches\b/g, "Brands").replace(/\bBranch\b/g, "Brand")
+      .replace(/\bbranches\b/g, "brands").replace(/\bbranch\b/g, "brand");
+    if (!["brand", "brand-department", "branch-department"].includes(structureMode)) return populated;
+    const brandParent = structureMode !== "branch-department";
+    // New brand-setting copy uses the current terminology already.
+    if (/\bbrands?\b/i.test(text)) return populated;
     // Persisted/API field names remain unchanged for backwards compatibility.
-    // In the product language, however, a physical place is a Branch and the
+    // In the product language, a physical place is now a Brand and the
     // Sales/Service unit inside it is a Department.
-    if (language === "hi" && localized) return populated
+    if (language === "hi" && localized) {
+      const swapped = populated
       .replace(/विभागों/g, "__JC_HI_BRANCHES__")
       .replace(/विभाग/g, "__JC_HI_BRANCH__")
       .replace(/शाखाओं/g, "विभागों")
@@ -358,7 +390,11 @@ export function workspaceTranslator(language = "en") {
       .replace(/शाखा/g, "विभाग")
       .replace(/__JC_HI_BRANCHES__/g, "शाखाओं")
       .replace(/__JC_HI_BRANCH__/g, "शाखा");
-    if (language === "te" && localized) return populated
+      return brandParent ? swapped.replace(/शाखाओं/g, "ब्रांडों")
+        .replace(/शाखाएँ/g, "ब्रांड").replace(/शाखा/g, "ब्रांड") : swapped;
+    }
+    if (language === "te" && localized) {
+      const swapped = populated
       .replace(/విభాగాలను/g, "__JC_TE_BRANCHES_ACC__")
       .replace(/విభాగాల్లో/g, "__JC_TE_BRANCHES_IN__")
       .replace(/విభాగాలు/g, "__JC_TE_BRANCHES__")
@@ -383,7 +419,16 @@ export function workspaceTranslator(language = "en") {
       .replace(/__JC_TE_BRANCH_TO__/g, "శాఖకు")
       .replace(/__JC_TE_BRANCH_IN__/g, "శాఖలో")
       .replace(/__JC_TE_BRANCH__/g, "శాఖ");
-    return populated
+      return brandParent ? swapped.replace(/శాఖలను/g, "బ్రాండ్‌లను")
+      .replace(/శాఖల్లో/g, "బ్రాండ్‌లలో")
+      .replace(/శాఖలు/g, "బ్రాండ్‌లు")
+      .replace(/శాఖల/g, "బ్రాండ్‌ల")
+      .replace(/శాఖను/g, "బ్రాండ్‌ను")
+      .replace(/శాఖకు/g, "బ్రాండ్‌కు")
+      .replace(/శాఖలో/g, "బ్రాండ్‌లో")
+      .replace(/శాఖ/g, "బ్రాండ్") : swapped;
+    }
+    const swapped = populated
       .replace(/\bDEPARTMENTS\b/g, "__JC_UPPER_BRANCHES__")
       .replace(/\bDEPARTMENT\b/g, "__JC_UPPER_BRANCH__")
       .replace(/\bDepartments\b/g, "__JC_BRANCHES__")
@@ -395,13 +440,14 @@ export function workspaceTranslator(language = "en") {
       .replace(/\bBranches\b/g, "Departments")
       .replace(/\bBranch\b/g, "Department")
       .replace(/\bbranches\b/g, "departments")
-      .replace(/\bbranch\b/g, "department")
-      .replace(/__JC_UPPER_BRANCHES__/g, "BRANCHES")
-      .replace(/__JC_UPPER_BRANCH__/g, "BRANCH")
-      .replace(/__JC_BRANCHES__/g, "Branches")
-      .replace(/__JC_BRANCH__/g, "Branch")
-      .replace(/__jc_branches__/g, "branches")
-      .replace(/__jc_branch__/g, "branch");
+      .replace(/\bbranch\b/g, "department");
+    return swapped
+      .replace(/__JC_UPPER_BRANCHES__/g, brandParent ? "BRANDS" : "BRANCHES")
+      .replace(/__JC_UPPER_BRANCH__/g, brandParent ? "BRAND" : "BRANCH")
+      .replace(/__JC_BRANCHES__/g, brandParent ? "Brands" : "Branches")
+      .replace(/__JC_BRANCH__/g, brandParent ? "Brand" : "Branch")
+      .replace(/__jc_branches__/g, brandParent ? "brands" : "branches")
+      .replace(/__jc_branch__/g, brandParent ? "brand" : "branch");
   };
 }
 

@@ -130,6 +130,18 @@ test("SaaS permissions, persistence, and one-time rewards", async (t) => {
       });
       assert.equal(result.status, 201, result.message);
       otherId = result.business.businessId;
+      assert.equal(result.business.structureMode, "branch-department");
+      assert.equal(result.business.cardImagesEnabled, true);
+      assert.equal((await request(`/api/portal/businesses/${otherId}`, owner, "PATCH", { structureMode: "brand-department" })).status, 403);
+      assert.equal((await request(`/api/portal/businesses/${otherId}`, admin, "PATCH", { structureMode: "wrong" })).status, 400);
+      assert.equal((await request(`/api/portal/businesses/${otherId}`, admin, "PATCH", { cardImagesEnabled: "yes" })).status, 400);
+      assert.equal((await request(`/api/portal/businesses/${otherId}`, admin, "PATCH", {
+        structureMode: "brand-department", cardImagesEnabled: true,
+      })).status, 200);
+      const configuredBusinesses = (await request("/api/portal/businesses", admin)).businesses;
+      assert.equal(configuredBusinesses.find(item => item.businessId === otherId).structureMode, "brand-department");
+      assert.equal(configuredBusinesses.find(item => item.businessId === otherId).cardImagesEnabled, true);
+      assert.notEqual(configuredBusinesses.find(item => item.businessId === "impact-vibes").structureMode, "brand-department");
       assert.equal(result.business.passwordHash, undefined);
       assert.deepEqual(result.business.limits, {
         card: 100,

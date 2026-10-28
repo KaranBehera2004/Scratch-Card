@@ -13,6 +13,7 @@ import { normalizeWhatsAppNumber, whatsAppCardUrl } from "../../../server/shared
 import { scratchApiUrl, scratchCardUrl, scratchShareUrl } from "../../../server/shared/urls.js";
 import { publicCardProblem } from "../../../server/shared/public-card-errors.js";
 import { createScratchSurface } from "../features/scratch/scratch-surface.js";
+import CardBrandHeader from "../features/branding/CardBrandHeader.jsx";
 import { pendingBulk, savedBulkDraft, useBulkGeneration, BranchQuantities, BulkResults } from "../features/bulk/BulkGenerate.jsx";
 import "../styles/bulk.css";
 import "../styles/styles.css";
@@ -21,6 +22,7 @@ import "../styles/card-typography.css";
 import "../styles/responsive.css";
 import "../styles/public-card-errors.css";
 import "../styles/brand.css";
+import "../styles/card-design.css";
 
 // Some in-app browsers and privacy modes block web storage, and touching it
 // throws. Sign-in, language and shared cards must keep working in memory.
@@ -49,6 +51,7 @@ const TRANSLATIONS = {
   en: {
     branch: "Department",
     allBranches: "All departments",
+    allBrands: "All brands",
     language: "Language",
     creatorTagline: "Scratch-card link creator",
     createKicker: "CREATE A CARD",
@@ -68,6 +71,8 @@ const TRANSLATIONS = {
     pageBackground: "Page background",
     messageText: "Message text",
     scratchCard: "Scratch card",
+    rewardCardColor: "Reward card color",
+    rewardCardText: "Reward card text",
     creating: "Creating your link…",
     createLink: "Create scratch-card link",
     couponActivity: "COUPON ACTIVITY",
@@ -350,6 +355,45 @@ const TRANSLATIONS = {
 const cardTranslator = (language) => (key) =>
   TRANSLATIONS[language]?.[key] || TRANSLATIONS.en[key] || key;
 
+const CARD_THEME_FIELDS = ["pageColor", "textColor", "accentColor", "ticketColor", "ticketTextColor"];
+const CARD_LOGO_SCALE_FIELDS = ["normalLogoScale", "fixedLogoScale"];
+const cardThemeKey = (businessId) => `scratch-card-theme:${businessId}`;
+function readCardTheme(businessId) {
+  try {
+    const saved = JSON.parse(storage.get("localStorage", cardThemeKey(businessId)) || "{}");
+    const colors = {
+      ...Object.fromEntries(CARD_THEME_FIELDS.filter(key => /^#[\da-f]{6}$/i.test(saved[key] || ""))
+        .map(key => [key, saved[key]])),
+      ...Object.fromEntries(CARD_LOGO_SCALE_FIELDS.filter(key => Number.isFinite(saved[key]) && saved[key] >= 60 && saved[key] <= 140)
+        .map(key => [key, saved[key]])),
+    };
+    if (!colors.ticketColor || !colors.ticketTextColor) {
+      const priorPreset = CARD_THEMES.find(theme => ["pageColor", "textColor", "accentColor"]
+        .every(key => colors[key]?.toLowerCase() === theme[key].toLowerCase()));
+      if (!colors.ticketColor && priorPreset) colors.ticketColor = priorPreset.ticketColor;
+      if (!colors.ticketTextColor)
+        colors.ticketTextColor = priorPreset?.ticketTextColor || contrastColor(colors.ticketColor || "#ffd5bd");
+    }
+    return colors;
+  } catch { return {}; }
+}
+function saveCardTheme(businessId, colors) {
+  const saved = { ...readCardTheme(businessId) };
+  for (const key of CARD_THEME_FIELDS)
+    if (/^#[\da-f]{6}$/i.test(colors[key] || "")) saved[key] = colors[key];
+  for (const key of CARD_LOGO_SCALE_FIELDS)
+    if (Number.isFinite(colors[key]) && colors[key] >= 60 && colors[key] <= 140) saved[key] = colors[key];
+  storage.set("localStorage", cardThemeKey(businessId), JSON.stringify(saved));
+}
+function contrastColor(hex) {
+  const rgb = hex?.match(/^#([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i);
+  if (!rgb) return "#231622";
+  const channels = rgb.slice(1).map(value => parseInt(value, 16) / 255)
+    .map(value => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4);
+  const luminance = channels[0] * .2126 + channels[1] * .7152 + channels[2] * .0722;
+  return luminance < .36 ? "#fff8f5" : "#231622";
+}
+
 const CARD_DEFAULT_TEXT = {
   en: { headline: "A little surprise for you", description: "On your next order", discount: "OFF" },
   hi: { headline: "आपके लिए एक छोटा सा सरप्राइज़", description: "आपके अगले ऑर्डर पर", discount: "छूट" },
@@ -428,11 +472,11 @@ function Celebration() {
   );
 }
 
-function RecipientTopbar({ brand }) {
+function RecipientTopbar({ brand, normalBrand, fixedBrand }) {
   return (
     <header className="recipient-topbar">
       <a className="recipient-brand" href="/">
-        <span>✦</span> {brand}
+        <CardBrandHeader businessName={brand} normalBrand={normalBrand} fixedBrand={fixedBrand} />
       </a>
     </header>
   );
@@ -456,10 +500,21 @@ const DEFAULT_CARD = {
   description: "On your next order",
   couponCode: generateDraftCoupon(),
   claimUrl: "",
-  accentColor: "#f6a800",
-  pageColor: "#002b5c",
-  textColor: "#ffffff",
+  accentColor: "#ff9b72",
+  ticketColor: "#ffd5bd",
+  ticketTextColor: "#4b0024",
+  pageColor: "#4b0024",
+  textColor: "#fff8f5",
+  normalLogoScale: 100,
+  fixedLogoScale: 100,
 };
+
+const CARD_THEMES = [
+  { name: "Plum", pageColor: "#4b0024", textColor: "#fff8f5", accentColor: "#ff9b72", ticketColor: "#ffd5bd", ticketTextColor: "#4b0024" },
+  { name: "Navy", pageColor: "#002b5c", textColor: "#ffffff", accentColor: "#f6a800", ticketColor: "#ffe0b0", ticketTextColor: "#002b5c" },
+  { name: "Emerald", pageColor: "#073d35", textColor: "#f4fff9", accentColor: "#e6b85c", ticketColor: "#e8eac6", ticketTextColor: "#073d35" },
+  { name: "Midnight", pageColor: "#17152f", textColor: "#f8f4ff", accentColor: "#bd8cff", ticketColor: "#ead8f5", ticketTextColor: "#17152f" },
+];
 
 const SHARE_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const MAX_SHARE_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -582,31 +637,41 @@ function ScratchCard({ card, onReveal = () => {}, preview = false, t, onCopyCoup
   const paint = useCallback((ctx, width, height) => {
     ctx.globalCompositeOperation = "source-over";
     const gradient = ctx.createLinearGradient(0, 0, width, height);
-    gradient.addColorStop(0, "#eef0f5");
-    gradient.addColorStop(0.48, "#a7adbd");
-    gradient.addColorStop(1, "#f7f8fa");
+    gradient.addColorStop(0, "#b8c0ce");
+    gradient.addColorStop(0.2, "#f8fafc");
+    gradient.addColorStop(0.48, "#a4adbc");
+    gradient.addColorStop(0.76, "#eef1f6");
+    gradient.addColorStop(1, "#929cab");
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, width, height);
-    ctx.fillStyle = "rgba(255,255,255,.24)";
-    for (let x = -height; x < width + height; x += 28) {
+    ctx.fillStyle = "rgba(255,255,255,.3)";
+    for (let x = -height; x < width + height; x += 34) {
       ctx.save();
       ctx.translate(x, 0);
       ctx.rotate(Math.PI / 4);
-      ctx.fillRect(0, -height, 8, height * 3);
+      ctx.fillRect(0, -height, 10, height * 3);
       ctx.restore();
     }
+    const badgeWidth = Math.min(230, width - 40), badgeHeight = 72;
+    const badgeX = (width - badgeWidth) / 2, badgeY = (height - badgeHeight) / 2;
+    ctx.fillStyle = "rgba(255,255,255,.48)";
+    ctx.strokeStyle = "rgba(61,70,88,.2)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.roundRect(badgeX, badgeY, badgeWidth, badgeHeight, 18);
+    ctx.fill(); ctx.stroke();
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillStyle = "#42485b";
-    ctx.font = "700 16px DM Sans, system-ui";
+    ctx.fillStyle = "#30394b";
+    ctx.font = "800 15px DM Sans, system-ui";
     ctx.fillText(
       `✦  ${t("scratchHere")}  ✦`,
       width / 2,
-      height / 2 - 7,
+      height / 2 - 10,
     );
-    ctx.fillStyle = "#62697d";
+    ctx.fillStyle = "#657084";
     ctx.font = "500 12px DM Sans, system-ui";
-    ctx.fillText(t("swipeFinger"), width / 2, height / 2 + 18);
+    ctx.fillText(t("swipeFinger"), width / 2, height / 2 + 16);
   }, [t]);
   useEffect(() => {
     if (preview || alreadyScratched || !canvasRef.current) return;
@@ -621,13 +686,15 @@ function ScratchCard({ card, onReveal = () => {}, preview = false, t, onCopyCoup
   return (
     <div
       className={`scratch-shell ${preview ? "is-preview" : ""}${card.expired ? " is-expired" : ""}${card.redeemed ? " is-redeemed" : ""}`}
-      style={{ "--accent": card.accentColor || DEFAULT_CARD.accentColor }}
+      style={{ "--accent": card.accentColor || DEFAULT_CARD.accentColor,
+        "--ticket-color": card.ticketColor || DEFAULT_CARD.ticketColor,
+        "--ticket-ink": card.ticketTextColor || DEFAULT_CARD.ticketTextColor }}
     >
       <i className="ticket-edge left" />
       <i className="ticket-edge right" />
       <div className={`scratch-card${card.branchName ? " has-branch" : ""}`} ref={cardRef}>
         <div className="offer-content">
-          {card.branchName && <div className="offer-branch">{card.branchId ? card.branchName : t("allBranches")}</div>}
+          <div className="offer-branch">{card.brandName || card.normalBrand?.name || (card.branchId ? card.branchName : t("allBrands"))}</div>
           <span>{t("reward")}</span>
           <strong>{card.offerTitle}</strong>
           <p>{card.description}</p>
@@ -729,17 +796,19 @@ function Creator({
     claimUrl: business?.website || "",
     couponCode: generateDraftCoupon(),
     branchId: "",
+    displayBrandId: "",
     campaignName: "",
     customerPhone: "",
     expiresAt: "",
     language: "en",
     ...Object.fromEntries(Object.entries(savedBulkDraft(business.businessId)?.form || {}).filter(([key]) =>
-      [...Object.keys(DEFAULT_CARD), "campaignName", "customerPhone", "language", "expiresAt"].includes(key)
+      [...Object.keys(DEFAULT_CARD), "displayBrandId", "campaignName", "customerPhone", "language", "expiresAt"].includes(key)
         && !["senderName", "couponCode"].includes(key))),
     // Restore shared form fields only, never request-only recipients, branch rows or retry keys.
     ...Object.fromEntries(Object.entries(pendingBulk(business.businessId) || {}).filter(([key]) =>
-      [...Object.keys(DEFAULT_CARD), "campaignName", "customerPhone", "language"].includes(key)
+      [...Object.keys(DEFAULT_CARD), "displayBrandId", "campaignName", "customerPhone", "language"].includes(key)
         && key !== "couponCode")),
+    ...readCardTheme(business.businessId),
     expiresAt: pendingBulk(business.businessId)?.expiresAt
       ? (() => { const date = new Date(pendingBulk(business.businessId).expiresAt); return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16); })()
       : pendingBulk(business.businessId) ? "" : savedBulkDraft(business.businessId)?.form?.expiresAt || "",
@@ -763,12 +832,29 @@ function Creator({
   const branchName = (business?.branches || []).find(
     (branch) => branch.branchId === (isBulk ? bulk.previewId : form.branchId),
   )?.name || cardT("allBranches");
+  const previewBranch = business?.branches?.find(item => item.branchId === (isBulk ? bulk.previewId : form.branchId));
+  const normalBrand = business?.departments?.find(item => item.departmentId === previewBranch?.departmentId && item.status === "active");
+  const fixedBrand = business?.brandSettings?.fixed;
+  const cardImagesEnabled = business?.cardImagesEnabled !== false;
+  const structureMode = business?.structureMode === "branch" ? "branch-department"
+    : business?.structureMode === "brand" || !business?.structureMode ? "brand-department" : business.structureMode;
+  const onlyStructure = structureMode.endsWith("-only");
+  const brandStructure = structureMode.startsWith("brand");
   const update = (event) => {
-    if (event.target.name !== "senderName")
+    if (event.target.name !== "senderName") {
+      if (CARD_THEME_FIELDS.includes(event.target.name))
+        saveCardTheme(business.businessId, { [event.target.name]: event.target.value });
       setForm((value) => ({
         ...value,
         [event.target.name]: event.target.value,
       }));
+    }
+  };
+  const applyCardTheme = (theme) => {
+    const colors = { pageColor: theme.pageColor, textColor: theme.textColor,
+      accentColor: theme.accentColor, ticketColor: theme.ticketColor, ticketTextColor: theme.ticketTextColor };
+    saveCardTheme(business.businessId, colors);
+    setForm(value => ({ ...value, ...colors }));
   };
   const chooseShareImage = (event) => {
     const file = event.target.files?.[0];
@@ -830,7 +916,7 @@ function Creator({
     try {
       const encodedShareImage = shareImage ? await imageDataUrl(shareImage) : "";
       const data = await portalApi("/api/cards", token, "POST", {
-        ...form,
+        ...(({ displayBrandId: _displayBrandId, ...automaticBrandForm }) => automaticBrandForm)(form),
         customerPhone,
         shareImage: encodedShareImage,
         expiresAt: form.expiresAt
@@ -917,9 +1003,9 @@ function Creator({
                 {ui("Changes only the card, not the dashboard. Default text is translated; enter custom messages in your chosen language.")}
               </span>
               {!isBulk && <label>
-                <span>{t("branch")}</span>
-                <select name="branchId" value={form.branchId} onChange={update}>
-                  <option value="">{t("allBranches")}</option>
+                <span>Brand &amp; Department</span>
+                <select name="branchId" value={form.branchId} required={onlyStructure} onChange={update}>
+                  <option value="">{onlyStructure ? ui("Select branch") : ui("All branches")}</option>
                   {(() => {
                     const active = (business?.branches || []).filter((branch) => branch.status === "active");
                     const groups = (business?.departments || []).map((department) => ({
@@ -1063,11 +1149,23 @@ function Creator({
             {isBulk && <BranchQuantities bulk={bulk} business={business} onManageBranches={onManageBranches} />}
             <fieldset className="theme-panel">
               <legend>{t("cardTheme")}</legend>
+              <div className="theme-presets" aria-label="Card theme presets">
+                {CARD_THEMES.map(theme => {
+                  const selected = ["pageColor", "textColor", "accentColor", "ticketColor", "ticketTextColor"].every(key => form[key].toLowerCase() === theme[key].toLowerCase());
+                  return <button key={theme.name} type="button" className={selected ? "is-selected" : ""}
+                    aria-pressed={selected} onClick={() => applyCardTheme(theme)}>
+                    <i style={{ "--theme-page": theme.pageColor, "--theme-accent": theme.accentColor, "--theme-ticket": theme.ticketColor }} />
+                    {theme.name}
+                  </button>;
+                })}
+              </div>
               <div className="theme-controls">
                 {[
                   ["pageColor", "pageBackground"],
                   ["textColor", "messageText"],
                   ["accentColor", "scratchCard"],
+                  ["ticketColor", "rewardCardColor"],
+                  ["ticketTextColor", "rewardCardText"],
                 ].map(([key, label]) => (
                   <label key={key}>
                     <span>{t(label)}</span>
@@ -1083,6 +1181,36 @@ function Creator({
                   </label>
                 ))}
               </div>
+              {cardImagesEnabled && <div className="logo-size-controls">
+                <label>
+                  <span>{ui("Selected brand logo size")}</span>
+                  <div className="logo-size-control-row">
+                    <input type="range" name="normalLogoScale" min="60" max="140" step="5"
+                      value={form.normalLogoScale} disabled={!normalBrand?.image}
+                      aria-label={ui("Selected brand logo size")}
+                      onChange={(event) => {
+                        const normalLogoScale = Number(event.target.value);
+                        saveCardTheme(business.businessId, { normalLogoScale });
+                        setForm(value => ({ ...value, normalLogoScale }));
+                      }} />
+                    <output>{form.normalLogoScale}%</output>
+                  </div>
+                </label>
+                <label>
+                  <span>{ui("Fixed brand logo size")}</span>
+                  <div className="logo-size-control-row">
+                    <input type="range" name="fixedLogoScale" min="60" max="140" step="5"
+                      value={form.fixedLogoScale} disabled={!fixedBrand?.image}
+                      aria-label={ui("Fixed brand logo size")}
+                      onChange={(event) => {
+                        const fixedLogoScale = Number(event.target.value);
+                        saveCardTheme(business.businessId, { fixedLogoScale });
+                        setForm(value => ({ ...value, fixedLogoScale }));
+                      }} />
+                    <output>{form.fixedLogoScale}%</output>
+                  </div>
+                </label>
+              </div>}
             </fieldset>
             </fieldset>
             <div className="creator-actions">
@@ -1117,14 +1245,21 @@ function Creator({
               "--page-color": form.pageColor,
               "--text-color": form.textColor,
               "--accent": form.accentColor,
+              "--ticket-color": form.ticketColor,
+              "--ticket-ink": form.ticketTextColor,
             }}
           >
-            <div className="phone-brand">✦ {form.senderName}</div>
+            <div className="phone-brand"><CardBrandHeader businessName={form.senderName}
+              normalBrand={normalBrand ? { ...normalBrand, image: cardImagesEnabled ? normalBrand.image : "", logoScale: form.normalLogoScale } : null}
+              fixedBrand={fixedBrand ? { ...fixedBrand, image: cardImagesEnabled ? fixedBrand.image : "", logoScale: form.fixedLogoScale } : null} /></div>
             <div className="mini">
               <GiftIcon /> {cardT("surprise")}
             </div>
             <h2>{form.headline || cardT("previewHeadline")}</h2>
-            <ScratchCard card={{ ...form, branchId: isBulk ? bulk.previewId : form.branchId, couponCode: isBulk ? "AUTO-GENERATED" : form.couponCode, branchName }} preview t={cardT} />
+            <ScratchCard card={{ ...form, normalBrand, brandName: brandStructure
+              ? normalBrand?.name || (previewBranch?.name || cardT("allBrands"))
+              : branchName,
+            branchId: isBulk ? bulk.previewId : form.branchId, couponCode: isBulk ? "AUTO-GENERATED" : form.couponCode, branchName }} preview t={cardT} />
             <small>{cardT("scratchLayer")}</small>
           </div>
         </aside>
@@ -1384,11 +1519,15 @@ function PublicCard({ slug, language: dashboardLanguage }) {
         "--accent": card.accentColor || DEFAULT_CARD.accentColor,
         "--page-color": card.pageColor || DEFAULT_CARD.pageColor,
         "--text-color": card.textColor || DEFAULT_CARD.textColor,
+        "--ticket-color": card.ticketColor || DEFAULT_CARD.ticketColor,
+        "--ticket-ink": card.ticketTextColor || DEFAULT_CARD.ticketTextColor,
       }}
     >
       {!card.expired && !card.redeemed && <Celebration />}
       <RecipientTopbar
         brand={card.senderName}
+        normalBrand={card.normalBrand}
+        fixedBrand={card.fixedBrand}
       />
       <button type="button" className="public-card-back" onClick={goBack}>
         <span aria-hidden="true">←</span> {t("goBack")}

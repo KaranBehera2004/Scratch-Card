@@ -87,6 +87,9 @@
 .p-shell[data-theme="dark"] .p-button.primary { background: #f6a800; color: #002b5c; border-color: #ffc342; }
 .p-shell[data-theme="dark"] .p-button.primary:hover { background: #ffbb2e; }
 .p-shell[data-theme="dark"] :is(.p-sidebar nav button.active, .p-sidebar nav button:hover, .p-avatar, .p-business-name > span, .p-row-actions button, .p-row-actions a, .p-quick button) { background: #0b365d; color: #ffd36a; border-color: #18517f; }
+.p-shell[data-theme="dark"] .p-business-actions > summary { background: #0b365d; color: #ffd36a; border-color: #18517f; }
+.p-shell[data-theme="dark"] .p-business-actions > summary:hover { background: #174770; }
+.p-shell[data-theme="dark"] .p-business-actions .p-row-actions { background: #1b2332; border-color: var(--border); }
 .p-shell[data-theme="dark"] .p-sidebar nav button:hover { background: #29364a; color: var(--ink); }
 .p-shell[data-theme="dark"] .p-sidebar nav button.active { background: var(--brand-orange); color: var(--brand-navy); }
 .p-shell[data-theme="dark"] .p-sidebar nav button.active > svg { color: var(--brand-navy); }

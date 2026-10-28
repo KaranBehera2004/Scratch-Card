@@ -592,6 +592,52 @@
 .p-row-actions a:hover {
   background: #eee9fd;
 }
+.p-business-actions { min-width: 132px; }
+.p-business-actions[open] { width: 390px; }
+.p-business-actions > summary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-width: 122px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f0f7fb;
+  color: var(--brand-blue);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+}
+.p-business-actions > summary::-webkit-details-marker { display: none; }
+.p-business-actions > summary:hover { background: #e2f0f8; }
+.p-business-actions > summary:focus-visible { outline: 2px solid var(--brand-blue); outline-offset: 2px; }
+.p-business-actions[open] > summary svg { transform: rotate(90deg); }
+.p-business-actions .p-row-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: 100%;
+  min-width: 0;
+  gap: 7px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface, #fff);
+}
+.p-business-actions .p-row-actions button {
+  justify-content: center;
+  min-height: 36px;
+  white-space: normal;
+  text-align: center;
+}
+.p-business-actions .p-row-actions .p-coupon-delete-all { grid-column: 1 / -1; }
+@media (max-width: 560px) {
+  .p-business-actions[open] { width: 100%; }
+  .p-business-actions .p-row-actions { grid-template-columns: minmax(0, 1fr); }
+  .p-business-actions .p-row-actions .p-coupon-delete-all { grid-column: auto; }
+}
 .p-staff-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .p-department-controls {
   display: grid;
@@ -633,6 +679,12 @@
   font-weight: 700;
   cursor: pointer;
 }
+.p-department-control button.brand-edit {
+  border-color: #c9d8e7;
+  background: #eef5fb;
+  color: #075a9c;
+}
+.p-department-control button.brand-edit:hover { background: #dcecf8; }
 .p-department-control button.restore {
   border-color: #b8ddca;
   background: #eef9f3;
@@ -1306,6 +1358,14 @@
 .p-editor-fields {
   display: grid;
   gap: 20px;
+}
+.p-editor-fields .p-field-help {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.45;
 }
 .p-dialog.p-business-editor {
   width: min(100%, 820px);
