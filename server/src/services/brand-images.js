@@ -51,7 +51,51 @@ export function brandImages(app, { dataDir, isMongo }) {
         "Cache-Control": "public, max-age=31536000, immutable" }).send(data);
     } catch (error) { next(error); }
   });
-  return async function saveBrand(input, current = {}) {
+  // Store each processed image once by content hash and return its public URL.
+  const persist = async (data) => {
+    const hash = imageHash(data);
+    if (isMongo()) {
+      const update = { $set: { hash, dataBase64: data.toString("base64") }, $unset: { data: "" } };
+      // The original collection has a unique `hash` index. Always populate
+      // it: omitting it allowed one document with hash:null, then every
+      // later logo hit a duplicate-key error. Support both historical
+      // ObjectId+hash records and the temporary digest-as-_id format.
+      let result = await Asset.collection.updateOne({ hash }, update);
+      if (!result.matchedCount) {
+        try { result = await Asset.collection.updateOne({ _id: hash }, update); }
+        catch (error) {
+          if (error.code !== 11000) throw error;
+          result = await Asset.collection.updateOne({ hash }, update);
+        }
+      }
+      if (!result.matchedCount) {
+        try { await Asset.collection.updateOne({ hash }, update, { upsert: true }); }
+        catch (error) {
+          if (error.code !== 11000) throw error;
+          await Asset.collection.updateOne({ hash }, update);
+        }
+      }
+    }
+    else {
+      await fs.mkdir(directory, { recursive: true });
+      if (!(await readImage(hash))?.equals(data)) {
+        const destination = path.join(directory, `${hash}.webp`);
+        const temporary = path.join(directory, `${hash}.${crypto.randomUUID()}.tmp`);
+        try {
+          await fs.writeFile(temporary, data, { flag: "wx" });
+          // Publish complete bytes at once. A simultaneous logo request
+          // must never see a file truncated by an identical re-upload.
+          await fs.rename(temporary, destination);
+        } finally { await fs.rm(temporary, { force: true }); }
+      }
+    }
+    const saved = await readImage(hash);
+    // Verify against the fingerprint computed before persistence, not a
+    // Buffer object that an adapter can reuse or change while serializing.
+    if (!saved?.length || imageHash(saved) !== hash) throw Object.assign(new Error("The logo could not be read back correctly from storage. Please try saving again."), { status: 503 });
+    return `/api/brand-images/${hash}`;
+  };
+  async function saveBrand(input, current = {}) {
     current ||= {};
     if (!input || typeof input !== "object" || Array.isArray(input)) throw problem("Enter a brand name and image.");
     if (input.name !== undefined && typeof input.name !== "string") throw problem("Enter a valid brand name.");
@@ -79,47 +123,7 @@ export function brandImages(app, { dataDir, isMongo }) {
           if ((metadata.width || 0) >= 3 && (metadata.height || 0) >= 3) prepared = prepared.trim({ threshold: 12 });
           data = await prepared.resize(320, 160, { fit: "inside", withoutEnlargement: true }).webp({ quality: 88 }).toBuffer();
         } catch { throw problem("Choose a valid JPG, PNG or WebP image of at most 16 megapixels."); }
-        const hash = imageHash(data);
-        if (isMongo()) {
-          const update = { $set: { hash, dataBase64: data.toString("base64") }, $unset: { data: "" } };
-          // The original collection has a unique `hash` index. Always populate
-          // it: omitting it allowed one document with hash:null, then every
-          // later logo hit a duplicate-key error. Support both historical
-          // ObjectId+hash records and the temporary digest-as-_id format.
-          let result = await Asset.collection.updateOne({ hash }, update);
-          if (!result.matchedCount) {
-            try { result = await Asset.collection.updateOne({ _id: hash }, update); }
-            catch (error) {
-              if (error.code !== 11000) throw error;
-              result = await Asset.collection.updateOne({ hash }, update);
-            }
-          }
-          if (!result.matchedCount) {
-            try { await Asset.collection.updateOne({ hash }, update, { upsert: true }); }
-            catch (error) {
-              if (error.code !== 11000) throw error;
-              await Asset.collection.updateOne({ hash }, update);
-            }
-          }
-        }
-        else {
-          await fs.mkdir(directory, { recursive: true });
-          if (!(await readImage(hash))?.equals(data)) {
-            const destination = path.join(directory, `${hash}.webp`);
-            const temporary = path.join(directory, `${hash}.${crypto.randomUUID()}.tmp`);
-            try {
-              await fs.writeFile(temporary, data, { flag: "wx" });
-              // Publish complete bytes at once. A simultaneous logo request
-              // must never see a file truncated by an identical re-upload.
-              await fs.rename(temporary, destination);
-            } finally { await fs.rm(temporary, { force: true }); }
-          }
-        }
-        const saved = await readImage(hash);
-        // Verify against the fingerprint computed before persistence, not a
-        // Buffer object that an adapter can reuse or change while serializing.
-        if (!saved?.length || imageHash(saved) !== hash) throw Object.assign(new Error("The logo could not be read back correctly from storage. Please try saving again."), { status: 503 });
-        image = `/api/brand-images/${hash}`;
+        image = await persist(data);
       }
     }
     if (image && !input.image?.startsWith("data:")) {
@@ -128,5 +132,24 @@ export function brandImages(app, { dataDir, isMongo }) {
       if (!saved?.length) throw problem("The saved brand image is missing. Choose the logo file again, or remove the image before saving.");
     }
     return { name, image };
+  }
+  // Scratch-layer cover artwork shares the content-addressed store, so a bulk
+  // batch snapshots one small URL instead of copying the image into every card.
+  saveBrand.saveScratchImage = async function saveScratchImage(input) {
+    if (typeof input !== "string" || input.length > 2_800_000)
+      throw problem("Choose a JPG, PNG or WebP scratch image smaller than 2 MB.");
+    const match = input.match(/^data:image\/(?:png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$/);
+    if (!match) throw problem("Choose a JPG, PNG or WebP scratch image.");
+    const original = Buffer.from(match[1], "base64");
+    if (original.length > 2 * 1024 * 1024) throw problem("Choose a scratch image smaller than 2 MB.");
+    let data;
+    try {
+      const source = sharp(original, { limitInputPixels: 16_000_000 });
+      const metadata = await source.metadata();
+      if (!["png", "jpeg", "webp"].includes(metadata.format)) throw new Error("format");
+      data = await source.rotate().resize(900, 500, { fit: "cover" }).webp({ quality: 82 }).toBuffer();
+    } catch { throw problem("Choose a valid JPG, PNG or WebP image of at most 16 megapixels."); }
+    return persist(data);
   };
+  return saveBrand;
 }

@@ -13,7 +13,7 @@ import { normalizeWhatsAppNumber, whatsAppCardUrl } from "../../../server/shared
 import { scratchApiUrl, scratchCardUrl, scratchShareUrl } from "../../../server/shared/urls.js";
 import { publicCardProblem } from "../../../server/shared/public-card-errors.js";
 import { createScratchSurface } from "../features/scratch/scratch-surface.js";
-import CardBrandHeader from "../features/branding/CardBrandHeader.jsx";
+import CardBrandHeader, { brandImageUrl } from "../features/branding/CardBrandHeader.jsx";
 import { pendingBulk, savedBulkDraft, useBulkGeneration, BranchQuantities, BulkResults } from "../features/bulk/BulkGenerate.jsx";
 import "../styles/bulk.css";
 import "../styles/styles.css";
@@ -355,8 +355,10 @@ const TRANSLATIONS = {
 const cardTranslator = (language) => (key) =>
   TRANSLATIONS[language]?.[key] || TRANSLATIONS.en[key] || key;
 
-const CARD_THEME_FIELDS = ["pageColor", "textColor", "accentColor", "ticketColor", "ticketTextColor"];
-const CARD_LOGO_SCALE_FIELDS = ["normalLogoScale", "fixedLogoScale"];
+const CARD_THEME_FIELDS = ["pageColor", "textColor", "accentColor", "ticketColor", "ticketTextColor",
+  "scratchColor", "scratchShineColor", "scratchTextColor"];
+const CARD_LOGO_SCALE_FIELDS = ["normalLogoScale", "fixedLogoScale", "centerLogoScale"];
+const CARD_LOGO_OFFSET_FIELDS = ["normalLogoX", "normalLogoY", "centerLogoX", "centerLogoY", "fixedLogoX", "fixedLogoY"];
 const cardThemeKey = (businessId) => `scratch-card-theme:${businessId}`;
 function readCardTheme(businessId) {
   try {
@@ -365,6 +367,8 @@ function readCardTheme(businessId) {
       ...Object.fromEntries(CARD_THEME_FIELDS.filter(key => /^#[\da-f]{6}$/i.test(saved[key] || ""))
         .map(key => [key, saved[key]])),
       ...Object.fromEntries(CARD_LOGO_SCALE_FIELDS.filter(key => Number.isFinite(saved[key]) && saved[key] >= 60 && saved[key] <= 140)
+        .map(key => [key, saved[key]])),
+      ...Object.fromEntries(CARD_LOGO_OFFSET_FIELDS.filter(key => Number.isInteger(saved[key]) && Math.abs(saved[key]) <= 150)
         .map(key => [key, saved[key]])),
     };
     if (!colors.ticketColor || !colors.ticketTextColor) {
@@ -383,6 +387,8 @@ function saveCardTheme(businessId, colors) {
     if (/^#[\da-f]{6}$/i.test(colors[key] || "")) saved[key] = colors[key];
   for (const key of CARD_LOGO_SCALE_FIELDS)
     if (Number.isFinite(colors[key]) && colors[key] >= 60 && colors[key] <= 140) saved[key] = colors[key];
+  for (const key of CARD_LOGO_OFFSET_FIELDS)
+    if (Number.isInteger(colors[key]) && Math.abs(colors[key]) <= 150) saved[key] = colors[key];
   storage.set("localStorage", cardThemeKey(businessId), JSON.stringify(saved));
 }
 function contrastColor(hex) {
@@ -392,6 +398,12 @@ function contrastColor(hex) {
     .map(value => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4);
   const luminance = channels[0] * .2126 + channels[1] * .7152 + channels[2] * .0722;
   return luminance < .36 ? "#fff8f5" : "#231622";
+}
+function shadeColor(hex, factor) {
+  const rgb = hex?.match(/^#([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i);
+  if (!rgb) return hex;
+  return `#${rgb.slice(1).map(value => Math.round(parseInt(value, 16) * factor)
+    .toString(16).padStart(2, "0")).join("")}`;
 }
 
 const CARD_DEFAULT_TEXT = {
@@ -472,11 +484,86 @@ function Celebration() {
   );
 }
 
-function RecipientTopbar({ brand, normalBrand, fixedBrand }) {
+// Full-screen burst played once, right after the reward is revealed.
+const BURST_PIECES = Array.from({ length: 72 }, (_, index) => {
+  const angle = (index / 72) * Math.PI * 2 + (index % 3) * .21;
+  const distance = 26 + (index * 53) % 34;
+  return {
+    id: index,
+    color: CELEBRATION_COLORS[index % CELEBRATION_COLORS.length],
+    x: `${Math.cos(angle) * distance}vmax`,
+    y: `${Math.sin(angle) * distance * .72}vmax`,
+    delay: `${(index % 8) * .03}s`,
+    rotation: `${(index * 67) % 360}deg`,
+  };
+});
+
+function RevealBurst({ label }) {
+  return (
+    <div className="reveal-burst" aria-hidden="true">
+      <i className="reveal-flash" />
+      <i className="reveal-rays" />
+      <i className="reveal-ring" />
+      <i className="reveal-ring second" />
+      {BURST_PIECES.map((piece) => (
+        <i
+          className="burst-piece"
+          key={piece.id}
+          style={{
+            "--burst-color": piece.color,
+            "--burst-x": piece.x,
+            "--burst-y": piece.y,
+            "--burst-delay": piece.delay,
+            "--burst-rotation": piece.rotation,
+          }}
+        />
+      ))}
+      <strong className="reveal-banner">{label}</strong>
+    </div>
+  );
+}
+
+// Arrival intro: a gift box drops in, shakes, and bursts open onto the card.
+const GIFT_SPARKS = Array.from({ length: 16 }, (_, index) => {
+  const angle = -Math.PI / 2 + ((index / 15) - .5) * Math.PI * 1.15;
+  const distance = 150 + (index * 37) % 110;
+  return {
+    id: index,
+    x: `${Math.round(Math.cos(angle) * distance)}px`,
+    y: `${Math.round(Math.sin(angle) * distance)}px`,
+    delay: `${1.55 + (index % 5) * .04}s`,
+    size: `${24 + (index * 7) % 22}px`,
+    color: CELEBRATION_COLORS[index % CELEBRATION_COLORS.length],
+  };
+});
+
+function GiftIntro({ onDone }) {
+  useEffect(() => {
+    const timer = window.setTimeout(onDone, 3000);
+    return () => window.clearTimeout(timer);
+  }, [onDone]);
+  return (
+    <div className="gift-intro" role="presentation" onClick={onDone}>
+      <i className="gift-beams" aria-hidden="true" />
+      <div className="gift-box" aria-hidden="true">
+        <span className="gift-lid"><i className="gift-bow left" /><i className="gift-bow right" /></span>
+        <span className="gift-body" />
+      </div>
+      {GIFT_SPARKS.map((spark) => (
+        <i className="gift-spark" key={spark.id} aria-hidden="true" style={{
+          "--spark-x": spark.x, "--spark-y": spark.y, "--spark-delay": spark.delay,
+          "--spark-size": spark.size, "--spark-color": spark.color,
+        }}>✦</i>
+      ))}
+    </div>
+  );
+}
+
+function RecipientTopbar({ brand, normalBrand, fixedBrand, centerBrand }) {
   return (
     <header className="recipient-topbar">
       <a className="recipient-brand" href="/">
-        <CardBrandHeader businessName={brand} normalBrand={normalBrand} fixedBrand={fixedBrand} />
+        <CardBrandHeader businessName={brand} normalBrand={normalBrand} fixedBrand={fixedBrand} centerBrand={centerBrand} />
       </a>
     </header>
   );
@@ -507,6 +594,20 @@ const DEFAULT_CARD = {
   textColor: "#fff8f5",
   normalLogoScale: 100,
   fixedLogoScale: 100,
+  centerLogoScale: 100,
+  normalLogoX: 0,
+  normalLogoY: 0,
+  centerLogoX: 0,
+  centerLogoY: 0,
+  fixedLogoX: 0,
+  fixedLogoY: 0,
+  scratchColor: "#b8c0ce",
+  scratchShineColor: "#f8fafc",
+  scratchTextColor: "#30394b",
+  scratchTitle: "",
+  scratchSubtitle: "",
+  scratchPattern: true,
+  scratchImage: "",
 };
 
 const CARD_THEMES = [
@@ -626,7 +727,7 @@ const WhatsAppIcon = () => (
   </svg>
 );
 
-function ScratchCard({ card, onReveal = () => {}, preview = false, t, onCopyCoupon, onShowQr }) {
+function ScratchCard({ card, onReveal = () => {}, preview = false, showCover = false, t, onCopyCoupon, onShowQr }) {
   const alreadyScratched = Boolean(card.scratchedAt || card.used || card.expired);
   const canvasRef = useRef(null),
     cardRef = useRef(null),
@@ -634,23 +735,53 @@ function ScratchCard({ card, onReveal = () => {}, preview = false, t, onCopyCoup
     revealCallback = useRef(onReveal);
   useEffect(() => { revealCallback.current = onReveal; }, [onReveal]);
   const [progress, setProgress] = useState(preview || alreadyScratched ? 100 : 0);
+  const coverSrc = brandImageUrl(card.scratchImage);
+  const [coverImage, setCoverImage] = useState(null);
+  const [coverReady, setCoverReady] = useState(!coverSrc);
+  useEffect(() => {
+    setCoverImage(null);
+    setCoverReady(!coverSrc);
+    if (!coverSrc) return;
+    let active = true;
+    const image = new Image();
+    image.onload = () => { if (active) { setCoverImage(image); setCoverReady(true); } };
+    // A missing image falls back to the colour cover instead of blocking scratching.
+    image.onerror = () => { if (active) setCoverReady(true); };
+    image.src = coverSrc;
+    return () => { active = false; };
+  }, [coverSrc]);
+  const scratchColor = card.scratchColor || DEFAULT_CARD.scratchColor,
+    scratchShineColor = card.scratchShineColor || DEFAULT_CARD.scratchShineColor,
+    scratchTextColor = card.scratchTextColor || DEFAULT_CARD.scratchTextColor,
+    scratchPattern = card.scratchPattern !== false,
+    scratchTitle = card.scratchTitle || t("scratchHere"),
+    scratchSubtitle = card.scratchSubtitle || t("swipeFinger");
   const paint = useCallback((ctx, width, height) => {
     ctx.globalCompositeOperation = "source-over";
-    const gradient = ctx.createLinearGradient(0, 0, width, height);
-    gradient.addColorStop(0, "#b8c0ce");
-    gradient.addColorStop(0.2, "#f8fafc");
-    gradient.addColorStop(0.48, "#a4adbc");
-    gradient.addColorStop(0.76, "#eef1f6");
-    gradient.addColorStop(1, "#929cab");
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, width, height);
-    ctx.fillStyle = "rgba(255,255,255,.3)";
-    for (let x = -height; x < width + height; x += 34) {
-      ctx.save();
-      ctx.translate(x, 0);
-      ctx.rotate(Math.PI / 4);
-      ctx.fillRect(0, -height, 10, height * 3);
-      ctx.restore();
+    if (coverImage) {
+      // Fill the card like CSS object-fit: cover.
+      const scale = Math.max(width / coverImage.width, height / coverImage.height);
+      const drawWidth = coverImage.width * scale, drawHeight = coverImage.height * scale;
+      ctx.drawImage(coverImage, (width - drawWidth) / 2, (height - drawHeight) / 2, drawWidth, drawHeight);
+    } else {
+      const gradient = ctx.createLinearGradient(0, 0, width, height);
+      gradient.addColorStop(0, scratchColor);
+      gradient.addColorStop(0.2, scratchShineColor);
+      gradient.addColorStop(0.48, shadeColor(scratchColor, .89));
+      gradient.addColorStop(0.76, shadeColor(scratchShineColor, .96));
+      gradient.addColorStop(1, shadeColor(scratchColor, .8));
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, width, height);
+    }
+    if (scratchPattern) {
+      ctx.fillStyle = "rgba(255,255,255,.3)";
+      for (let x = -height; x < width + height; x += 34) {
+        ctx.save();
+        ctx.translate(x, 0);
+        ctx.rotate(Math.PI / 4);
+        ctx.fillRect(0, -height, 10, height * 3);
+        ctx.restore();
+      }
     }
     const badgeWidth = Math.min(230, width - 40), badgeHeight = 72;
     const badgeX = (width - badgeWidth) / 2, badgeY = (height - badgeHeight) / 2;
@@ -662,19 +793,42 @@ function ScratchCard({ card, onReveal = () => {}, preview = false, t, onCopyCoup
     ctx.fill(); ctx.stroke();
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillStyle = "#30394b";
+    ctx.fillStyle = scratchTextColor;
     ctx.font = "800 15px DM Sans, system-ui";
     ctx.fillText(
-      `✦  ${t("scratchHere")}  ✦`,
+      `✦  ${scratchTitle}  ✦`,
       width / 2,
       height / 2 - 10,
+      badgeWidth - 16,
     );
-    ctx.fillStyle = "#657084";
+    ctx.globalAlpha = .78;
     ctx.font = "500 12px DM Sans, system-ui";
-    ctx.fillText(t("swipeFinger"), width / 2, height / 2 + 16);
-  }, [t]);
+    ctx.fillText(scratchSubtitle, width / 2, height / 2 + 16, badgeWidth - 16);
+    ctx.globalAlpha = 1;
+  }, [coverImage, scratchColor, scratchShineColor, scratchTextColor, scratchPattern, scratchTitle, scratchSubtitle]);
+  // The creator preview shows the static scratch layer without enabling scratching.
   useEffect(() => {
-    if (preview || alreadyScratched || !canvasRef.current) return;
+    if (!preview || !showCover || !coverReady || !canvasRef.current) return;
+    const canvas = canvasRef.current;
+    const draw = () => {
+      const rect = cardRef.current.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      const ratio = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.round(rect.width * ratio);
+      canvas.height = Math.round(rect.height * ratio);
+      canvas.style.width = `${rect.width}px`;
+      canvas.style.height = `${rect.height}px`;
+      const context = canvas.getContext("2d");
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      paint(context, rect.width, rect.height);
+    };
+    draw();
+    const observer = new ResizeObserver(draw);
+    observer.observe(cardRef.current);
+    return () => observer.disconnect();
+  }, [paint, preview, showCover, coverReady]);
+  useEffect(() => {
+    if (preview || alreadyScratched || !coverReady || !canvasRef.current) return;
     const surface = createScratchSurface(canvasRef.current, {
       paint, onProgress: setProgress, onComplete: () => revealCallback.current(),
     });
@@ -682,7 +836,7 @@ function ScratchCard({ card, onReveal = () => {}, preview = false, t, onCopyCoup
     const observer = new ResizeObserver(surface.resize);
     observer.observe(cardRef.current);
     return () => { observer.disconnect(); surface.dispose(); surfaceRef.current = null; };
-  }, [paint, preview, alreadyScratched]);
+  }, [paint, preview, alreadyScratched, coverReady]);
   return (
     <div
       className={`scratch-shell ${preview ? "is-preview" : ""}${card.expired ? " is-expired" : ""}${card.redeemed ? " is-redeemed" : ""}`}
@@ -710,6 +864,7 @@ function ScratchCard({ card, onReveal = () => {}, preview = false, t, onCopyCoup
             </div>
           ) : null}
         </div>
+        {preview && showCover && <canvas ref={canvasRef} className="scratch-cover-preview" aria-hidden="true" />}
         {!preview && !alreadyScratched && (
           <canvas
             ref={canvasRef}
@@ -825,6 +980,47 @@ function Creator({
     [shareImage, setShareImage] = useState(null),
     [shareImagePreview, setShareImagePreview] = useState("");
   const shareImageInputRef = useRef(null);
+  const [previewSide, setPreviewSide] = useState("reward"),
+    [scratchImageStatus, setScratchImageStatus] = useState({ state: "idle", message: "" });
+  const scratchImageInputRef = useRef(null);
+  const chooseScratchImage = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!SHARE_IMAGE_TYPES.has(file.type) || file.size > 2 * 1024 * 1024) {
+      event.target.value = "";
+      setScratchImageStatus({ state: "error", message: "Choose a JPG, PNG or WebP image smaller than 2 MB." });
+      return;
+    }
+    setScratchImageStatus({ state: "saving", message: "" });
+    try {
+      const { image } = await portalApi("/api/scratch-images", token, "POST", { image: await imageDataUrl(file) });
+      setForm((value) => ({ ...value, scratchImage: image }));
+      setPreviewSide("cover");
+      setScratchImageStatus({ state: "idle", message: "" });
+    } catch (error) {
+      setScratchImageStatus({ state: "error", message: error.message });
+    } finally {
+      event.target.value = "";
+    }
+  };
+  const moveHeaderImage = (side, { x, y }) => {
+    const prefix = { left: "normal", center: "center", right: "fixed" }[side];
+    const position = { [`${prefix}LogoX`]: x, [`${prefix}LogoY`]: y };
+    saveCardTheme(business.businessId, position);
+    setForm((value) => ({ ...value, ...position }));
+  };
+  const resetHeaderImagePositions = () => {
+    const positions = Object.fromEntries(CARD_LOGO_OFFSET_FIELDS.map((key) => [key, 0]));
+    saveCardTheme(business.businessId, positions);
+    setForm((value) => ({ ...value, ...positions }));
+  };
+  const resetScratchDesign = () => {
+    const design = Object.fromEntries(["scratchColor", "scratchShineColor", "scratchTextColor",
+      "scratchTitle", "scratchSubtitle", "scratchPattern", "scratchImage"].map((key) => [key, DEFAULT_CARD[key]]));
+    saveCardTheme(business.businessId, design);
+    setForm((value) => ({ ...value, ...design }));
+    setScratchImageStatus({ state: "idle", message: "" });
+  };
   useEffect(() => () => {
     if (shareImagePreview) URL.revokeObjectURL(shareImagePreview);
   }, [shareImagePreview]);
@@ -835,6 +1031,7 @@ function Creator({
   const previewBranch = business?.branches?.find(item => item.branchId === (isBulk ? bulk.previewId : form.branchId));
   const normalBrand = business?.departments?.find(item => item.departmentId === previewBranch?.departmentId && item.status === "active");
   const fixedBrand = business?.brandSettings?.fixed;
+  const centerBrand = business?.brandSettings?.center?.name ? business.brandSettings.center : null;
   const cardImagesEnabled = business?.cardImagesEnabled !== false;
   const structureMode = business?.structureMode === "branch" ? "branch-department"
     : business?.structureMode === "brand" || !business?.structureMode ? "brand-department" : business.structureMode;
@@ -1210,7 +1407,86 @@ function Creator({
                     <output>{form.fixedLogoScale}%</output>
                   </div>
                 </label>
+                <label>
+                  <span>{ui("Middle image size")}</span>
+                  <div className="logo-size-control-row">
+                    <input type="range" name="centerLogoScale" min="60" max="140" step="5"
+                      value={form.centerLogoScale} disabled={!centerBrand?.image}
+                      aria-label={ui("Middle image size")}
+                      onChange={(event) => {
+                        const centerLogoScale = Number(event.target.value);
+                        saveCardTheme(business.businessId, { centerLogoScale });
+                        setForm(value => ({ ...value, centerLogoScale }));
+                      }} />
+                    <output>{form.centerLogoScale}%</output>
+                  </div>
+                </label>
+                <div className="logo-position-note">
+                  <span>{ui("Drag the left, middle and right images in the live preview to move them.")}</span>
+                  <button type="button" className="p-button small" onClick={resetHeaderImagePositions}
+                    disabled={CARD_LOGO_OFFSET_FIELDS.every((key) => !form[key])}>{ui("Reset image positions")}</button>
+                </div>
               </div>}
+            </fieldset>
+            <fieldset className="theme-panel scratch-design-panel">
+              <legend>{ui("Scratch card design")}</legend>
+              <div className="scratch-design-fields">
+                <label>
+                  <span>{ui("Scratch layer title")}</span>
+                  <input name="scratchTitle" value={form.scratchTitle} onChange={update} maxLength="40"
+                    placeholder={cardT("scratchHere")} onFocus={() => setPreviewSide("cover")} />
+                </label>
+                <label>
+                  <span>{ui("Scratch layer hint")}</span>
+                  <input name="scratchSubtitle" value={form.scratchSubtitle} onChange={update} maxLength="60"
+                    placeholder={cardT("swipeFinger")} onFocus={() => setPreviewSide("cover")} />
+                </label>
+              </div>
+              <div className="theme-controls">
+                {[
+                  ["scratchColor", "Scratch layer colour"],
+                  ["scratchShineColor", "Shine colour"],
+                  ["scratchTextColor", "Scratch text colour"],
+                ].map(([key, label]) => (
+                  <label key={key}>
+                    <span>{ui(label)}</span>
+                    <div>
+                      <input name={key} value={form[key]} type="color" disabled={key !== "scratchTextColor" && Boolean(form.scratchImage)}
+                        onChange={(event) => { setPreviewSide("cover"); update(event); }} />
+                      <b>{form[key]}</b>
+                    </div>
+                  </label>
+                ))}
+                <label className="scratch-pattern-toggle">
+                  <span>{ui("Shine stripes")}</span>
+                  <div>
+                    <input name="scratchPattern" type="checkbox" checked={form.scratchPattern !== false}
+                      onChange={(event) => {
+                        setPreviewSide("cover");
+                        setForm((value) => ({ ...value, scratchPattern: event.target.checked }));
+                      }} />
+                    <b>{form.scratchPattern !== false ? ui("On") : ui("Off")}</b>
+                  </div>
+                </label>
+              </div>
+              <div className="share-image-field scratch-image-field">
+                <label htmlFor="scratch-image">{ui("Scratch layer image")} <em>{t("optional")}</em></label>
+                <input ref={scratchImageInputRef} id="scratch-image" type="file"
+                  accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                  disabled={scratchImageStatus.state === "saving"} onChange={chooseScratchImage} />
+                {form.scratchImage && <div className="share-image-preview">
+                  <img src={brandImageUrl(form.scratchImage)} alt={ui("Scratch layer image")} />
+                  <div>
+                    <b>{ui("Covers the reward until it is scratched")}</b>
+                    <button type="button" className="p-button small"
+                      onClick={() => setForm((value) => ({ ...value, scratchImage: "" }))}>{ui("Remove image")}</button>
+                  </div>
+                </div>}
+                <small>{scratchImageStatus.state === "saving" ? ui("Uploading image…")
+                  : ui("JPG, PNG or WebP, up to 2 MB. Replaces the scratch layer colours; the title and hint stay on top.")}</small>
+                {scratchImageStatus.state === "error" && <p className="error" role="alert">{ui(scratchImageStatus.message)}</p>}
+              </div>
+              <button type="button" className="p-button small" onClick={resetScratchDesign}>{ui("Reset scratch design")}</button>
             </fieldset>
             </fieldset>
             <div className="creator-actions">
@@ -1238,6 +1514,12 @@ function Creator({
             <span>{t("livePreview")}</span>
             <span>{t("recipientView")}</span>
           </div>
+          <div className="preview-side-switch" role="group" aria-label={ui("Preview side")}>
+            <button type="button" className={previewSide === "cover" ? "is-selected" : ""} aria-pressed={previewSide === "cover"}
+              onClick={() => setPreviewSide("cover")}>{ui("Scratch layer")}</button>
+            <button type="button" className={previewSide === "reward" ? "is-selected" : ""} aria-pressed={previewSide === "reward"}
+              onClick={() => setPreviewSide("reward")}>{ui("Reward")}</button>
+          </div>
           <div
             className="phone"
             lang={form.language}
@@ -1249,9 +1531,13 @@ function Creator({
               "--ticket-ink": form.ticketTextColor,
             }}
           >
-            <div className="phone-brand"><CardBrandHeader businessName={form.senderName}
-              normalBrand={normalBrand ? { ...normalBrand, image: cardImagesEnabled ? normalBrand.image : "", logoScale: form.normalLogoScale } : null}
-              fixedBrand={fixedBrand ? { ...fixedBrand, image: cardImagesEnabled ? fixedBrand.image : "", logoScale: form.fixedLogoScale } : null} /></div>
+            <div className="phone-brand"><CardBrandHeader onMove={moveHeaderImage}
+              centerBrand={centerBrand ? { ...centerBrand, image: cardImagesEnabled ? centerBrand.image : "", logoScale: form.centerLogoScale,
+                offsetX: form.centerLogoX, offsetY: form.centerLogoY } : null}
+              normalBrand={normalBrand ? { ...normalBrand, image: cardImagesEnabled ? normalBrand.image : "", logoScale: form.normalLogoScale,
+                offsetX: form.normalLogoX, offsetY: form.normalLogoY } : null}
+              fixedBrand={fixedBrand ? { ...fixedBrand, image: cardImagesEnabled ? fixedBrand.image : "", logoScale: form.fixedLogoScale,
+                offsetX: form.fixedLogoX, offsetY: form.fixedLogoY } : null} /></div>
             <div className="mini">
               <GiftIcon /> {cardT("surprise")}
             </div>
@@ -1259,7 +1545,7 @@ function Creator({
             <ScratchCard card={{ ...form, normalBrand, brandName: brandStructure
               ? normalBrand?.name || (previewBranch?.name || cardT("allBrands"))
               : branchName,
-            branchId: isBulk ? bulk.previewId : form.branchId, couponCode: isBulk ? "AUTO-GENERATED" : form.couponCode, branchName }} preview t={cardT} />
+            branchId: isBulk ? bulk.previewId : form.branchId, couponCode: isBulk ? "AUTO-GENERATED" : form.couponCode, branchName }} preview showCover={previewSide === "cover"} t={cardT} />
             <small>{cardT("scratchLayer")}</small>
           </div>
         </aside>
@@ -1337,6 +1623,14 @@ function PublicCard({ slug, language: dashboardLanguage }) {
   const [problem, setProblem] = useState(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [revealed, setRevealed] = useState(false);
+  const [celebrating, setCelebrating] = useState(false);
+  const [introDone, setIntroDone] = useState(false);
+  const finishIntro = useCallback(() => setIntroDone(true), []);
+  useEffect(() => {
+    if (!celebrating) return;
+    const timer = window.setTimeout(() => setCelebrating(false), 3600);
+    return () => window.clearTimeout(timer);
+  }, [celebrating]);
   const [copied, setCopied] = useState(false);
   const [couponCopied, setCouponCopied] = useState(false);
   const [qrOpen, setQrOpen] = useState(false);
@@ -1469,6 +1763,7 @@ function PublicCard({ slug, language: dashboardLanguage }) {
       setCard((current) => ({ ...current, couponCode: result.couponCode,
         scratchedAt: result.scratchedAt, redeemedAt: result.redeemedAt }));
       setRevealed(true);
+      setCelebrating(true);
       setState("ready");
       return true;
     } catch (error) {
@@ -1513,7 +1808,7 @@ function PublicCard({ slug, language: dashboardLanguage }) {
   };
   return (
     <main
-      className="recipient"
+      className={`recipient${revealed && !card.expired && !card.redeemed ? " is-revealed" : ""}${celebrating ? " is-celebrating" : ""}`}
       lang={language}
       style={{
         "--accent": card.accentColor || DEFAULT_CARD.accentColor,
@@ -1523,11 +1818,13 @@ function PublicCard({ slug, language: dashboardLanguage }) {
         "--ticket-ink": card.ticketTextColor || DEFAULT_CARD.ticketTextColor,
       }}
     >
-      {!card.expired && !card.redeemed && <Celebration />}
+      {!introDone && !card.used && !card.expired && !card.redeemed && <GiftIntro onDone={finishIntro} />}
+      {(introDone || card.used) && !card.expired && !card.redeemed && <Celebration />}
+      {celebrating && <RevealBurst label={t("unlocked")} />}
       <RecipientTopbar
-        brand={card.senderName}
         normalBrand={card.normalBrand}
         fixedBrand={card.fixedBrand}
+        centerBrand={card.centerBrand}
       />
       <button type="button" className="public-card-back" onClick={goBack}>
         <span aria-hidden="true">←</span> {t("goBack")}

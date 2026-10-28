@@ -1207,7 +1207,7 @@ function CardPreviewDialog({ card, ScratchCard, t, onClose }) {
           "--accent": card.accentColor || "#ff9b72",
         }}
       >
-        <div className="p-preview-brand"><CardBrandHeader businessName={card.senderName} normalBrand={card.normalBrand} fixedBrand={card.fixedBrand} /></div>
+        <div className="p-preview-brand"><CardBrandHeader normalBrand={card.normalBrand} fixedBrand={card.fixedBrand} centerBrand={card.centerBrand} /></div>
         <span>{t("sentToYou")}</span>
         <h2>{card.headline}</h2>
         <ScratchCard card={card} preview t={t} />

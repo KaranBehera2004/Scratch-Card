@@ -262,3 +262,308 @@
   .p-builder .offer-content strong,
   .recipient .offer-content strong { font-size: clamp(35px, 11vw, 46px); }
 }
+
+/* Scratch card design panel and live-preview side switch. */
+.scratch-design-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
+.scratch-design-fields > label { min-width: 0; }
+.scratch-design-panel .theme-controls input[type="checkbox"] { width: 20px; height: 20px; padding: 0; accent-color: #075a9c; cursor: pointer; }
+.scratch-design-panel .theme-controls input[type="color"]:disabled { opacity: .38; cursor: not-allowed; }
+.scratch-image-field { margin: 16px 0 14px; }
+.scratch-image-field .share-image-preview img { object-fit: cover; }
+.preview-side-switch { display: flex; gap: 6px; width: max-content; margin: 0 auto 12px; padding: 4px; border: 1px solid #d9d6e2; border-radius: 999px; background: rgba(255, 255, 255, .6); }
+.preview-side-switch button { min-height: 32px; padding: 0 14px; border: 0; border-radius: 999px; background: transparent; color: #5f5b6d; font-size: .75rem; font-weight: 800; cursor: pointer; }
+.preview-side-switch button.is-selected { background: #17142d; color: #fff; }
+.scratch-card canvas.scratch-cover-preview { pointer-events: none; cursor: default; }
+@media (max-width: 760px) {
+  .scratch-design-fields { grid-template-columns: minmax(0, 1fr); }
+}
+.logo-position-note { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; color: #5f6b7d; font-size: 12px; font-weight: 600; }
+
+/* Public card page: the same backdrop, arcs, stars and open header as the
+   creator's live preview, so the shared card matches what was designed. */
+.recipient {
+  background:
+    radial-gradient(circle at 50% 14%, color-mix(in srgb, var(--accent, #ff9b72) 22%, transparent), transparent 31%),
+    linear-gradient(145deg, color-mix(in srgb, var(--page-color, #4b0024) 91%, #9e285d), var(--page-color, #4b0024) 58%, color-mix(in srgb, var(--page-color, #4b0024) 86%, #17000e));
+}
+.recipient::before {
+  z-index: 0;
+  inset: 0 auto 0 50%;
+  width: min(100%, 820px);
+  transform: translateX(-50%);
+  pointer-events: none;
+  opacity: .62;
+  background-image:
+    radial-gradient(circle at -22% 61%, transparent 0 38%, color-mix(in srgb, var(--accent, #ff9b72) 37%, transparent) 38.2% 38.5%, transparent 38.8% 46%, color-mix(in srgb, var(--accent, #ff9b72) 27%, transparent) 46.2% 46.5%, transparent 46.8%),
+    radial-gradient(circle at 120% 57%, transparent 0 39%, color-mix(in srgb, var(--accent, #ff9b72) 40%, transparent) 39.2% 39.5%, transparent 39.8% 48%, color-mix(in srgb, var(--accent, #ff9b72) 28%, transparent) 48.2% 48.5%, transparent 48.8%);
+  background-size: auto;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 14%, #000 86%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 14%, #000 86%, transparent);
+}
+.recipient .glow { display: none; }
+.recipient .experience::before,
+.recipient .experience::after {
+  content: "✦";
+  position: absolute;
+  z-index: -1;
+  color: color-mix(in srgb, var(--accent, #ff9b72) 74%, #fff);
+  font-size: 29px;
+  line-height: 1;
+  pointer-events: none;
+}
+.recipient .experience::before { top: 64px; left: -4%; }
+.recipient .experience::after { top: 150px; right: -2%; color: color-mix(in srgb, var(--accent, #ff9b72) 72%, #ffd869); }
+.recipient-topbar {
+  position: absolute;
+  border-bottom: 0;
+  background: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.recipient-topbar .recipient-brand { color: color-mix(in srgb, var(--text-color, #fff) 72%, transparent); }
+@media (max-width: 600px) {
+  .recipient .experience::before { top: 40px; left: 2%; font-size: 22px; }
+  .recipient .experience::after { top: 120px; right: 2%; font-size: 22px; }
+}
+
+/* Arrival celebration: confetti and paper tickets fall the full screen height. */
+.arrival-celebration,
+.recipient .arrival-celebration { top: 0; bottom: 0; height: auto; }
+@keyframes confetti-fall {
+  0% { opacity: 0; transform: translate3d(0, -24px, 0) rotate(var(--piece-rotation)); }
+  8% { opacity: 1; }
+  90% { opacity: 1; }
+  100% { opacity: 0; transform: translate3d(var(--piece-drift), calc(100vh + 40px), 0) rotate(calc(var(--piece-rotation) + 720deg)); }
+}
+@keyframes ticket-fall {
+  0% { opacity: 0; transform: translate3d(-50%, -32px, 0) rotate(var(--ticket-rotation)) scale(.7); }
+  10% { opacity: 1; }
+  88% { opacity: 1; }
+  100% { opacity: 0; transform: translate3d(calc(-50% + 24px), calc(100vh + 100px), 0) rotate(calc(var(--ticket-rotation) + 34deg)) scale(1); }
+}
+@media (max-width: 600px) {
+  .arrival-celebration { top: 0; height: auto; }
+}
+
+/* Reveal burst: one full-screen celebration when the reward is uncovered. */
+.reveal-burst {
+  position: fixed;
+  z-index: 30;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+/* Pin every layer to the screen centre, even layers larger than the screen. */
+.reveal-burst > i,
+.reveal-banner { position: absolute; top: 50%; left: 50%; translate: -50% -50%; }
+.reveal-flash {
+  width: 120vmax;
+  height: 120vmax;
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--accent, #ffc857) 55%, #fff) 0, color-mix(in srgb, var(--accent, #ffc857) 30%, transparent) 22%, transparent 60%);
+  opacity: 0;
+  animation: reveal-flash 1.6s ease-out forwards;
+}
+.reveal-rays {
+  width: 150vmax;
+  height: 150vmax;
+  border-radius: 50%;
+  background: repeating-conic-gradient(from 0deg, color-mix(in srgb, var(--accent, #ffc857) 34%, transparent) 0 6deg, transparent 6deg 18deg);
+  -webkit-mask-image: radial-gradient(circle, #000 0, #000 18%, transparent 55%);
+  mask-image: radial-gradient(circle, #000 0, #000 18%, transparent 55%);
+  opacity: 0;
+  animation: reveal-rays 3.4s ease-out forwards;
+}
+.reveal-ring {
+  width: 40px;
+  height: 40px;
+  border: 4px solid color-mix(in srgb, var(--accent, #ffc857) 80%, #fff);
+  border-radius: 50%;
+  opacity: 0;
+  animation: reveal-ring 1.4s cubic-bezier(.16, .84, .3, 1) forwards;
+}
+.reveal-ring.second { animation-delay: .22s; border-width: 2px; }
+.burst-piece {
+  width: 12px;
+  height: 18px;
+  border-radius: 3px;
+  background: var(--burst-color);
+  opacity: 0;
+  animation: burst-piece 2.8s cubic-bezier(.12, .74, .3, 1) var(--burst-delay) forwards;
+}
+.burst-piece:nth-child(3n) { width: 10px; height: 10px; border-radius: 50%; }
+.burst-piece:nth-child(4n) { width: 18px; height: 8px; border-radius: 6px 2px; }
+.reveal-banner {
+  padding: 16px 34px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent, #ffc857) 85%, #fff), var(--accent, #ffc857));
+  color: var(--ticket-ink, #2b1606);
+  font-size: clamp(26px, 5vw, 46px);
+  font-weight: 800;
+  letter-spacing: -.02em;
+  white-space: nowrap;
+  box-shadow: 0 22px 60px color-mix(in srgb, var(--accent, #ffc857) 45%, transparent), 0 0 0 6px color-mix(in srgb, #fff 55%, transparent);
+  opacity: 0;
+  animation: reveal-banner 3.2s cubic-bezier(.2, .9, .3, 1.2) .15s forwards;
+}
+@keyframes reveal-flash {
+  0% { opacity: 0; transform: scale(.2); }
+  18% { opacity: 1; }
+  100% { opacity: 0; transform: scale(1.1); }
+}
+@keyframes reveal-rays {
+  0% { opacity: 0; transform: scale(.4) rotate(0deg); }
+  15% { opacity: .9; }
+  70% { opacity: .55; }
+  100% { opacity: 0; transform: scale(1) rotate(80deg); }
+}
+@keyframes reveal-ring {
+  0% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(40); }
+}
+@keyframes burst-piece {
+  0% { opacity: 1; transform: translate3d(0, 0, 0) rotate(0deg) scale(.4); }
+  55% { opacity: 1; transform: translate3d(var(--burst-x), var(--burst-y), 0) rotate(calc(var(--burst-rotation) + 360deg)) scale(1); }
+  100% { opacity: 0; transform: translate3d(var(--burst-x), calc(var(--burst-y) + 38vh), 0) rotate(calc(var(--burst-rotation) + 720deg)) scale(1); }
+}
+@keyframes reveal-banner {
+  0% { opacity: 0; transform: scale(.3) rotate(-8deg); }
+  14% { opacity: 1; transform: scale(1.12) rotate(2deg); }
+  24% { transform: scale(1) rotate(0deg); }
+  80% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(.9) translateY(-40px); }
+}
+
+/* Revealed card: a pop, a slow shine sweep, and twinkling stars. */
+.recipient.is-celebrating .scratch-card { animation: reward-pop .9s cubic-bezier(.2, .9, .3, 1.3); }
+.recipient.is-revealed .scratch-card .offer-content::after {
+  content: "";
+  position: absolute;
+  inset: -20% auto -20% -60%;
+  width: 45%;
+  pointer-events: none;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, .55), transparent);
+  transform: skewX(-18deg);
+  animation: reward-shine 3.6s ease-in-out 1s infinite;
+}
+.recipient .experience::before,
+.recipient .experience::after { animation: star-twinkle 2.4s ease-in-out infinite; }
+.recipient .experience::after { animation-delay: 1.2s; }
+@keyframes reward-pop {
+  0% { transform: scale(.94); }
+  45% { transform: scale(1.06); box-shadow: 0 0 0 10px color-mix(in srgb, var(--accent, #ffc857) 35%, transparent), 0 30px 80px rgba(0, 0, 0, .25); }
+  100% { transform: scale(1); }
+}
+@keyframes reward-shine {
+  0%, 55% { left: -60%; }
+  100% { left: 130%; }
+}
+@keyframes star-twinkle {
+  0%, 100% { opacity: 1; transform: scale(1) rotate(0deg); }
+  50% { opacity: .45; transform: scale(.7) rotate(25deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .reveal-burst { display: none; }
+}
+
+/* Gift intro: drop in, shake, lid pops, light and sparks burst, then the card shows. */
+.gift-intro {
+  position: fixed;
+  z-index: 40;
+  inset: 0;
+  overflow: hidden;
+  cursor: pointer;
+  background:
+    radial-gradient(circle at 50% 55%, color-mix(in srgb, var(--accent, #ffc857) 30%, transparent), transparent 45%),
+    linear-gradient(160deg, color-mix(in srgb, var(--page-color, #4b0024) 92%, #fff), var(--page-color, #4b0024));
+  animation: gift-intro-out .5s ease-in 2.5s forwards;
+}
+.gift-intro > * { position: absolute; top: 55%; left: 50%; translate: -50% -50%; }
+.gift-box {
+  width: 150px;
+  height: 140px;
+  scale: 1.45;
+  filter: drop-shadow(0 0 28px color-mix(in srgb, var(--accent, #ffc857) 55%, transparent));
+  animation: gift-drop .75s cubic-bezier(.3, 1.4, .5, 1) both, gift-shake .7s ease-in-out .85s both, gift-box-out .6s ease-in 1.65s forwards;
+}
+.gift-body,
+.gift-lid {
+  position: absolute;
+  left: 50%;
+  translate: -50% 0;
+  border-radius: 10px;
+  background:
+    linear-gradient(90deg, transparent 42%, var(--ticket-ink, #4b0024) 42% 58%, transparent 58%),
+    linear-gradient(160deg, color-mix(in srgb, var(--accent, #ff9b72) 82%, #fff), var(--accent, #ff9b72) 60%, color-mix(in srgb, var(--accent, #ff9b72) 78%, #000));
+  box-shadow: 0 18px 40px rgba(0, 0, 0, .22), inset 0 -6px 0 rgba(0, 0, 0, .1);
+}
+.gift-body { bottom: 0; width: 132px; height: 100px; }
+.gift-lid { top: 4px; z-index: 1; width: 152px; height: 38px; animation: gift-lid-pop .8s cubic-bezier(.2, .7, .3, 1) 1.5s forwards; }
+.gift-bow {
+  position: absolute;
+  bottom: 30px;
+  width: 44px;
+  height: 34px;
+  border: 9px solid var(--ticket-ink, #4b0024);
+  border-radius: 50% 50% 8px 50%;
+}
+.gift-bow.left { right: 50%; transform: rotate(-12deg); }
+.gift-bow.right { left: 50%; transform: scaleX(-1) rotate(-12deg); }
+.gift-beams {
+  width: 120vmax;
+  height: 120vmax;
+  border-radius: 50%;
+  background: repeating-conic-gradient(from -90deg, color-mix(in srgb, var(--accent, #ffc857) 55%, #fff8) 0 4deg, transparent 4deg 15deg);
+  -webkit-mask-image: radial-gradient(circle, #000 0, #000 8%, transparent 50%);
+  mask-image: radial-gradient(circle, #000 0, #000 8%, transparent 50%);
+  opacity: 0;
+  animation: gift-beams 1.3s ease-out 1.55s forwards;
+}
+.gift-spark {
+  color: var(--spark-color);
+  font-size: var(--spark-size);
+  font-style: normal;
+  line-height: 1;
+  text-shadow: 0 0 12px color-mix(in srgb, var(--spark-color) 60%, transparent);
+  opacity: 0;
+  animation: gift-spark 1.1s cubic-bezier(.15, .75, .3, 1) var(--spark-delay) forwards;
+}
+@keyframes gift-drop {
+  0% { opacity: 0; transform: translateY(-70vh) scale(.6) rotate(-10deg); }
+  70% { opacity: 1; transform: translateY(0) scale(1.08, .9) rotate(0deg); }
+  100% { transform: translateY(0) scale(1); }
+}
+@keyframes gift-shake {
+  0%, 100% { rotate: 0deg; }
+  15% { rotate: -9deg; }
+  30% { rotate: 8deg; }
+  45% { rotate: -7deg; }
+  60% { rotate: 6deg; }
+  75% { rotate: -3deg; }
+}
+@keyframes gift-lid-pop {
+  0% { transform: none; }
+  100% { transform: translate(80px, -260px) rotate(38deg); opacity: 0; }
+}
+@keyframes gift-box-out {
+  0% { opacity: 1; transform: scale(1); }
+  30% { transform: scale(1.12, .88); }
+  100% { opacity: 0; transform: scale(.4) translateY(60px); }
+}
+@keyframes gift-beams {
+  0% { opacity: 0; transform: scale(.2) rotate(0deg); }
+  25% { opacity: 1; }
+  100% { opacity: 0; transform: scale(1.15) rotate(40deg); }
+}
+@keyframes gift-spark {
+  0% { opacity: 0; transform: translate(0, 0) scale(.3); }
+  20% { opacity: 1; }
+  100% { opacity: 0; transform: translate(var(--spark-x), var(--spark-y)) scale(1.1) rotate(160deg); }
+}
+@keyframes gift-intro-out {
+  to { opacity: 0; visibility: hidden; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gift-intro { display: none; }
+}
