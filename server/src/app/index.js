@@ -16,6 +16,7 @@ import { normalizeWhatsAppNumber } from "../../shared/whatsapp.js";
 import { PRODUCTION_APP_URL } from "../../shared/urls.js";
 import { publicCardProblem } from "../../shared/public-card-errors.js";
 import { publicCardErrorPage } from "../services/public-card-page.js";
+import { brandImages } from "../services/brand-images.js";
 import { installBulkRoutes, bad, couponStatus, checkCapacity } from "../routes/bulk.js";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -60,6 +61,7 @@ app.use("/api", (req, res, next) => {
 // smaller default parsing limit.
 app.use("/api/cards/bulk", express.json({ limit: "1mb" }));
 app.use("/api/cards", express.json({ limit: "8mb" }));
+app.use("/api/portal/businesses/:businessId/brand-settings", express.json({ limit: "3mb" }));
 app.use(express.json({ limit: "256kb" }));
 // Express 5 leaves req.body undefined without a JSON body. Handlers read
 // optional fields directly, so give them an empty object instead of a TypeError.
@@ -79,12 +81,17 @@ const schema = new mongoose.Schema(
     couponCode: { type: String, required: true, maxlength: 24 },
     customerPhone: { type: String, maxlength: 16, default: "" },
     claimUrl: { type: String, maxlength: 500, default: "" },
-    accentColor: { type: String, default: "#f6a800" },
-    pageColor: { type: String, default: "#002b5c" },
-    textColor: { type: String, default: "#ffffff" },
+    accentColor: { type: String, default: "#ff9b72" },
+    ticketColor: { type: String, default: "#ffd5bd" },
+    ticketTextColor: { type: String, default: "#4b0024" },
+    pageColor: { type: String, default: "#4b0024" },
+    textColor: { type: String, default: "#fff8f5" },
     businessId: { type: String, default: "impact-vibes", index: true },
     branchId: { type: String, default: "" },
     branchName: { type: String, maxlength: 60 },
+    displayBrandId: String,
+    normalBrand: mongoose.Schema.Types.Mixed,
+    fixedBrand: mongoose.Schema.Types.Mixed,
     language: { type: String, enum: ["en", "hi", "te"], default: "en" },
     campaignName: { type: String, default: "" },
     expiresAt: { type: Date, default: null },
@@ -118,6 +125,9 @@ const Business = mongoose.model(
       planId: String,
       limits: mongoose.Schema.Types.Mixed,
       brand: mongoose.Schema.Types.Mixed,
+      brandSettings: mongoose.Schema.Types.Mixed,
+      structureMode: { type: String, enum: ["branch", "brand", "branch-only", "branch-department", "brand-department", "brand-only"] },
+      cardImagesEnabled: Boolean,
       businessId: { type: String, unique: true },
       name: String,
       website: String,
@@ -129,7 +139,7 @@ const Business = mongoose.model(
       generationRevision: { type: Number, default: 0 },
       deletedAt: Date,
       departments: {
-        type: [{ departmentId: String, name: String, status: String, deletedAt: Date }],
+        type: [{ departmentId: String, name: String, image: String, status: String, deletedAt: Date }],
         default: [],
       },
       branches: {
@@ -504,8 +514,8 @@ async function claimCard(slug) {
 function publicCard(card) {
   // Explicitly allow presentation fields only. Customer contact details are private.
   const fields = ["slug", "senderName", "shareTitle", "headline", "offerTitle", "description",
-    "claimUrl", "accentColor", "pageColor", "textColor", "businessId",
-    "branchId", "branchName", "language", "campaignName", "expiresAt", "createdAt"];
+    "claimUrl", "accentColor", "pageColor", "textColor", "ticketColor", "ticketTextColor", "businessId",
+    "branchId", "branchName", "language", "campaignName", "expiresAt", "createdAt", "normalBrand", "fixedBrand"];
   const revealed = Boolean(card.redeemedAt || card.scratchedAt);
   return {
     ...Object.fromEntries(fields.map((key) => [key, card[key]])),
@@ -579,6 +589,7 @@ async function checkShareImageDimensions(base64) {
 const html = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
 })[character]);
+const saveBrand = brandImages(app, { dataDir, isMongo: () => atlasConnected });
 const { authenticate, audit, validateCreate, getBusiness, businessLimits, cardRows, scope, resolveRedemptionRecord } = installControls(
   app,
   {
@@ -596,16 +607,31 @@ const { authenticate, audit, validateCreate, getBusiness, businessLimits, cardRo
     hashPassword,
     verifyPassword,
     safeUrl,
+    saveBrand,
   },
 );
 
+function cardLogoScale(value, label) {
+  if (value === undefined || value === null || value === "") return 100;
+  const scale = Number(value);
+  if (!Number.isInteger(scale) || scale < 60 || scale > 140 || scale % 5)
+    throw bad(`${label} logo size must be between 60% and 140%.`);
+  return scale;
+}
+
 function buildCard(body, business, bulk = false, allowExpired = false) {
+  if (["branch-only", "brand-only"].includes(business.structureMode) && body.displayBrandId)
+    throw bad("This workspace uses one structure level. Select a branch or brand only.");
+  if (body.displayBrandId && (typeof body.displayBrandId !== "string" || (!allowExpired
+      && !business.departments?.some(item => item.departmentId === body.displayBrandId && item.status === "active"))))
+    throw bad("Choose an active brand from this business.");
   if (body.language !== undefined && !["en", "hi", "te"].includes(body.language))
     throw bad("Choose English, Hindi or Telugu for the card language.");
   const expiresAt = body.expiresAt ? new Date(body.expiresAt) : null;
   if (expiresAt && (!Number.isFinite(expiresAt.getTime()) || (!allowExpired && expiresAt <= new Date())))
     throw bad("Choose an expiry date in the future.");
   const card = {
+    ...(body.displayBrandId ? { displayBrandId: body.displayBrandId } : {}),
     senderName: clean(business.name, 50), businessId: business.businessId,
     language: body.language || "en",
     shareTitle: clean(body.shareTitle, 100) || "Congratulation you got an offer",
@@ -617,8 +643,10 @@ function buildCard(body, business, bulk = false, allowExpired = false) {
     disabled: false, openedAt: null, redeemedAt: null, scratchedAt: null,
     staffRedeemedAt: null, staffRedeemedBranchId: "",
     staffRedeemedDepartmentId: "", staffRedeemedBy: "", staffRedeemedByName: "", staffRedemptionMethod: "",
+    normalLogoScale: cardLogoScale(body.normalLogoScale, "Selected brand"),
+    fixedLogoScale: cardLogoScale(body.fixedLogoScale, "Fixed brand"),
     ...safeShareImage(body.shareImage),
-    ...Object.fromEntries([["accentColor", "#f6a800"], ["pageColor", "#002b5c"], ["textColor", "#ffffff"]]
+    ...Object.fromEntries([["accentColor", "#ff9b72"], ["pageColor", "#4b0024"], ["textColor", "#fff8f5"], ["ticketColor", "#ffd5bd"], ["ticketTextColor", "#4b0024"]]
       .map(([key, fallback]) => [key, /^#[0-9a-f]{6}$/i.test(body[key]) ? body[key] : fallback])),
   };
   if (!card.senderName || !card.headline || !card.offerTitle || !card.description)
@@ -629,6 +657,7 @@ const batchCard = (card) => Object.fromEntries([
   "slug", "branchId", "branchName", "couponCode", "offerTitle", "description",
   "campaignName", "expiresAt", "createdAt", "openedAt", "scratchedAt", "redeemedAt", "staffRedeemedAt",
   "staffRedeemedBranchId", "staffRedeemedDepartmentId", "customerPhone", "deletedAt",
+  "displayBrandId", "normalBrand", "fixedBrand",
 ].map((key) => [key, card[key] ?? null]));
 function batchResult(key, fingerprint, cards, replayed = false) {
   return { batchId: key, fingerprint, savedCount: cards.length, replayed,
@@ -645,7 +674,13 @@ async function findBatch(key) {
   return cards.length ? batchResult(key, cards[0].batchFingerprint, cards) : null;
 }
 async function saveGeneration({ base, branches, total, maximum, batchKey, fingerprint, recipients = null, requestedCode = "" }) {
+  const brandBusiness = await getBusiness(base.businessId);
+  const fixedBrand = brandBusiness.brandSettings?.fixed || null;
+  const showCardImages = brandBusiness.cardImagesEnabled !== false;
+  if (base.displayBrandId && !brandBusiness.departments?.some(item => item.departmentId === base.displayBrandId && item.status === "active"))
+    throw bad("The selected brand is no longer active. No coupons were saved.");
   const makeCards = (existing = []) => {
+    const { normalLogoScale = 100, fixedLogoScale = 100, ...cardBase } = base;
     const codes = new Set(existing.map((card) => card.couponCode)), slugs = new Set(existing.map((card) => card.slug));
     if (requestedCode && codes.has(requestedCode)) throw bad("This coupon code already exists. Choose another code or leave it blank.", 409);
     const cards = [], createdAt = new Date().toISOString();
@@ -656,7 +691,14 @@ async function saveGeneration({ base, branches, total, maximum, batchKey, finger
       while (codes.has(couponCode)) couponCode = generateCouponCode();
       do { slug = crypto.randomBytes(6).toString("base64url"); } while (slugs.has(slug));
       codes.add(couponCode); slugs.add(slug);
-      cards.push({ ...base, branchId: branch.branchId, branchName: clean(branch.branchName, 60), slug, couponCode, createdAt,
+      const unit = brandBusiness.branches?.find(item => item.branchId === branch.branchId);
+      const brand = brandBusiness.departments?.find(item => item.departmentId === (base.displayBrandId || unit?.departmentId) && item.status === "active");
+      cards.push({ ...cardBase,
+        normalBrand: brand ? { name: brand.name, image: showCardImages ? brand.image || "" : "",
+          ...(normalLogoScale !== 100 ? { logoScale: normalLogoScale } : {}) } : null,
+        fixedBrand: fixedBrand?.name ? { name: fixedBrand.name, image: showCardImages ? fixedBrand.image || "" : "",
+          ...(fixedLogoScale !== 100 ? { logoScale: fixedLogoScale } : {}) } : null,
+        branchId: branch.branchId, branchName: clean(branch.branchName, 60), slug, couponCode, createdAt,
         ...(recipientsByBranch ? { customerPhone: recipientsByBranch.get(branch.branchId)[index].customerPhone } : {}),
         ...(batchKey ? { batchKey, batchFingerprint: fingerprint } : {}) });
     }
@@ -932,6 +974,8 @@ app.post("/api/cards", authenticate, async (req, res, next) => {
         .status(403)
         .json({ message: "You can only create cards for your own business." });
     const business = await validateCreate(req);
+    if (["branch-only", "brand-only"].includes(business.structureMode) && !req.body.branchId)
+      throw bad("Choose a branch or brand for this scratch card.");
     const requestedCouponCode = clean(req.body.couponCode, 24).toUpperCase();
     const card = {
       ...buildCard(req.body, business),

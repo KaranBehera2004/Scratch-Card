@@ -1,0 +1,50 @@
+.card-brand-header { width: min(100%, 680px); display: grid; grid-template-columns: minmax(96px, 1fr) minmax(0, auto) minmax(96px, 1fr); align-items: center; gap: clamp(12px, 2.4vw, 34px); min-width: 0; }
+.card-brand-header .card-business-name { color: inherit; font-size: inherit; letter-spacing: .1em; overflow-wrap: anywhere; min-width: 0; max-width: 190px; text-align: center; }
+.card-business-name i { color: #f6a800; font-style: normal; }
+.card-brand-header .card-brand-item { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; color: inherit; min-width: 0; text-align: center; }
+.card-brand-left { justify-self: end; }
+.card-brand-right { justify-self: start; }
+.card-brand-item.is-empty { width: 1px; min-height: 72px; }
+.brand-logo { display: inline-flex; align-items: center; justify-content: center; flex: none; width: clamp(104px, 10vw, 144px); height: 72px; overflow: visible; border-radius: 0; }
+.card-brand-header .brand-logo { color: inherit; transform: scale(var(--brand-logo-scale, 1)); transform-origin: center; transition: transform .16s ease; }
+.brand-logo.brand-logo-placeholder { border: 1px solid #ffffff30; background: #ffffff12; }
+.brand-logo > svg { width: 30px; height: 30px; }
+.brand-logo > img { display: block; width: calc(100% - 8px); height: calc(100% - 8px); max-width: 100%; max-height: 100%; object-fit: contain; object-position: center; }
+.card-brand-item b { color: inherit; font-size: 11px; line-height: 1.3; letter-spacing: .02em; overflow-wrap: anywhere; }
+.card-brand-header .card-business-name, .card-brand-item b { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; line-height: 1.3; }
+.recipient-topbar:has(.card-brand-item:not(.is-empty)) { height: 110px; }
+.recipient-topbar .recipient-brand:has(.card-brand-item:not(.is-empty)) { width: min(760px, calc(100vw - 180px)); max-width: min(760px, calc(100vw - 180px)); justify-content: center; }
+.brand-settings-intro p { color: var(--p-muted, #7c879a); line-height: 1.6; }
+.brand-header-preview { display: grid; place-items: center; min-height: 156px; padding: 28px; border-radius: 16px; background: #002b5c; color: #fff; }
+.brand-header-preview .brand-logo { width: 144px; height: 82px; }
+.brand-header-preview .brand-logo img { width: 100%; height: 100%; }
+.brand-header-preview .card-brand-item b { font-size: 12px; }
+.brand-settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; margin-top: 24px; align-items: start; }
+.brand-settings-grid.is-single { grid-template-columns: minmax(0, 760px); }
+.brand-settings-grid > *, .brand-setting-card { min-width: 0; max-width: 100%; }
+.brand-choice { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin-bottom: 16px; }
+.brand-choice label { flex: 1; min-width: 0; }
+.brand-choice .p-button { white-space: normal; }
+.brand-form-fields { border: 0; margin: 0; padding: 0; display: grid; gap: 16px; min-width: 0; }
+.brand-form-fields input[type=file] { padding: 12px; height: auto; min-height: 48px; min-width: 0; max-width: 100%; }
+.brand-form-fields input[type=file]::file-selector-button { border: 1px solid #c9d8e7; border-radius: 7px; background: #eef5fb; color: #075a9c; padding: 7px 10px; margin-right: 12px; font: inherit; cursor: pointer; }
+.brand-upload-preview { display: flex; align-items: center; gap: 16px; padding: 16px; border: 1px solid var(--p-line, #dce3ed); border-radius: 12px; }
+.brand-upload-preview img { width: 100px; height: 80px; object-fit: contain; border-radius: 8px; }
+.brand-upload-preview .brand-logo { width: 100px; height: 80px; color: var(--p-muted, #7c879a); }
+.brand-upload-preview .brand-logo-placeholder { border-color: var(--p-line, #dce3ed); background: #7c879a12; }
+.brand-upload-preview .brand-logo > img { width: 100%; height: 100%; }
+.brand-image-notice { padding: 12px 14px; border: 1px solid #b8872b66; border-radius: 10px; background: #f6a8000c; }
+.brand-image-notice p { margin: 0 0 10px; font-size: 12px; line-height: 1.6; }
+.brand-form-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+@media (max-width: 1150px) { .brand-settings-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 600px) {
+  .brand-header-preview { padding: 20px 12px; }
+  .card-brand-header { grid-template-columns: minmax(68px, 1fr) minmax(0, auto) minmax(68px, 1fr); gap: 7px; }
+  .brand-header-preview .brand-logo, .card-brand-item .brand-logo { width: 76px; height: 48px; }
+  .card-brand-item .brand-logo > svg { width: 22px; height: 22px; }
+  .card-brand-header .card-business-name { max-width: 118px; font-size: .68rem; letter-spacing: .07em; }
+  .card-brand-item b { font-size: 9px; }
+  .recipient-topbar .recipient-brand:has(.card-brand-item:not(.is-empty)) { width: 100%; max-width: 100%; }
+  .recipient-topbar:has(.card-brand-item:not(.is-empty)) { padding-top: 54px; height: 142px; }
+  .recipient:has(.card-brand-item:not(.is-empty)) { padding-top: 170px; }
+}

@@ -95,6 +95,7 @@ export function installControls(app, context) {
     hashPassword,
     verifyPassword,
     safeUrl,
+    saveBrand,
   } = context;
   let queue = Promise.resolve();
   const filename = path.join(dataDir, "control.json");
@@ -817,7 +818,7 @@ export function installControls(app, context) {
       const accounts = [{
         name: business.name,
         role: "Business owner",
-        branch: "All branches",
+        branch: "All brands",
         department: "All departments",
         loginId: business.loginId || business.loginEmail || "Not configured",
         password: "Not retrievable",
@@ -831,7 +832,7 @@ export function installControls(app, context) {
         accounts.push({
           name: user.name || "",
           role: roles[user.role] || user.role,
-          branch: user.branchId ? location?.name || "Unassigned" : "All branches",
+          branch: user.branchId ? location?.name || "Unassigned" : "All brands",
           department: user.branchId ? unit?.name || "Unavailable department" : "All departments",
           loginId: user.loginId || user.email || "Not configured",
           password: "Not retrievable",
@@ -855,6 +856,12 @@ export function installControls(app, context) {
         loginBased = req.body.generateCredentials === true || req.body.loginId !== undefined || !req.body.loginEmail;
       if (!name) throw fail("Business name is required.");
       const limits = validateLimits(req.body.limits), website = safeUrl(req.body.website);
+      const structureMode = req.body.structureMode ?? "branch-department";
+      if (!["branch", "brand", "branch-only", "branch-department", "brand-department", "brand-only"].includes(structureMode))
+        throw fail("Choose a valid workspace structure.");
+      if (req.body.cardImagesEnabled !== undefined && typeof req.body.cardImagesEnabled !== "boolean")
+        throw fail("Choose whether card images are enabled.");
+      const cardImagesEnabled = req.body.cardImagesEnabled !== false;
       const password = loginBased ? accountPassword(req.body.password) : String(req.body.password || ""),
         requestedLoginId = String(req.body.loginId || "").trim(),
         credentials = loginBased ? {
@@ -887,6 +894,8 @@ export function installControls(app, context) {
         departments: [],
         branches: [],
         limits,
+        structureMode,
+        cardImagesEnabled,
         brand: {},
         createdAt: new Date().toISOString(),
       };
@@ -917,6 +926,9 @@ export function installControls(app, context) {
           "Only the super administrator can change business limits.",
           403,
         );
+      if ((req.body.structureMode !== undefined || req.body.cardImagesEnabled !== undefined)
+        && req.user.role !== "super-admin")
+        throw fail("Only the super administrator can change workspace configuration.", 403);
       if (req.body.planId !== undefined && req.body.planId !== business.planId)
         throw fail(
           "Set limits directly on the business instead of assigning a plan.",
@@ -975,6 +987,29 @@ export function installControls(app, context) {
         }
         if (req.body.limits !== undefined)
           patch.limits = validateLimits(req.body.limits);
+        if (req.body.structureMode !== undefined) {
+          if (!["branch", "brand", "branch-only", "branch-department", "brand-department", "brand-only"].includes(req.body.structureMode))
+            throw fail("Choose a valid workspace structure.");
+          if (req.body.structureMode === "brand-only") {
+            const activeDepartments = (business.departments || []).filter(item => item.status !== "deleted");
+            const activeBranches = (business.branches || []).filter(item => item.status !== "deleted");
+            const names = activeDepartments.map(item => item.name.trim().toLowerCase());
+            if (activeBranches.some(item => !activeDepartments.some(parent => parent.departmentId === item.departmentId))
+              || activeDepartments.some(parent => activeBranches.filter(item => item.departmentId === parent.departmentId).length !== 1)
+              || new Set(names).size !== names.length)
+              throw fail("Brand-only needs exactly one active redemption unit per brand and no unassigned units. Reorganize this business before switching.", 409);
+            patch.branches = (business.branches || []).map(item => {
+              const parent = activeDepartments.find(value => value.departmentId === item.departmentId);
+              return parent && item.status !== "deleted" ? { ...item, name: parent.name } : item;
+            });
+          }
+          patch.structureMode = req.body.structureMode;
+        }
+        if (req.body.cardImagesEnabled !== undefined) {
+          if (typeof req.body.cardImagesEnabled !== "boolean")
+            throw fail("Choose whether card images are enabled.");
+          patch.cardImagesEnabled = req.body.cardImagesEnabled;
+        }
         if (req.body.password !== undefined) {
           if (typeof req.body.password !== "string" || req.body.password.length < 10 || req.body.password.length > 200)
             throw fail("Use a password of 10–200 characters.");
@@ -1008,6 +1043,38 @@ export function installControls(app, context) {
       res.json({ ok: true });
     }),
   );
+  app.patch("/api/portal/businesses/:businessId/brand-settings", auth, route(async (req, res) => {
+    owner(req);
+    const id = scope(req), business = await getBusiness(id);
+    const fixed = await saveBrand(req.body.fixed, business.brandSettings?.fixed);
+    await updateBusiness(id, {
+      brandSettings: { ...business.brandSettings, fixed },
+      ...(fixed.image ? { cardImagesEnabled: true } : {}),
+    });
+    await audit(req, "Fixed brand updated", id, fixed.name || "Fixed branding removed");
+    res.json({ ok: true, fixed });
+  }));
+  app.patch("/api/portal/businesses/:businessId/brand-settings/:departmentId", auth, route(async (req, res) => {
+    owner(req);
+    const id = scope(req), business = await getBusiness(id);
+    const current = business.departments?.find(item => item.departmentId === req.params.departmentId && item.status !== "deleted");
+    if (!current) throw fail("Brand not found.", 404);
+    const brand = await saveBrand(req.body, current);
+    if (!brand.name) throw fail("Brand name is required.");
+    if (business.structureMode === "brand-only" && business.departments.some(item => item.departmentId !== current.departmentId
+      && item.status !== "deleted" && item.name.toLowerCase() === brand.name.toLowerCase()))
+      throw fail("This brand name already exists in the business.", 409);
+    await updateBusiness(id, {
+      departments: business.departments.map(item => item.departmentId === current.departmentId ? { ...item, ...brand } : item),
+      ...(brand.image ? { cardImagesEnabled: true } : {}),
+      ...(business.structureMode === "brand-only" && brand.name !== current.name ? {
+        branches: (business.branches || []).map(item => item.departmentId === current.departmentId && item.status !== "deleted"
+          ? { ...item, name: brand.name } : item),
+      } : {}),
+    });
+    await audit(req, "Brand configuration updated", id, brand.name);
+    res.json({ ok: true, brand });
+  }));
   app.delete(
     "/api/portal/businesses",
     auth,
@@ -1214,8 +1281,16 @@ export function installControls(app, context) {
         activeDepartments = currentDepartments.filter((item) => item.status !== "deleted"),
         activeBranches = currentBranches.filter((item) => item.status !== "deleted"),
         input = req.body?.departments;
+      const structureMode = business.structureMode || "brand-department";
+      if (structureMode === "branch-only") throw fail("This workspace uses branches only. Add a branch instead.");
       if (!Array.isArray(input) || input.length < 1 || input.length > 20)
         throw fail("Add between 1 and 20 departments.");
+      if (structureMode === "brand-only") {
+        const names = [...activeDepartments.map(item => item.name.toLowerCase()),
+          ...input.map(item => text(item?.name, 60).toLowerCase())];
+        if (new Set(names).size !== names.length)
+          throw fail("Each brand name must be unique in this business.", 409);
+      }
       const limits = await businessLimits(business);
       if (limits.department > 0 && activeDepartments.length + input.length > limits.department)
         throw fail(`department limit reached (${limits.department}). Contact your administrator.`, 403);
@@ -1226,6 +1301,8 @@ export function installControls(app, context) {
         if (!name) throw fail("Every department needs a name.");
         if (!Array.isArray(row.branches) || row.branches.length < 1 || row.branches.length > 50)
           throw fail(`Add between 1 and 50 branches under ${name}.`);
+        if (structureMode === "brand-only" && (row.branches.length !== 1 || text(row.branches[0]?.name, 60) !== name))
+          throw fail("Brand-only configuration creates one internal redemption unit with the same name as each brand.");
         const department = { departmentId: crypto.randomUUID(), name, status: "active" };
         createdDepartments.push(department);
         for (const item of row.branches) {
@@ -1260,10 +1337,13 @@ export function installControls(app, context) {
       owner(req);
       const business = await getBusiness(id),
         branches = business.branches || [];
+      if (business.structureMode === "brand-only") throw fail("This workspace uses brands only. Add a brand instead.");
       await limit(business, "branch", branches.filter((item) => item.status !== "deleted").length);
       const name = text(req.body.name, 60);
       if (!name) throw fail("Branch name is required.");
       const departmentId = text(req.body.departmentId, 60);
+      if (business.structureMode === "branch-only" && departmentId)
+        throw fail("Branches in this workspace cannot be assigned to a department.");
       if (departmentId && !(business.departments || []).some((item) =>
         item.departmentId === departmentId && (item.status || "active") === "active"))
         throw fail("Choose an active department for this business.");
@@ -1300,6 +1380,8 @@ export function installControls(app, context) {
       );
       if (!branch) throw fail("Branch not found.", 404);
       if (branch.status === "deleted") throw fail("Deleted branches cannot be edited.", 410);
+      if (business.structureMode === "brand-only" && (req.body.name !== undefined || req.body.departmentId !== undefined))
+        throw fail("Edit the brand instead of its internal redemption unit.");
       if (req.body.name !== undefined) {
         branch.name = text(req.body.name, 60);
         if (!branch.name) throw fail("Branch name is required.");
@@ -1308,6 +1390,8 @@ export function installControls(app, context) {
         branch.address = text(req.body.address, 140);
       if (req.body.departmentId !== undefined) {
         const departmentId = text(req.body.departmentId, 60);
+        if (business.structureMode === "branch-only" && departmentId)
+          throw fail("Branches in this workspace cannot be assigned to a department.");
         if (departmentId && !(business.departments || []).some((item) =>
           item.departmentId === departmentId && (item.status || "active") === "active"))
           throw fail("Choose an active department for this business.");
@@ -1333,6 +1417,7 @@ export function installControls(app, context) {
       const business = await getBusiness(id), branches = business.branches || [];
       const branch = branches.find((item) => item.branchId === req.params.branchId);
       if (!branch) throw fail("Branch not found.", 404);
+      if (business.structureMode === "brand-only") throw fail("Delete the brand instead of its internal redemption unit.");
       if (branch.status === "deleted") throw fail("Branch is already deleted.", 410);
       const deletedAt = new Date().toISOString();
       const archived = { ...branch, status: "deleted", deletedAt };

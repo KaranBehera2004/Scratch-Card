@@ -3,15 +3,32 @@ import assert from "node:assert/strict";
 import { branchQuantityError, bulkExcelRows, BULK_EXCEL_HEADERS, shareExcelRows, SHARE_EXCEL_HEADERS, unusedBulkBranches, addBulkBranch, mergeBulkResults, generatedByBranch, remainingBranchQuantities } from "./bulk-coupons.js";
 import { workspaceTranslator } from "../../i18n/workspace-i18n.js";
 
-test("workspace terminology presents places as branches and sales or service units as departments", () => {
+test("workspace terminology presents places as brands and sales or service units as departments", () => {
   const ui = workspaceTranslator("en");
-  assert.equal(ui("Add departments and branches"), "Add branches and departments");
-  assert.equal(ui("Department name"), "Branch name");
+  const branchUi = workspaceTranslator("en", "branch");
+  assert.equal(branchUi("Add departments and branches"), "Add departments and branches");
+  assert.equal(branchUi("Branch name"), "Branch name");
+  const branchDepartmentUi = workspaceTranslator("en", "branch-department");
+  assert.equal(branchDepartmentUi("Add departments and branches"), "Add branches and departments");
+  assert.equal(branchDepartmentUi("Department name"), "Branch name");
+  assert.equal(branchDepartmentUi("Branch name"), "Department name");
+  assert.equal(ui("Add departments and branches"), "Add brands and departments");
+  assert.equal(ui("Department name"), "Brand name");
   assert.equal(ui("Branch name"), "Department name");
   assert.equal(ui("Branch staff workspace"), "Department staff workspace");
   assert.equal(ui("BRANCH DASHBOARD"), "DEPARTMENT DASHBOARD");
   assert.equal(workspaceTranslator("hi")("Branches"), "विभाग");
   assert.equal(workspaceTranslator("te")("Branches"), "విభాగాలు");
+  assert.equal(workspaceTranslator("hi")("Department name"), "ब्रांड का नाम");
+  assert.equal(workspaceTranslator("te")("Department name"), "బ్రాండ్ పేరు");
+  assert.equal(ui("Add brands & departments"), "Add brands & departments");
+  assert.equal(ui("Automatic brand from department"), "Automatic brand from department");
+  assert.equal(ui("Assigned department"), "Assigned brand");
+  assert.equal(ui("All departments"), "All brands");
+  assert.equal(ui("Redeemed department"), "Redeemed brand");
+  assert.equal(workspaceTranslator("en", "brand-only")("BRANCH DASHBOARD"), "BRAND DASHBOARD");
+  assert.equal(workspaceTranslator("hi", "brand-only")("Select branch"), "ब्रांड चुनें");
+  assert.equal(workspaceTranslator("te", "brand-only")("Select branch"), "బ్రాండ్‌ను ఎంచుకోండి");
 });
 import writeExcelFile from "write-excel-file/universal";
 import { unzipSync, strFromU8 } from "fflate";

@@ -98,7 +98,8 @@ export function useBulkGeneration({ form, setForm, business, token, user, onCrea
     setStatus("saving"); setMessage("");
     let saved;
     try {
-      const payload = stored || { ...form, couponCode: undefined, branchId: undefined,
+      const { displayBrandId: _ignoredDisplayBrandId, ...automaticBrandForm } = form;
+      const payload = stored || { ...automaticBrandForm, couponCode: undefined, branchId: undefined,
         businessId: business.businessId || user.businessId,
         expiresAt: form.expiresAt ? new Date(form.expiresAt).toISOString() : null,
         branches,
@@ -150,8 +151,9 @@ export function useBulkGeneration({ form, setForm, business, token, user, onCrea
 }
 export function BranchQuantities({ bulk, business, onManageBranches }) {
   const ui = useWorkspaceText();
+  const onlyLevel = ["branch-only", "brand-only"].includes(business?.structureMode);
   const departmentNames = new Map((business?.departments || []).map((item) => [item.departmentId, item.name]));
-  const branchLabel = (branch) => branch?.departmentId && departmentNames.has(branch.departmentId)
+  const branchLabel = (branch) => !onlyLevel && branch?.departmentId && departmentNames.has(branch.departmentId)
     ? `${departmentNames.get(branch.departmentId)} · ${branch.name}` : branch?.name;
   const unused = unusedBulkBranches(bulk.rows, bulk.active);
   const emptyRow = bulk.rows.some((row) => !row.branchId);
@@ -161,7 +163,7 @@ export function BranchQuantities({ bulk, business, onManageBranches }) {
     <p className="p-builder-note">{ui("Choose distinct branches. Maximum 1,000 new coupons per generation.")}</p>
     <p className="p-builder-note">{ui("Quantity is the total wanted for this branch in this draft. Increasing it generates only the difference. Changing offer fields affects new coupons only.")}</p>
     {bulk.rows.map((row, index) => <div className="bulk-branch-row" key={index}>
-      <label>Department {index + 1}<select aria-label={`Bulk department ${index + 1}`} required value={row.branchId}
+      <label>{ui("Branch")} {index + 1}<select aria-label={`Bulk ${ui("branch")} ${index + 1}`} required value={row.branchId}
         onChange={(event) => { const branchId = event.target.value; bulk.setRows((rows) => rows.map((item, i) => i === index ? { ...item, branchId } : item)); bulk.setPreviewId(branchId); }}>
         <option value="">{ui("Select branch")}</option>
         {bulk.active.map((branch) => <option key={branch.branchId} value={branch.branchId}
@@ -172,7 +174,7 @@ export function BranchQuantities({ bulk, business, onManageBranches }) {
       <div className="bulk-row-actions">
         <button type="button" className="p-button small" aria-pressed={bulk.previewId === row.branchId}
           onClick={() => bulk.setPreviewId(row.branchId)}>{ui("Preview")}</button>
-        <button type="button" className="p-button small" aria-label={`Remove department row ${index + 1}`}
+        <button type="button" className="p-button small" aria-label={`Remove ${ui("branch")} row ${index + 1}`}
           onClick={() => { bulk.setRows((rows) => rows.filter((_, i) => i !== index)); if (bulk.previewId === row.branchId) bulk.setPreviewId(bulk.rows.find((_, i) => i !== index)?.branchId || ""); }}>{ui("Remove")}</button>
       </div>
       {(generated.get(row.branchId) || 0) > 0 && <small className="bulk-row-progress">{ui("{saved} generated · {remaining} remaining", { saved: generated.get(row.branchId), remaining: Math.max(0, Number(row.quantity) - generated.get(row.branchId)) || 0 })}</small>}
@@ -187,7 +189,7 @@ export function BranchQuantities({ bulk, business, onManageBranches }) {
     <p className="p-builder-note">{ui("Adds an existing branch to this batch. Each branch can appear only once.")}</p>
     {!!bulk.active.length && !unused.length && <p className="p-builder-note">{ui("All active branches are already in this batch. Create or activate another branch to add a row.")}</p>}
     {!!unused.length && emptyRow && <p className="p-builder-note">{ui("Choose a branch in the empty row before adding another row.")}</p>}
-    {!bulk.active.length && <p role="alert">Create an active department before generating bulk coupons.</p>}
+    {!bulk.active.length && <p role="alert">Create an active {ui("branch")} before generating bulk coupons.</p>}
     <div className="bulk-summary" aria-live="polite">
       {bulk.rows.map((row, index) => <span key={index}>{ui("{name}: {count} coupons", { name: branchLabel(bulk.active.find((branch) => branch.branchId === row.branchId)) || ui("Select branch"), count: row.quantity || 0 })}</span>)}
       <strong>{ui("Total: {count} coupons", { count: bulk.targetTotal })}</strong>
